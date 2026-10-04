@@ -56,6 +56,7 @@ if ($my_role === 'superadmin') {
         SELECT {$user_cols_sql}
         FROM users u
         LEFT JOIN stations s ON u.station_id = s.id
+        WHERE LOWER(u.role) IN ('manager', 'staff', 'operations_staff', 'operations staff')
         ORDER BY u.created_at ASC
     ");
     $employees = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -65,6 +66,7 @@ if ($my_role === 'superadmin') {
         FROM users u
         LEFT JOIN stations s ON u.station_id = s.id
         WHERE u.station_id = ?
+          AND LOWER(u.role) IN ('manager', 'staff', 'operations_staff', 'operations staff')
         ORDER BY u.role, u.username ASC
     ");
     $stmt->execute([$my_station_id]);
@@ -92,6 +94,11 @@ foreach ($employees as $emp) {
     $role_key  = strtolower(trim(role_key($emp['role'] ?? '')));
     $status    = strtolower(trim($emp['status'] ?? 'active'));
     $is_archived = is_user_archived_status($status);
+
+    // Exclude superadmin and admin accounts from User Management print/export (only Staff and Manager belong here)
+    if (!in_array($role_key, ['staff', 'manager'], true)) {
+        continue;
+    }
 
     // Tab Filter Check (Active vs Archived) if status filter not explicitly set
     if ($filter_status === '') {
