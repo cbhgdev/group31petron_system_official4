@@ -1,11 +1,6 @@
 <?php
-date_default_timezone_set('Asia/Manila');
-/**
- * verify.php — QR Code Scan Target / Transaction Verification Page
- * Accessible without login for QR scan purposes (read-only, no sensitive mutations).
- * URL: /public/verify.php?id=TXN-XXXXXXXXX&type=merchandise
- */
 require_once __DIR__ . '/../backend/lib.php';
+petron_init_dynamic_timezone();
 require_once __DIR__ . '/db_connect.php';
 
 $id   = trim($_GET['id']   ?? '');

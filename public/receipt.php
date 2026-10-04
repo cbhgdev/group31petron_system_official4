@@ -1,6 +1,6 @@
 <?php
-date_default_timezone_set('Asia/Manila');
 require_once __DIR__ . '/../backend/lib.php';
+petron_init_dynamic_timezone();
 require_login();
 
 $id   = $_GET['id']   ?? '';
@@ -785,8 +785,8 @@ if ($st_id <= 0 && function_exists('user_station_id')) {
 $receipt_cfg = null;
 try {
     if (isset($pdo)) {
-        $rc_stmt = $pdo->prepare("SELECT * FROM receipt_config WHERE station_id = ? OR station_id = 0 ORDER BY (station_id = ?) DESC LIMIT 1");
-        $rc_stmt->execute([$st_id, $st_id]);
+        $rc_stmt = $pdo->prepare("SELECT * FROM receipt_config WHERE station_id = ? LIMIT 1");
+        $rc_stmt->execute([$st_id]);
         $receipt_cfg = $rc_stmt->fetch(PDO::FETCH_ASSOC);
     }
 } catch (Exception $e) {}
@@ -805,16 +805,16 @@ $branch_name  = !empty($receipt_cfg['branch_name']) ? $receipt_cfg['branch_name'
 
 $station_addr = !empty($receipt_cfg['station_address'])
     ? $receipt_cfg['station_address']
-    : ($sale['station_address'] ?? 'Vamenta Blvd., Carmen, Cagayan de Oro City, Misamis Oriental');
+    : ($sale['station_address'] ?? '');
 
 $station_contact = !empty($receipt_cfg['station_contact']) ? $receipt_cfg['station_contact'] : '';
 
 $vat_tin      = !empty($receipt_cfg['station_vat_tin'])
     ? $receipt_cfg['station_vat_tin']
-    : ($sale['station_vat_tin'] ?? '248-719-305-00000');
+    : ($sale['station_vat_tin'] ?? '');
 
 $vat_reg_no   = 'Registered';
-$atp_no       = !empty($receipt_cfg['atp_no']) ? $receipt_cfg['atp_no'] : 'BIR-ATP-2026-00984712';
+$atp_no       = !empty($receipt_cfg['atp_no']) ? $receipt_cfg['atp_no'] : '';
 $min_serial   = !empty($receipt_cfg['min_serial']) ? $receipt_cfg['min_serial'] : '';
 
 $show_vat             = !isset($receipt_cfg['show_vat']) || (int)$receipt_cfg['show_vat'] === 1;

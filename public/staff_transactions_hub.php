@@ -398,7 +398,7 @@ try {
 // ── Detect current shift period (STRICTLY REAL-TIME CLOCK DRIVEN) ─────────────
 // Shift 1: 6:00 AM – 2:00 PM (06:00:00 – 13:59:59)
 // Shift 2: 2:00 PM – 12:00 MN (14:00:00 – 05:59:59)
-date_default_timezone_set('Asia/Manila');
+petron_init_dynamic_timezone();
 $cur_hour = (int)date('G');
 
 if ($cur_hour >= 6 && $cur_hour < 14) {

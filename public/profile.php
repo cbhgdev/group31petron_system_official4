@@ -56,7 +56,7 @@ if ($raw_role === 'admin') {
     $role_badge = 'Developer';
 } else {
     // Operations Staff Real-Time Clock Shift Detection (STRICTLY REAL-TIME CLOCK DRIVEN)
-    date_default_timezone_set('Asia/Manila');
+    petron_init_dynamic_timezone();
     $cur_hour = (int)date('G');
     if ($cur_hour >= 6 && $cur_hour < 14) {
         $shift_label    = 'Shift 1';

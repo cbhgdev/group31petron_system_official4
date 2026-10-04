@@ -709,6 +709,18 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
   <link rel="stylesheet" href="<?php echo $app_base_path; ?>/assets/vendor/fontawesome/css/all.min.css">
   <script src="<?php echo $app_base_path; ?>/assets/js/security_frontend.js?v=<?php echo filemtime(__DIR__ . '/../assets/js/security_frontend.js'); ?>"></script>
   <!-- ── Petron Real-Time Auto-Refresh Engine ── -->
+  <!-- ── Petron Real-Time Auto-Refresh Engine & Regional Settings ── -->
+  <?php
+    $header_tz_raw  = $station_settings['timezone'] ?? (function_exists('petron_get_setting_value') ? petron_get_setting_value('timezone', null, 'Asia/Manila (UTC+8)') : 'Asia/Manila (UTC+8)');
+    $header_tz_iana = trim(explode(' ', $header_tz_raw)[0]);
+    if (!in_array($header_tz_iana, timezone_identifiers_list(), true)) {
+        $header_tz_iana = 'Asia/Manila';
+    }
+    $header_date_fmt = $station_settings['date_format'] ?? (function_exists('petron_date_format') ? petron_date_format() : 'YYYY-MM-DD');
+    $header_time_fmt = $station_settings['time_format'] ?? (function_exists('petron_time_format') ? petron_time_format() : '12H');
+    $header_curr_sym = function_exists('petron_currency_symbol') ? petron_currency_symbol() : '₱';
+    $header_curr_raw = $station_settings['currency_symbol'] ?? (function_exists('petron_get_setting_value') ? petron_get_setting_value('currency_symbol', null, 'PHP (₱)') : 'PHP (₱)');
+  ?>
   <script>
     window.PETRON_BASE_PATH = <?php echo json_encode(rtrim($app_base_path, '/')); ?>;
     window.PETRON_STATION_ID = <?php echo (int)$myStationId; ?>;
@@ -717,6 +729,115 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
     window.pageData = window.pageData || {};
     window.pageData.appBasePath = <?php echo json_encode(rtrim($app_base_path, '/')); ?>;
     window.pageData.publicBasePath = <?php echo json_encode(rtrim($public_base_url, '/')); ?>;
+
+    // ── Global Petron Regional Settings & Client Engine ──
+    window.PETRON_REGIONAL = {
+        timezone:       <?php echo json_encode($header_tz_iana); ?>,
+        timezoneRaw:    <?php echo json_encode($header_tz_raw); ?>,
+        dateFormat:     <?php echo json_encode($header_date_fmt); ?>,
+        timeFormat:     <?php echo json_encode($header_time_fmt); ?>,
+        currencySymbol: <?php echo json_encode($header_curr_sym); ?>,
+        currencyRaw:    <?php echo json_encode($header_curr_raw); ?>
+    };
+
+    (function() {
+        const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const MONTHS_LONG = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
+        function getTzParts(d, targetTz) {
+            const dateObj = (d instanceof Date) ? d : new Date(d);
+            if (isNaN(dateObj.getTime())) return null;
+            const tz = targetTz || (window.PETRON_REGIONAL && window.PETRON_REGIONAL.timezone) || 'Asia/Manila';
+            try {
+                const formatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: tz,
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    weekday: 'long',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: false
+                });
+                const parts = {};
+                formatter.formatToParts(dateObj).forEach(p => { parts[p.type] = p.value; });
+                return parts;
+            } catch (e) {
+                return {
+                    year: String(dateObj.getFullYear()),
+                    month: String(dateObj.getMonth() + 1).padStart(2, '0'),
+                    day: String(dateObj.getDate()).padStart(2, '0'),
+                    weekday: dateObj.toLocaleDateString('en-US', { weekday: 'long' }),
+                    hour: String(dateObj.getHours()).padStart(2, '0'),
+                    minute: String(dateObj.getMinutes()).padStart(2, '0'),
+                    second: String(dateObj.getSeconds()).padStart(2, '0')
+                };
+            }
+        }
+
+        window.formatPetronDate = function(d, withDay = false, overrideFmt = null, overrideTz = null) {
+            const parts = getTzParts(d, overrideTz);
+            if (!parts) return '';
+            const fmt = (overrideFmt || (window.PETRON_REGIONAL && window.PETRON_REGIONAL.dateFormat) || 'YYYY-MM-DD').toUpperCase().trim();
+            const y = parts.year;
+            const m = parts.month;
+            const dStr = parts.day;
+            const mIdx = Math.max(0, parseInt(m, 10) - 1);
+            let res = '';
+
+            switch (fmt) {
+                case 'MM/DD/YYYY':
+                    res = `${m}/${dStr}/${y}`;
+                    break;
+                case 'DD/MM/YYYY':
+                    res = `${dStr}/${m}/${y}`;
+                    break;
+                case 'MMM DD, YYYY':
+                    res = `${MONTHS[mIdx]} ${dStr}, ${y}`;
+                    break;
+                case 'YYYY-MM-DD':
+                default:
+                    res = `${y}-${m}-${dStr}`;
+                    break;
+            }
+            return withDay ? `${parts.weekday}, ${res}` : res;
+        };
+
+        window.formatPetronTime = function(d, withSeconds = true, overrideTimeFmt = null, overrideTz = null) {
+            const parts = getTzParts(d, overrideTz);
+            if (!parts) return '';
+            const is24 = ((overrideTimeFmt || (window.PETRON_REGIONAL && window.PETRON_REGIONAL.timeFormat) || '12H').toUpperCase().indexOf('24') !== -1);
+            const h24 = parseInt(parts.hour, 10);
+            const m = parts.minute;
+            const s = parts.second;
+
+            if (is24) {
+                return String(h24).padStart(2, '0') + ':' + m + (withSeconds ? ':' + s : '');
+            } else {
+                const ampm = h24 >= 12 ? 'PM' : 'AM';
+                const h12 = h24 % 12 || 12;
+                return String(h12).padStart(2, '0') + ':' + m + (withSeconds ? ':' + s : '') + ' ' + ampm;
+            }
+        };
+
+        window.formatPetronDateTime = function(d, withSeconds = true, withDay = false, overrideDateFmt = null, overrideTimeFmt = null, overrideTz = null) {
+            const datePart = window.formatPetronDate(d, withDay, overrideDateFmt, overrideTz);
+            const timePart = window.formatPetronTime(d, withSeconds, overrideTimeFmt, overrideTz);
+            if (!datePart && !timePart) return '';
+            return `${datePart} at ${timePart}`;
+        };
+
+        window.formatPetronCurrency = function(amount, decimals = 2, overrideSymbol = null) {
+            const sym = overrideSymbol || (window.PETRON_REGIONAL && window.PETRON_REGIONAL.currencySymbol) || '₱';
+            const num = parseFloat(amount);
+            const formattedNum = isNaN(num) ? '0.00' : num.toLocaleString('en-US', {
+                minimumFractionDigits: decimals,
+                maximumFractionDigits: decimals
+            });
+            return `${sym} ${formattedNum}`;
+        };
+    })();
   </script>
   <script src="<?php echo $app_base_path; ?>/assets/js/petron_realtime.js?v=<?php echo filemtime(__DIR__ . '/../assets/js/petron_realtime.js'); ?>"></script>
     <!-- GLOBAL RIGHT-CLICK & TEXT SELECTION ALLOWED -->

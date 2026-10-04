@@ -93,46 +93,16 @@ if ($station_id > 0) {
     } catch (Exception $e) {}
 }
 
-$raw_name     = trim($station_info['name'] ?? '');
-$raw_addr     = trim($station_info['address'] ?? ($station_info['location'] ?? ''));
-$raw_contact  = trim($station_info['contact_number'] ?? '');
-$raw_tin      = trim($station_info['vat_tin'] ?? '');
-
-// Smart detection so Station Name doesn't duplicate the street address
-$default_header = 'PETRON CORPORATION';
-$default_branch = 'Carmen Station';
-$default_addr   = 'Vamenta Blvd., Carmen, City of Cagayan de Oro, Misamis Oriental';
-
-if (!empty($raw_name)) {
-    if (preg_match('/(blvd|street|st\.|road|city|misamis)/i', $raw_name)) {
-        $default_header = 'PETRON CORPORATION';
-        if (stripos($raw_name, 'carmen') !== false) {
-            $default_branch = 'Carmen Station';
-        }
-        if (empty($raw_addr)) {
-            $default_addr = $raw_name;
-        }
-    } else {
-        $default_header = $raw_name;
-    }
-}
-if (!empty($raw_addr)) {
-    $default_addr = $raw_addr;
-}
-
-$default_contact = !empty($raw_contact) ? $raw_contact : '(088) 858-1234';
-$default_tin     = !empty($raw_tin)     ? $raw_tin     : '248-719-305-00000';
-$default_atp     = 'BIR-ATP-2026-00984712';
-$default_min     = 'MIN-2026-009812';
-
-// Final values for form
-$val_header        = !empty($config['station_header'])        ? $config['station_header']        : $default_header;
-$val_branch        = !empty($config['branch_name'])           ? $config['branch_name']           : $default_branch;
-$val_address       = !empty($config['station_address'])       ? $config['station_address']       : $default_addr;
-$val_contact       = !empty($config['station_contact'])       ? $config['station_contact']       : $default_contact;
-$val_vat_tin       = !empty($config['station_vat_tin'])       ? $config['station_vat_tin']       : $default_tin;
-$val_atp_no        = !empty($config['atp_no'])                ? $config['atp_no']                : $default_atp;
-$val_min_serial    = !empty($config['min_serial'])            ? $config['min_serial']            : $default_min;
+// Only load saved configuration for THIS station from receipt_config.
+// For a new station or other station with no saved receipt config,
+// all station & BIR fields remain completely blank so the admin can manually input them.
+$val_header        = $config['station_header']        ?? '';
+$val_branch        = $config['branch_name']           ?? '';
+$val_address       = $config['station_address']       ?? '';
+$val_contact       = $config['station_contact']       ?? '';
+$val_vat_tin       = $config['station_vat_tin']       ?? '';
+$val_atp_no        = $config['atp_no']                ?? '';
+$val_min_serial    = $config['min_serial']            ?? '';
 $val_title         = !empty($config['receipt_title'])         ? $config['receipt_title']         : 'SALES INVOICE';
 $val_prefix        = !empty($config['receipt_number_prefix']) ? $config['receipt_number_prefix'] : 'RCP-';
 $val_footer_title  = !empty($config['footer_title'])          ? $config['footer_title']          : 'Official Sales Invoice / Receipt';
@@ -288,32 +258,32 @@ require_once __DIR__ . '/../partials/header.php';
                         <label>Station / Company Name (Main Header)</label>
                         <input type="text" name="station_header" id="f_station_header"
                                value="<?= $h($val_header) ?>"
-                               placeholder="e.g. PETRON CORPORATION" <?= !$can_edit_template ? 'readonly' : '' ?>>
+                               placeholder="e.g. PETRON CORPORATION or Station Name" <?= !$can_edit_template ? 'readonly' : '' ?>>
                     </div>
-                    <input type="hidden" name="branch_name" id="f_branch_name" value="">
+                    <input type="hidden" name="branch_name" id="f_branch_name" value="<?= $h($val_branch) ?>">
                     <div class="rm-form-group" style="grid-column: span 2;">
                         <label>Registered Station Address</label>
                         <input type="text" name="station_address" id="f_station_address"
                                value="<?= $h($val_address) ?>"
-                               placeholder="e.g. Vamenta Blvd., Carmen, Cagayan de Oro City" <?= !$can_edit_template ? 'readonly' : '' ?>>
+                               placeholder="Enter registered station address (e.g. Street, Barangay, City, Province)" <?= !$can_edit_template ? 'readonly' : '' ?>>
                     </div>
                     <div class="rm-form-group">
                         <label>VAT Reg. TIN</label>
                         <input type="text" name="station_vat_tin" id="f_station_vat_tin"
                                value="<?= $h($val_vat_tin) ?>"
-                               placeholder="e.g. 248-719-305-00000" <?= !$can_edit_template ? 'readonly' : '' ?>>
+                               placeholder="Enter VAT Reg. TIN (e.g. 000-000-000-00000)" <?= !$can_edit_template ? 'readonly' : '' ?>>
                     </div>
                     <div class="rm-form-group">
                         <label>BIR ATP / Accreditation No.</label>
                         <input type="text" name="atp_no" id="f_atp_no"
                                value="<?= $h($val_atp_no) ?>"
-                               placeholder="e.g. BIR-ATP-2026-00984712" <?= !$can_edit_template ? 'readonly' : '' ?>>
+                               placeholder="Enter BIR ATP No. (e.g. BIR-ATP-YYYY-XXXXXXXX)" <?= !$can_edit_template ? 'readonly' : '' ?>>
                     </div>
                     <div class="rm-form-group">
                         <label>Machine Serial No. (MIN)</label>
                         <input type="text" name="min_serial" id="f_min_serial"
                                value="<?= $h($val_min_serial) ?>"
-                               placeholder="e.g. MIN-2026-009812" <?= !$can_edit_template ? 'readonly' : '' ?>>
+                               placeholder="Enter MIN Serial No. (e.g. MIN-YYYY-XXXXXX)" <?= !$can_edit_template ? 'readonly' : '' ?>>
                     </div>
                     <div class="rm-form-group">
                         <label>Paper Size / Layout</label>
@@ -514,8 +484,15 @@ require_once __DIR__ . '/../partials/header.php';
 function liveUpdate() {
     const g = id => document.getElementById(id)?.value ?? '';
     
-    document.getElementById('pv_header').textContent       = g('f_station_header') || 'PETRON CORPORATION';
-    document.getElementById('pv_address').textContent      = g('f_station_address');
+    const headerVal = g('f_station_header');
+    document.getElementById('pv_header').textContent       = headerVal || 'PETRON SERVICE STATION';
+    
+    const addrVal = g('f_station_address');
+    const addrEl  = document.getElementById('pv_address');
+    if (addrEl) {
+        addrEl.textContent   = addrVal;
+        addrEl.style.display = addrVal ? '' : 'none';
+    }
     
     const tinVal = g('f_station_vat_tin');
     const tinEl  = document.getElementById('pv_vat_tin');
@@ -524,7 +501,12 @@ function liveUpdate() {
         tinEl.style.display = tinVal ? '' : 'none';
     }
     const footTin = document.getElementById('pv_foot_tin');
-    if (footTin) footTin.textContent = tinVal ? 'TIN: ' + tinVal : '';
+    if (footTin) {
+        footTin.textContent = tinVal ? 'TIN: ' + tinVal : '';
+        if (footTin.parentElement) {
+            footTin.parentElement.style.display = tinVal ? '' : 'none';
+        }
+    }
     
     const atpVal = g('f_atp_no');
     const atpEl  = document.getElementById('pv_atp_no');
@@ -533,7 +515,10 @@ function liveUpdate() {
         atpEl.style.display = atpVal ? '' : 'none';
     }
     const footAtp = document.getElementById('pv_foot_atp');
-    if (footAtp) footAtp.textContent = atpVal ? 'ATP No.: ' + atpVal : '';
+    if (footAtp) {
+        footAtp.textContent   = atpVal ? 'ATP No.: ' + atpVal : '';
+        footAtp.style.display = atpVal ? '' : 'none';
+    }
     
     const minVal = g('f_min_serial');
     const minEl  = document.getElementById('pv_min_serial');

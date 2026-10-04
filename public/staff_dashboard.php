@@ -8,9 +8,9 @@
 // ==============================================================================
 
 if (session_status() === PHP_SESSION_NONE) session_start();
-date_default_timezone_set('Asia/Manila');
 $page_id = 'dashboard';
 require_once __DIR__ . '/../backend/lib.php';
+petron_init_dynamic_timezone();
 require_once __DIR__ . '/../public/db_connect.php';
 require_login();
 

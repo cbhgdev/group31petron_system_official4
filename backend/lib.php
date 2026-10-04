@@ -1,19 +1,51 @@
 <?php
 
-// ── DYNAMIC TIMEZONE & SYSTEM SETTINGS HELPERS ──
-if (!function_exists('petron_init_dynamic_timezone')) {
-    function petron_init_dynamic_timezone(): void {
+// ── DYNAMIC TIMEZONE & REGIONAL SYSTEM SETTINGS HELPERS ──
+if (!function_exists('petron_get_setting_value')) {
+    function petron_get_setting_value(string $key, ?int $station_id = null, string $default = ''): string {
         global $pdo;
         try {
             if (!isset($pdo) || !$pdo) {
                 require_once __DIR__ . '/../public/db_connect.php';
             }
-            $tzStmt = $pdo->query("SELECT setting_value FROM system_settings WHERE setting_key = 'timezone' AND station_id = 0 LIMIT 1");
-            $storedTz = $tzStmt ? $tzStmt->fetchColumn() : false;
+            if ($station_id === null && function_exists('user_station_id')) {
+                $station_id = (int)user_station_id();
+            }
+            if ($station_id !== null && $station_id > 0) {
+                $stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ? AND station_id = ? AND setting_value IS NOT NULL AND setting_value != '' LIMIT 1");
+                $stmt->execute([$key, $station_id]);
+                $val = $stmt->fetchColumn();
+                if ($val !== false && $val !== null && $val !== '') {
+                    return (string)$val;
+                }
+            }
+            $stmt0 = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ? AND station_id = 0 LIMIT 1");
+            $stmt0->execute([$key]);
+            $val0 = $stmt0->fetchColumn();
+            if ($val0 !== false && $val0 !== null && $val0 !== '') {
+                return (string)$val0;
+            }
+        } catch (Throwable $e) {}
+        return $default;
+    }
+}
+
+if (!function_exists('petron_init_dynamic_timezone')) {
+    function petron_init_dynamic_timezone(?int $station_id = null): void {
+        global $pdo;
+        try {
+            if (!isset($pdo) || !$pdo) {
+                require_once __DIR__ . '/../public/db_connect.php';
+            }
+            $storedTz = petron_get_setting_value('timezone', $station_id, 'Asia/Manila (UTC+8)');
             if ($storedTz) {
                 $tzIdent = trim(explode(' ', $storedTz)[0]);
                 if (in_array($tzIdent, timezone_identifiers_list(), true)) {
                     date_default_timezone_set($tzIdent);
+                    try {
+                        $offset = date('P');
+                        $pdo->exec("SET time_zone = '{$offset}'");
+                    } catch (Throwable $t) {}
                     return;
                 }
             }
@@ -24,26 +56,86 @@ if (!function_exists('petron_init_dynamic_timezone')) {
 }
 
 if (!function_exists('petron_currency_symbol')) {
-    function petron_currency_symbol(): string {
-        static $sym = null;
-        if ($sym !== null) return $sym;
-        global $pdo;
-        try {
-            if (!isset($pdo) || !$pdo) {
-                require_once __DIR__ . '/../public/db_connect.php';
-            }
-            $stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'currency_symbol' AND station_id = 0 LIMIT 1");
-            $stmt->execute();
-            $raw = $stmt->fetchColumn();
-            if ($raw && preg_match('/\((.*?)\)/', $raw, $m)) {
-                $sym = $m[1];
-            } else {
-                $sym = '₱';
-            }
-        } catch (Throwable $e) {
-            $sym = '₱';
+    function petron_currency_symbol(?int $station_id = null): string {
+        $raw = petron_get_setting_value('currency_symbol', $station_id, 'PHP (₱)');
+        if ($raw && preg_match('/\((.*?)\)/', $raw, $m)) {
+            return trim($m[1]) ?: '₱';
         }
-        return $sym ?: '₱';
+        return trim($raw) ?: '₱';
+    }
+}
+
+if (!function_exists('petron_date_format')) {
+    function petron_date_format(?int $station_id = null): string {
+        return petron_get_setting_value('date_format', $station_id, 'YYYY-MM-DD');
+    }
+}
+
+if (!function_exists('petron_php_date_format')) {
+    function petron_php_date_format(?int $station_id = null): string {
+        $fmt = petron_date_format($station_id);
+        switch (strtoupper(trim($fmt))) {
+            case 'MM/DD/YYYY': return 'm/d/Y';
+            case 'DD/MM/YYYY': return 'd/m/Y';
+            case 'MMM DD, YYYY': return 'M d, Y';
+            case 'YYYY-MM-DD':
+            default:
+                return 'Y-m-d';
+        }
+    }
+}
+
+if (!function_exists('petron_time_format')) {
+    function petron_time_format(?int $station_id = null): string {
+        $val = strtoupper(trim(petron_get_setting_value('time_format', $station_id, '12H')));
+        return (strpos($val, '24') !== false) ? '24H' : '12H';
+    }
+}
+
+if (!function_exists('petron_php_time_format')) {
+    function petron_php_time_format(bool $with_seconds = true, ?int $station_id = null): string {
+        $is24 = (petron_time_format($station_id) === '24H');
+        if ($is24) {
+            return $with_seconds ? 'H:i:s' : 'H:i';
+        }
+        return $with_seconds ? 'h:i:s A' : 'h:i A';
+    }
+}
+
+if (!function_exists('petron_format_date')) {
+    function petron_format_date($val, ?int $station_id = null): string {
+        if (empty($val) || $val === '0000-00-00' || $val === '0000-00-00 00:00:00') return 'N/A';
+        $ts = is_numeric($val) ? (int)$val : strtotime((string)$val);
+        if (!$ts) return (string)$val;
+        return date(petron_php_date_format($station_id), $ts);
+    }
+}
+
+if (!function_exists('petron_format_time')) {
+    function petron_format_time($val, bool $with_seconds = true, ?int $station_id = null): string {
+        if (empty($val) || $val === '00:00:00' || $val === '0000-00-00 00:00:00') return 'N/A';
+        $ts = is_numeric($val) ? (int)$val : strtotime((string)$val);
+        if (!$ts) return (string)$val;
+        return date(petron_php_time_format($with_seconds, $station_id), $ts);
+    }
+}
+
+if (!function_exists('petron_format_datetime')) {
+    function petron_format_datetime($val, bool $with_seconds = true, ?int $station_id = null): string {
+        if (empty($val) || $val === '0000-00-00' || $val === '0000-00-00 00:00:00') return 'N/A';
+        $ts = is_numeric($val) ? (int)$val : strtotime((string)$val);
+        if (!$ts) return (string)$val;
+        $d = date(petron_php_date_format($station_id), $ts);
+        $t = date(petron_php_time_format($with_seconds, $station_id), $ts);
+        return $d . ' ' . $t;
+    }
+}
+
+if (!function_exists('petron_format_currency')) {
+    function petron_format_currency($amount, int $decimals = 2, ?int $station_id = null): string {
+        $sym = petron_currency_symbol($station_id);
+        $num = is_numeric($amount) ? (float)$amount : 0.0;
+        return $sym . ' ' . number_format($num, $decimals);
     }
 }
 

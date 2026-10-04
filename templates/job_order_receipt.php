@@ -33,8 +33,8 @@ $_jo_receipt_cfg = null;
 $_jo_station_id  = (int)($j['station_id'] ?? 0);
 try {
     if (isset($pdo)) {
-        $_rc = $pdo->prepare("SELECT * FROM receipt_config WHERE station_id = ? OR station_id = 0 ORDER BY (station_id = ?) DESC LIMIT 1");
-        $_rc->execute([$_jo_station_id, $_jo_station_id]);
+        $_rc = $pdo->prepare("SELECT * FROM receipt_config WHERE station_id = ? LIMIT 1");
+        $_rc->execute([$_jo_station_id]);
         $_jo_receipt_cfg = $_rc->fetch(PDO::FETCH_ASSOC) ?: null;
     }
 } catch (Exception $_e) {}
@@ -49,10 +49,10 @@ if (preg_match('/(station management|blvd|street|st\.|road|city|misamis)/i', $_r
 $station_header = !empty($_jo_receipt_cfg['station_header']) ? $_jo_receipt_cfg['station_header'] : $_raw_station_name;
 $branch_name    = !empty($_jo_receipt_cfg['branch_name'])    ? $_jo_receipt_cfg['branch_name']    : '';
 $station_addr   = !empty($_jo_receipt_cfg['station_address']) ? $_jo_receipt_cfg['station_address']
-                   : ($j['station_address'] ?: ($j['station_location'] ?? 'Vamenta Blvd., Carmen, Cagayan de Oro City, Misamis Oriental'));
+                   : ($j['station_address'] ?: ($j['station_location'] ?? ''));
 $vat_tin        = !empty($_jo_receipt_cfg['station_vat_tin']) ? $_jo_receipt_cfg['station_vat_tin']
-                   : ($j['station_vat_tin'] ?: '248-719-305-00000');
-$atp_no         = !empty($_jo_receipt_cfg['atp_no'])   ? $_jo_receipt_cfg['atp_no']   : 'BIR-ATP-2026-00984712';
+                   : ($j['station_vat_tin'] ?: '');
+$atp_no         = !empty($_jo_receipt_cfg['atp_no'])   ? $_jo_receipt_cfg['atp_no']   : '';
 $min_serial     = !empty($_jo_receipt_cfg['min_serial']) ? $_jo_receipt_cfg['min_serial'] : '';
 $footer_title   = !empty($_jo_receipt_cfg['footer_title'])   ? $_jo_receipt_cfg['footer_title']   : 'Official Job Order Document';
 $footer_msg     = !empty($_jo_receipt_cfg['footer_message']) ? $_jo_receipt_cfg['footer_message'] : 'Thank you for choosing Petron!';

@@ -1,5 +1,6 @@
 <?php
-date_default_timezone_set('Asia/Manila');
+require_once __DIR__ . '/../backend/lib.php';
+petron_init_dynamic_timezone();
 /**
  * PDF receipt renderer.
  *

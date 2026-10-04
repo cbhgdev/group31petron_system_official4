@@ -548,8 +548,8 @@ input:checked + .ss-slider:before {
                 </div>
                 <div class="ss-grid-2">
                     <div class="ss-form-group">
-                        <label for="ss_timezone">Timezone</label>
-                        <select id="ss_timezone" class="ss-form-control">
+                        <label for="ss_timezone"><i class="fas fa-map-marked-alt" style="color:#002F6C; margin-right:4px;"></i> Timezone</label>
+                        <select id="ss_timezone" class="ss-form-control" onchange="onRegionalSettingChange()">
                             <option value="Asia/Manila (UTC+8)">Asia/Manila (UTC+8)</option>
                             <option value="UTC">UTC</option>
                             <option value="Asia/Singapore (UTC+8)">Asia/Singapore (UTC+8)</option>
@@ -558,8 +558,8 @@ input:checked + .ss-slider:before {
                         </select>
                     </div>
                     <div class="ss-form-group">
-                        <label for="ss_date_format">Date Format</label>
-                        <select id="ss_date_format" class="ss-form-control">
+                        <label for="ss_date_format"><i class="fas fa-calendar-alt" style="color:#002F6C; margin-right:4px;"></i> Date Format</label>
+                        <select id="ss_date_format" class="ss-form-control" onchange="onRegionalSettingChange()">
                             <option value="YYYY-MM-DD">YYYY-MM-DD</option>
                             <option value="MM/DD/YYYY">MM/DD/YYYY</option>
                             <option value="DD/MM/YYYY">DD/MM/YYYY</option>
@@ -567,21 +567,70 @@ input:checked + .ss-slider:before {
                         </select>
                     </div>
                     <div class="ss-form-group">
-                        <label for="ss_time_format">Time Format</label>
-                        <select id="ss_time_format" class="ss-form-control">
+                        <label for="ss_time_format"><i class="fas fa-clock" style="color:#002F6C; margin-right:4px;"></i> Time Format</label>
+                        <select id="ss_time_format" class="ss-form-control" onchange="onRegionalSettingChange()">
                             <option value="12H">12H (12-Hour)</option>
                             <option value="24H">24H (24-Hour)</option>
                         </select>
                     </div>
                     <div class="ss-form-group">
-                        <label for="ss_currency_symbol">Currency Symbol</label>
-                        <select id="ss_currency_symbol" class="ss-form-control">
+                        <label for="ss_currency_symbol"><i class="fas fa-coins" style="color:#002F6C; margin-right:4px;"></i> Currency Symbol</label>
+                        <select id="ss_currency_symbol" class="ss-form-control" onchange="onRegionalSettingChange()">
                             <option value="PHP (₱)">PHP (₱)</option>
                             <option value="USD ($)">USD ($)</option>
                             <option value="EUR (€)">EUR (€)</option>
                             <option value="JPY (¥)">JPY (¥)</option>
                             <option value="GBP (£)">GBP (£)</option>
                         </select>
+                    </div>
+                </div>
+
+                <!-- Live Regional Preview Box -->
+                <div id="regionalLivePreviewBox" style="background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:10px; padding:16px 20px; margin-top:16px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px; border-bottom:1px solid #e2e8f0; padding-bottom:10px;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span style="display:inline-flex; width:28px; height:28px; border-radius:50%; background:#e0f2fe; color:#0284c7; align-items:center; justify-content:center; font-size:13px;">
+                                <i class="fas fa-satellite-dish"></i>
+                            </span>
+                            <span style="font-size:13.5px; font-weight:700; color:#1e293b; text-transform:uppercase; letter-spacing:0.5px;">Live Regional Feedback Preview</span>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
+                            <span id="previewTzBadge" class="badge" style="background:#e0f2fe; color:#0369a1; font-weight:700; padding:5px 10px; border-radius:6px;">Asia/Manila</span>
+                            <span id="previewFmtBadge" class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; padding:5px 10px; border-radius:6px;">YYYY-MM-DD</span>
+                            <span id="previewTimeBadge" class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; padding:5px 10px; border-radius:6px;">24H</span>
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px;">
+                        <!-- Clock & Date Display -->
+                        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:12px 16px;">
+                            <div style="font-size:11.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:6px;">
+                                <i class="far fa-clock" style="color:#002F6C; margin-right:4px;"></i> Live Synchronized System Clock
+                            </div>
+                            <div id="previewClockTime" style="font-size:24px; font-weight:800; color:#002F6C; font-family:monospace; letter-spacing:0.5px; line-height:1.2;">
+                                --:--:--
+                            </div>
+                            <div id="previewClockDate" style="font-size:13.5px; font-weight:600; color:#475569; margin-top:5px;">
+                                --------, ----
+                            </div>
+                        </div>
+                        <!-- Currency Sample Display -->
+                        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:12px 16px;">
+                            <div style="font-size:11.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:6px;">
+                                <i class="fas fa-coins" style="color:#16a34a; margin-right:4px;"></i> Active Currency Formatting Sample
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:5px;">
+                                <span style="font-size:13px; color:#64748b;">Fuel Subtotal:</span>
+                                <span id="previewCurrSubtotal" style="font-size:14px; font-weight:700; color:#1e293b;">₱ 2,500.00</span>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:3px;">
+                                <span style="font-size:13px; color:#64748b;">12% VAT:</span>
+                                <span id="previewCurrVat" style="font-size:13px; font-weight:600; color:#64748b;">₱ 300.00</span>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; padding-top:6px; border-top:1px dashed #cbd5e1;">
+                                <span style="font-size:13px; font-weight:700; color:#002F6C;">Grand Total:</span>
+                                <span id="previewCurrTotal" style="font-size:15px; font-weight:800; color:#002F6C;">₱ 2,800.00</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1125,6 +1174,11 @@ function populateFormFields(s) {
 
     const headerName = document.getElementById('headerSystemName');
     if (headerName && s.system_name) headerName.textContent = s.system_name;
+
+    // Synchronize Live Regional Preview and active clock
+    if (typeof onRegionalSettingChange === 'function') {
+        onRegionalSettingChange();
+    }
 }
 
 // ── Live-update header logo and system name without page reload ────────────
@@ -1426,13 +1480,16 @@ async function saveAllSystemSettings() {
             localStorage.setItem('petronTheme', payload.settings.theme.toLowerCase());
             localStorage.setItem('sidebarState', payload.settings.sidebar_mode.toLowerCase());
 
-            // Apply live appearance settings to DOM immediately
+            // Apply live appearance & regional settings to DOM immediately
             onSidebarColorChange(payload.settings.sidebar_color);
             onNavActiveColorChange(payload.settings.nav_active_color);
             onAccentColorChange(payload.settings.system_accent_color);
             onThemeChange(payload.settings.theme);
+            if (typeof onRegionalSettingChange === 'function') {
+                onRegionalSettingChange();
+            }
 
-            showToast('Settings Saved', 'Appearance & system settings saved successfully.');
+            showToast('Settings Saved', 'Regional & system settings saved successfully.');
             loadSystemSettings(stationId);
         } else {
             showToast('Save Error', data.message || 'Failed to save system settings.', true);
@@ -1579,5 +1636,81 @@ function applyColorPreset(sidebarCol, activeCol, accentCol) {
     onNavActiveColorChange(activeCol);
     onAccentColorChange(accentCol);
 }
+
+// ── REAL-TIME REGIONAL SETTINGS LIVE PREVIEW & CLOCK SYNC ─────────────────
+function onRegionalSettingChange() {
+    const tzSel   = document.getElementById('ss_timezone');
+    const dateSel = document.getElementById('ss_date_format');
+    const timeSel = document.getElementById('ss_time_format');
+    const currSel = document.getElementById('ss_currency_symbol');
+
+    if (!tzSel || !dateSel || !timeSel || !currSel) return;
+
+    const rawTz   = tzSel.value || 'Asia/Manila (UTC+8)';
+    const ianaTz  = rawTz.split(' ')[0].trim();
+    const dateFmt = dateSel.value || 'YYYY-MM-DD';
+    const timeFmt = timeSel.value || '12H';
+    const rawCurr = currSel.value || 'PHP (₱)';
+    let currSym   = '₱';
+    const currMatch = rawCurr.match(/\((.*?)\)/);
+    if (currMatch && currMatch[1]) {
+        currSym = currMatch[1].trim();
+    } else {
+        currSym = rawCurr.trim();
+    }
+
+    // Sync window.PETRON_REGIONAL immediately so global formatters reflect choices instantly
+    if (window.PETRON_REGIONAL) {
+        window.PETRON_REGIONAL.timezone       = ianaTz;
+        window.PETRON_REGIONAL.timezoneRaw    = rawTz;
+        window.PETRON_REGIONAL.dateFormat     = dateFmt;
+        window.PETRON_REGIONAL.timeFormat     = timeFmt;
+        window.PETRON_REGIONAL.currencySymbol = currSym;
+        window.PETRON_REGIONAL.currencyRaw    = rawCurr;
+    }
+
+    // Update badges
+    const tzBadge   = document.getElementById('previewTzBadge');
+    if (tzBadge)   tzBadge.textContent   = ianaTz;
+    const fmtBadge  = document.getElementById('previewFmtBadge');
+    if (fmtBadge)  fmtBadge.textContent  = dateFmt;
+    const timeBadge = document.getElementById('previewTimeBadge');
+    if (timeBadge) timeBadge.textContent = timeFmt;
+
+    // Update currency samples
+    const subtotalEl = document.getElementById('previewCurrSubtotal');
+    if (subtotalEl) subtotalEl.textContent = `${currSym} 2,500.00`;
+    const vatEl      = document.getElementById('previewCurrVat');
+    if (vatEl)      vatEl.textContent      = `${currSym} 300.00`;
+    const totalEl    = document.getElementById('previewCurrTotal');
+    if (totalEl)    totalEl.textContent    = `${currSym} 2,800.00`;
+
+    // Refresh clocks immediately
+    updateRegionalClockPreview();
+    if (typeof updateFooterClock === 'function') {
+        updateFooterClock();
+    }
+}
+
+function updateRegionalClockPreview() {
+    const clockTime = document.getElementById('previewClockTime');
+    const clockDate = document.getElementById('previewClockDate');
+    if (!clockTime && !clockDate) return;
+
+    const now = new Date();
+    const tzSel   = document.getElementById('ss_timezone');
+    const dateSel = document.getElementById('ss_date_format');
+    const timeSel = document.getElementById('ss_time_format');
+
+    const ianaTz  = tzSel ? tzSel.value.split(' ')[0].trim() : ((window.PETRON_REGIONAL && window.PETRON_REGIONAL.timezone) || 'Asia/Manila');
+    const dateFmt = dateSel ? dateSel.value : ((window.PETRON_REGIONAL && window.PETRON_REGIONAL.dateFormat) || 'YYYY-MM-DD');
+    const timeFmt = timeSel ? timeSel.value : ((window.PETRON_REGIONAL && window.PETRON_REGIONAL.timeFormat) || '12H');
+
+    if (typeof window.formatPetronTime === 'function' && typeof window.formatPetronDate === 'function') {
+        if (clockTime) clockTime.textContent = window.formatPetronTime(now, true, timeFmt, ianaTz);
+        if (clockDate) clockDate.textContent = window.formatPetronDate(now, true, dateFmt, ianaTz);
+    }
+}
+setInterval(updateRegionalClockPreview, 1000);
 </script>
 <?php include __DIR__ . '/../partials/footer.php'; ?>
