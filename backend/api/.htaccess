@@ -1,0 +1,25 @@
+# backend/api/ — Allow AJAX API endpoints (called by frontend JS)
+# The parent backend/.htaccess blocks all of backend/,
+# so we explicitly re-grant access to this api/ subdirectory.
+
+<IfModule mod_authz_core.c>
+    Require all granted
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order Allow,Deny
+    Allow from all
+</IfModule>
+
+# Only allow .php files — no directory listing, no other extensions
+Options -Indexes
+
+# Block direct access to non-PHP files (logs, configs, etc.)
+<FilesMatch "(?i)\.(env|sql|bak|old|log|json|ini|yml|yaml|sh|lock|git|svn|htaccess|htpasswd|md)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order Deny,Allow
+        Deny from all
+    </IfModule>
+</FilesMatch>

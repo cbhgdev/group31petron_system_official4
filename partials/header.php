@@ -707,7 +707,7 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
   <link rel="stylesheet" href="<?php echo $app_base_path; ?>/assets/css/manager_table_design.css?v=2.0.2" />
   <link rel="stylesheet" href="<?php echo $app_base_path; ?>/assets/css/manager_customer_management.css?v=2.0.2" />
   <link rel="stylesheet" href="<?php echo $app_base_path; ?>/assets/vendor/fontawesome/css/all.min.css">
-  <script src="<?php echo $app_base_path; ?>/assets/js/security_frontend.js?v=<?php echo time(); ?>"></script>
+  <script src="<?php echo $app_base_path; ?>/assets/js/security_frontend.js?v=<?php echo filemtime(__DIR__ . '/../assets/js/security_frontend.js'); ?>"></script>
   <!-- ── Petron Real-Time Auto-Refresh Engine ── -->
   <script>
     window.PETRON_BASE_PATH = <?php echo json_encode(rtrim($app_base_path, '/')); ?>;
@@ -6475,13 +6475,20 @@ require_once __DIR__ . '/rbac_menu.php';
                 if (el) el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:12px;"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
                 try {
                     const res  = await fetch(API_LIST + '?action=list&limit=15&status=all', { credentials: 'same-origin', cache: 'no-store' });
+                    if (!res.ok) {
+                        // API unreachable — show empty state instead of error
+                        if (el) el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;display:block;margin-bottom:8px;"></i>No notifications.</div>';
+                        return;
+                    }
                     const data = await res.json();
                     if (data.success) {
                         renderNotifications(data.notifications || []);
                         updateBadge(data.bell_unread_count ?? data.unread_count ?? 0, data.category_counts);
+                    } else {
+                        if (el) el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;display:block;margin-bottom:8px;"></i>No notifications.</div>';
                     }
                 } catch (e) {
-                    if (el) el.innerHTML = '<div style="padding:20px;text-align:center;color:#cc0000;font-size:12px;"><i class="fas fa-exclamation-circle"></i> Failed to load notifications.</div>';
+                    if (el) el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;display:block;margin-bottom:8px;"></i>No notifications available.</div>';
                 }
             }
 
@@ -6716,7 +6723,11 @@ require_once __DIR__ . '/rbac_menu.php';
                         cache: 'no-store'
                     });
                     clearTimeout(tid);
-                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    // Do NOT throw on non-ok — gracefully show empty state
+                    if (!res.ok) {
+                        el.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;margin-bottom:8px;display:block;"></i>No notifications yet.</div>';
+                        return;
+                    }
                     const data = await res.json();
 
                     if (data.success && data.notifications && data.notifications.length > 0) {
@@ -6763,11 +6774,11 @@ require_once __DIR__ . '/rbac_menu.php';
                         el.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;margin-bottom:8px;display:block;"></i>No notifications yet.</div>';
                         updateBadge(0, data.category_counts);
                     } else {
-                        el.innerHTML = '<div style="padding:16px;text-align:center;color:#dc3545;font-size:12px;"><i class="fas fa-exclamation-circle"></i> Could not load notifications.</div>';
+                        el.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;margin-bottom:8px;display:block;"></i>No notifications yet.</div>';
                     }
                 } catch (e) {
                     const el2 = document.getElementById('notificationList');
-                    if (el2) el2.innerHTML = '<div style="padding:16px;text-align:center;color:#dc3545;font-size:12px;"><i class="fas fa-exclamation-circle"></i> Could not load notifications.</div>';
+                    if (el2) el2.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;margin-bottom:8px;display:block;"></i>No notifications yet.</div>';
                 }
             }
 
@@ -6843,18 +6854,25 @@ require_once __DIR__ . '/rbac_menu.php';
                     })
                     .then(r => {
                         clearTimeout(tid);
-                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        // Do NOT throw on non-ok (403/500 on live server) — treat generator as optional
+                        if (!r.ok) {
+                            // Generator unavailable — still load notifications from DB directly
+                            fetchUnreadCount();
+                            loadNotifications();
+                            return null;
+                        }
                         return r.json();
                     })
                     .then(d => {
+                        if (!d) return; // already handled above
                         fetchUnreadCount();
-                        if ((d.ok && d.generated > 0) || isNotificationDropdownOpen() || notificationListNeedsRefresh()) {
-                            loadNotifications();
-                        }
+                        loadNotifications();
                     })
                     .catch(() => {
                         clearTimeout(tid);
-                        if (notificationListNeedsRefresh()) loadNotifications();
+                        // On any error (network, abort, etc.) — always try to load notifications
+                        fetchUnreadCount();
+                        loadNotifications();
                     });
             }
 

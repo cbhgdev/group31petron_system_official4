@@ -1252,7 +1252,7 @@
   })();
   </script>
 
-  <script src="<?= isset($app_base_path) ? $app_base_path : '' ?>/assets/js/live_sync.js?v=<?= time() ?>"></script>
-  <script src="<?= isset($app_base_path) ? $app_base_path : '' ?>/assets/js/global_draft_engine.js?v=<?= time() ?>"></script>
+  <script src="<?= isset($app_base_path) ? $app_base_path : '' ?>/assets/js/live_sync.js?v=<?= @filemtime(__DIR__ . '/../assets/js/live_sync.js') ?: '1' ?>"></script>
+  <script src="<?= isset($app_base_path) ? $app_base_path : '' ?>/assets/js/global_draft_engine.js?v=<?= @filemtime(__DIR__ . '/../assets/js/global_draft_engine.js') ?: '1' ?>"></script>
 </body>
 </html>

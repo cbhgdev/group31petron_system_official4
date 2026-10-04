@@ -1,7 +1,30 @@
-<IfModule mod_authz_core.c>
-    Require all denied
-</IfModule>
-<IfModule !mod_authz_core.c>
-    Order Deny,Allow
-    Deny from all
-</IfModule>
+# backend/ directory security rules
+# Allow AJAX-callable PHP API files (api_refresh.php, etc.)
+# Block sensitive internal files from direct browser access
+
+# Disable directory listing
+Options -Indexes
+
+# Block all non-PHP files (logs, configs, SQL dumps, etc.)
+<FilesMatch "(?i)\.(env|sql|bak|old|log|json|ini|yml|yaml|sh|lock|git|svn|htaccess|htpasswd|md)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order Deny,Allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Block direct access to internal library/config PHP files (not AJAX endpoints)
+<FilesMatch "^(lib|config|functions|bootstrap|autoload|setup|install)\.php$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order Deny,Allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# All other .php files (api_refresh.php, etc.) are allowed for AJAX calls
