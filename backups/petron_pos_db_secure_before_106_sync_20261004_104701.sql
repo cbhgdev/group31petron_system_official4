@@ -1,6 +1,6 @@
 -- MariaDB dump 10.19  Distrib 10.4.32-MariaDB, for Win64 (AMD64)
 --
--- Host: localhost    Database: u261539219_petrondbs
+-- Host: localhost    Database: petron_pos_db_secure
 -- ------------------------------------------------------
 -- Server version	10.4.32-MariaDB
 
@@ -4580,4 +4580,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-10-04 16:46:33
+-- Dump completed on 2026-10-04 16:47:01
