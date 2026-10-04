@@ -185,13 +185,44 @@ try {
                 if ($key === 'session_timeout') {
                     $valStr = (string)max(1, (int)$value);
                 }
+                if ($key === 'banner_duration') {
+                    $valStr = (string)max(1, min(60, (int)$value));
+                }
+                if ($key === 'default_paper_size') {
+                    $valStr = (strtoupper($valStr) === 'LETTER') ? 'Letter' : 'A4';
+                }
+                if ($key === 'default_orientation') {
+                    $valStr = (strtolower($valStr) === 'landscape') ? 'Landscape' : 'Portrait';
+                }
+                if (in_array($key, ['enable_system_notifications', 'enable_error_notifications', 'show_company_logo_reports', 'show_report_footer'], true)) {
+                    $valStr = ($valStr === '1' || $valStr === 1 || $valStr === true || $valStr === 'true') ? '1' : '0';
+                }
                 upsertSetting($pdo, $key, $valStr, $category, $station_id, $me['id']);
             }
 
-            // Sync global session_timeout across all stations so it is truly global
-            if ($station_id === 0 && isset($settings['session_timeout'])) {
-                $globalTimeout = (string)max(1, (int)$settings['session_timeout']);
-                $pdo->prepare("UPDATE system_settings SET setting_value = ?, updated_at = NOW(), updated_by = ? WHERE setting_key = 'session_timeout'")->execute([$globalTimeout, $me['id']]);
+            // Sync global security, notification, and report settings across all stations when updated globally
+            if ($station_id === 0) {
+                $globalSyncKeys = [
+                    'session_timeout', 'min_password_length', 'max_login_attempts',
+                    'require_uppercase', 'require_numbers', 'require_special_chars',
+                    'banner_duration', 'enable_system_notifications', 'enable_error_notifications',
+                    'default_paper_size', 'default_orientation', 'show_company_logo_reports', 'show_report_footer'
+                ];
+                foreach ($globalSyncKeys as $sk) {
+                    if (isset($settings[$sk])) {
+                        $sVal = is_bool($settings[$sk]) ? ($settings[$sk] ? '1' : '0') : (string)$settings[$sk];
+                        if ($sk === 'session_timeout') $sVal = (string)max(1, (int)$sVal);
+                        if ($sk === 'min_password_length') $sVal = (string)max(4, (int)$sVal);
+                        if ($sk === 'max_login_attempts') $sVal = (string)max(1, (int)$sVal);
+                        if ($sk === 'banner_duration') $sVal = (string)max(1, min(60, (int)$sVal));
+                        if ($sk === 'default_paper_size') $sVal = (strtoupper($sVal) === 'LETTER') ? 'Letter' : 'A4';
+                        if ($sk === 'default_orientation') $sVal = (strtolower($sVal) === 'landscape') ? 'Landscape' : 'Portrait';
+                        if (in_array($sk, ['enable_system_notifications', 'enable_error_notifications', 'show_company_logo_reports', 'show_report_footer'], true)) {
+                            $sVal = ($sVal === '1' || $sVal === 1 || $sVal === true || $sVal === 'true') ? '1' : '0';
+                        }
+                        $pdo->prepare("UPDATE system_settings SET setting_value = ?, updated_at = NOW(), updated_by = ? WHERE setting_key = ?")->execute([$sVal, $me['id'], $sk]);
+                    }
+                }
             }
 
             // Sync company_logo → 'logo' and 'system_logo' keys (read by partials/header.php and reports)

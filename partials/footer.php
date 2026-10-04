@@ -1150,12 +1150,21 @@
       }
   });
 
-  // ── INACTIVITY TIMEOUT CONTROLLER (15 min timeout, 14 min warning / 1 min remaining) ──
+  // ── INACTIVITY TIMEOUT CONTROLLER (Dynamically loaded from system_settings) ──
   (function() {
-      const TOTAL_TIMEOUT_SEC  = 900; // 15 minutes total (900 seconds)
-      const WARNING_TIME_SEC   = 840; // 14 minutes before warning (60 seconds remaining)
-      const KEEPALIVE_URL      = "<?= isset($app_base_path) ? $app_base_path : '' ?>/backend/api/session_keepalive.php";
-      const LOGOUT_URL         = "<?= isset($public_base_url) ? htmlspecialchars($public_base_url . '/logout.php?timeout=1') : 'logout.php?timeout=1' ?>";
+      function getDynamicTimeoutSec() {
+          if (typeof window.PETRON_SESSION_TIMEOUT_SEC !== 'undefined' && parseInt(window.PETRON_SESSION_TIMEOUT_SEC, 10) > 0) {
+              return Math.max(60, parseInt(window.PETRON_SESSION_TIMEOUT_SEC, 10));
+          }
+          return 1800; // fallback: 30 minutes
+      }
+
+      let TOTAL_TIMEOUT_SEC  = getDynamicTimeoutSec();
+      // Proportional warning lead time: 60s warning before timeout, or 20% before if timeout is short (e.g. 1-2 min)
+      let WARNING_LEAD_SEC   = Math.min(60, Math.max(10, Math.floor(TOTAL_TIMEOUT_SEC * 0.2)));
+      let WARNING_TIME_SEC   = Math.max(10, TOTAL_TIMEOUT_SEC - WARNING_LEAD_SEC);
+      const KEEPALIVE_URL    = "<?= isset($app_base_path) ? $app_base_path : '' ?>/backend/api/session_keepalive.php";
+      const LOGOUT_URL       = "<?= isset($public_base_url) ? htmlspecialchars($public_base_url . '/logout.php?timeout=1') : 'logout.php?timeout=1' ?>";
 
       let lastActivityTime = Date.now();
       let warningModalOpen = false;
@@ -1224,6 +1233,12 @@
           .then(function(res) { return res.json(); })
           .then(function(data) {
               if (data && data.ok) {
+                  if (data.timeout_seconds && data.timeout_seconds > 0) {
+                      TOTAL_TIMEOUT_SEC = Math.max(60, parseInt(data.timeout_seconds, 10));
+                      window.PETRON_SESSION_TIMEOUT_SEC = TOTAL_TIMEOUT_SEC;
+                      WARNING_LEAD_SEC  = Math.min(60, Math.max(10, Math.floor(TOTAL_TIMEOUT_SEC * 0.2)));
+                      WARNING_TIME_SEC  = Math.max(10, TOTAL_TIMEOUT_SEC - WARNING_LEAD_SEC);
+                  }
                   lastActivityTime = Date.now();
                   hideWarningModal();
               } else {
@@ -1245,6 +1260,16 @@
 
       // Periodic check every 2 seconds
       setInterval(function() {
+          // Re-sync with window.PETRON_SESSION_TIMEOUT_SEC if updated dynamically (e.g. settings saved in tab)
+          if (typeof window.PETRON_SESSION_TIMEOUT_SEC !== 'undefined' && parseInt(window.PETRON_SESSION_TIMEOUT_SEC, 10) > 0) {
+              const currentCfgSec = Math.max(60, parseInt(window.PETRON_SESSION_TIMEOUT_SEC, 10));
+              if (currentCfgSec !== TOTAL_TIMEOUT_SEC) {
+                  TOTAL_TIMEOUT_SEC = currentCfgSec;
+                  WARNING_LEAD_SEC  = Math.min(60, Math.max(10, Math.floor(TOTAL_TIMEOUT_SEC * 0.2)));
+                  WARNING_TIME_SEC  = Math.max(10, TOTAL_TIMEOUT_SEC - WARNING_LEAD_SEC);
+              }
+          }
+
           const elapsedSec = Math.floor((Date.now() - lastActivityTime) / 1000);
 
           if (elapsedSec >= TOTAL_TIMEOUT_SEC) {

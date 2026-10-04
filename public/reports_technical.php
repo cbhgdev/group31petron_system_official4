@@ -1037,6 +1037,11 @@ a.rpt-action-btn:hover,
         <div class="print-area">
             <!-- Centered Header Banner -->
             <div class="rpt-centered-header">
+                <?php if ($rpt_show_logo && !empty($rpt_logo_url)): ?>
+                    <div style="text-align: center; margin-bottom: 10px;" data-report-logo="1">
+                        <img src="<?= htmlspecialchars($rpt_logo_url) ?>" alt="Company Logo" class="rpt-company-logo" style="max-height: 52px; max-width: 180px; object-fit: contain; display: inline-block;">
+                    </div>
+                <?php endif; ?>
                 <h2><?php echo htmlspecialchars($current_report_title); ?></h2>
                 <div class="rpt-address">Vamenta Blvd., Carmen, City Of Cagayan De Oro , Misamis Oriental</div>
                 <div class="rpt-date-range">Date: <?php echo htmlspecialchars($display_date_range); ?></div>
@@ -1244,7 +1249,7 @@ a.rpt-action-btn:hover,
 
         <!-- SYSTEM DEVELOPED BY SIGNATURE (Print Only — hidden on web view, visible on print) -->
         <?php if ($rpt_show_footer): ?>
-        <table class="print-only-sig" style="width:100%; margin-top:35px; page-break-inside:avoid; border:none; border-collapse:collapse;">
+        <table class="print-only-sig" data-report-footer="1" style="width:100%; margin-top:35px; page-break-inside:avoid; border:none; border-collapse:collapse;">
             <tr>
                 <td style="border:none;"></td>
                 <td style="border:none; width:220px; text-align:center; vertical-align:bottom;">

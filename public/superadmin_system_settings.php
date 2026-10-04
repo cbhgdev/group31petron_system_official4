@@ -584,55 +584,6 @@ input:checked + .ss-slider:before {
                         </select>
                     </div>
                 </div>
-
-                <!-- Live Regional Preview Box -->
-                <div id="regionalLivePreviewBox" style="background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:10px; padding:16px 20px; margin-top:16px;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px; border-bottom:1px solid #e2e8f0; padding-bottom:10px;">
-                        <div style="display:flex; align-items:center; gap:8px;">
-                            <span style="display:inline-flex; width:28px; height:28px; border-radius:50%; background:#e0f2fe; color:#0284c7; align-items:center; justify-content:center; font-size:13px;">
-                                <i class="fas fa-satellite-dish"></i>
-                            </span>
-                            <span style="font-size:13.5px; font-weight:700; color:#1e293b; text-transform:uppercase; letter-spacing:0.5px;">Live Regional Feedback Preview</span>
-                        </div>
-                        <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
-                            <span id="previewTzBadge" class="badge" style="background:#e0f2fe; color:#0369a1; font-weight:700; padding:5px 10px; border-radius:6px;">Asia/Manila</span>
-                            <span id="previewFmtBadge" class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; padding:5px 10px; border-radius:6px;">YYYY-MM-DD</span>
-                            <span id="previewTimeBadge" class="badge" style="background:#f1f5f9; color:#475569; font-weight:700; padding:5px 10px; border-radius:6px;">24H</span>
-                        </div>
-                    </div>
-                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px;">
-                        <!-- Clock & Date Display -->
-                        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:12px 16px;">
-                            <div style="font-size:11.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:6px;">
-                                <i class="far fa-clock" style="color:#002F6C; margin-right:4px;"></i> Live Synchronized System Clock
-                            </div>
-                            <div id="previewClockTime" style="font-size:24px; font-weight:800; color:#002F6C; font-family:monospace; letter-spacing:0.5px; line-height:1.2;">
-                                --:--:--
-                            </div>
-                            <div id="previewClockDate" style="font-size:13.5px; font-weight:600; color:#475569; margin-top:5px;">
-                                --------, ----
-                            </div>
-                        </div>
-                        <!-- Currency Sample Display -->
-                        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:8px; padding:12px 16px;">
-                            <div style="font-size:11.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.4px; margin-bottom:6px;">
-                                <i class="fas fa-coins" style="color:#16a34a; margin-right:4px;"></i> Active Currency Formatting Sample
-                            </div>
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:5px;">
-                                <span style="font-size:13px; color:#64748b;">Fuel Subtotal:</span>
-                                <span id="previewCurrSubtotal" style="font-size:14px; font-weight:700; color:#1e293b;">₱ 2,500.00</span>
-                            </div>
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:3px;">
-                                <span style="font-size:13px; color:#64748b;">12% VAT:</span>
-                                <span id="previewCurrVat" style="font-size:13px; font-weight:600; color:#64748b;">₱ 300.00</span>
-                            </div>
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px; padding-top:6px; border-top:1px dashed #cbd5e1;">
-                                <span style="font-size:13px; font-weight:700; color:#002F6C;">Grand Total:</span>
-                                <span id="previewCurrTotal" style="font-size:15px; font-weight:800; color:#002F6C;">₱ 2,800.00</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <!-- Appearance & Navigation Customization -->
@@ -736,11 +687,11 @@ input:checked + .ss-slider:before {
                     </div>
                     <div class="ss-form-group">
                         <label for="ss_min_password_length">Minimum Password Length</label>
-                        <input type="number" id="ss_min_password_length" class="ss-form-control" value="8" min="6" max="32">
+                        <input type="number" id="ss_min_password_length" class="ss-form-control" value="8" min="4" max="64">
                     </div>
                     <div class="ss-form-group">
                         <label for="ss_max_login_attempts">Maximum Login Attempts</label>
-                        <input type="number" id="ss_max_login_attempts" class="ss-form-control" value="5" min="3" max="10">
+                        <input type="number" id="ss_max_login_attempts" class="ss-form-control" value="5" min="3" max="20">
                     </div>
                 </div>
                 <div class="ss-grid-3">
@@ -776,19 +727,19 @@ input:checked + .ss-slider:before {
                 <div class="ss-grid-3">
                     <div class="ss-form-group">
                         <label for="ss_banner_duration">Success Banner Duration (seconds)</label>
-                        <input type="number" id="ss_banner_duration" class="ss-form-control" value="5" min="1" max="30">
+                        <input type="number" id="ss_banner_duration" name="banner_duration" class="ss-form-control" value="5" min="1" max="30">
                     </div>
                     <div class="ss-toggle-wrapper" style="align-self:end; margin-bottom:16px;">
                         <span class="ss-toggle-label">Enable System Notifications</span>
                         <label class="ss-switch">
-                            <input type="checkbox" id="ss_enable_system_notifications" checked>
+                            <input type="checkbox" id="ss_enable_system_notifications" name="enable_system_notifications" checked>
                             <span class="ss-slider"></span>
                         </label>
                     </div>
                     <div class="ss-toggle-wrapper" style="align-self:end; margin-bottom:16px;">
                         <span class="ss-toggle-label">Enable Error Notifications</span>
                         <label class="ss-switch">
-                            <input type="checkbox" id="ss_enable_error_notifications" checked>
+                            <input type="checkbox" id="ss_enable_error_notifications" name="enable_error_notifications" checked>
                             <span class="ss-slider"></span>
                         </label>
                     </div>
@@ -803,14 +754,14 @@ input:checked + .ss-slider:before {
                 <div class="ss-grid-2" style="margin-bottom:16px;">
                     <div class="ss-form-group">
                         <label for="ss_default_paper_size">Default Paper Size</label>
-                        <select id="ss_default_paper_size" class="ss-form-control">
+                        <select id="ss_default_paper_size" name="default_paper_size" class="ss-form-control">
                             <option value="A4">A4</option>
                             <option value="Letter">Letter</option>
                         </select>
                     </div>
                     <div class="ss-form-group">
                         <label for="ss_default_orientation">Default Orientation</label>
-                        <select id="ss_default_orientation" class="ss-form-control">
+                        <select id="ss_default_orientation" name="default_orientation" class="ss-form-control">
                             <option value="Portrait">Portrait</option>
                             <option value="Landscape">Landscape</option>
                         </select>
@@ -820,14 +771,14 @@ input:checked + .ss-slider:before {
                     <div class="ss-toggle-wrapper">
                         <span class="ss-toggle-label">Show Company Logo on Reports</span>
                         <label class="ss-switch">
-                            <input type="checkbox" id="ss_show_company_logo_reports" checked>
+                            <input type="checkbox" id="ss_show_company_logo_reports" name="show_company_logo_reports" checked>
                             <span class="ss-slider"></span>
                         </label>
                     </div>
                     <div class="ss-toggle-wrapper">
                         <span class="ss-toggle-label">Show Report Footer</span>
                         <label class="ss-switch">
-                            <input type="checkbox" id="ss_show_report_footer" checked>
+                            <input type="checkbox" id="ss_show_report_footer" name="show_report_footer" checked>
                             <span class="ss-slider"></span>
                         </label>
                     </div>
@@ -957,7 +908,15 @@ const CURRENT_LOGO_URL = <?php echo json_encode($current_logo_db ?: '../assets/i
 let loadedSettings = {};
 
 function showToast(title, message, isError = false) {
+    // Check error notification setting
+    const errorToggle = document.getElementById('ss_enable_error_notifications');
+    const errorNotifEnabled = errorToggle ? errorToggle.checked : (window.petronSystemSettings?.enableErrorNotifications ?? true);
+    if (isError && !errorNotifEnabled) {
+        return; // Suppressed by Error Notifications toggle
+    }
+
     const el = document.getElementById('toastNotification');
+    if (!el) return;
     const tTitle = document.getElementById('toastTitle');
     const tMsg = document.getElementById('toastMessage');
     const tIcon = document.getElementById('toastIcon');
@@ -982,12 +941,18 @@ function showToast(title, message, isError = false) {
     el.style.opacity = '1';
     el.style.transform = 'translateX(0)';
 
-    setTimeout(() => {
+    // Dynamic duration from user settings
+    const durInput = document.getElementById('ss_banner_duration');
+    const durSec = Math.max(1, parseInt(durInput ? durInput.value : (loadedSettings.banner_duration || window.petronSystemSettings?.bannerDuration || 5), 10));
+    const timeoutMs = durSec * 1000;
+
+    if (window.petronToastTimer) clearTimeout(window.petronToastTimer);
+    window.petronToastTimer = setTimeout(() => {
         el.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
         el.style.opacity = '0';
         el.style.transform = 'translateX(110%)';
         setTimeout(() => { el.style.display = 'none'; }, 320);
-    }, 5000);
+    }, timeoutMs);
 }
 
 // Station Combo Box Init
@@ -1110,12 +1075,12 @@ function populateFormFields(s) {
     document.getElementById('ss_require_numbers').checked = s.require_numbers == '1';
     document.getElementById('ss_require_special_chars').checked = s.require_special_chars == '1';
     document.getElementById('ss_banner_duration').value = s.banner_duration || '5';
-    document.getElementById('ss_enable_system_notifications').checked = s.enable_system_notifications == '1';
-    document.getElementById('ss_enable_error_notifications').checked = s.enable_error_notifications == '1';
+    document.getElementById('ss_enable_system_notifications').checked = (s.enable_system_notifications === '1' || s.enable_system_notifications === 1 || s.enable_system_notifications === true || s.enable_system_notifications === undefined);
+    document.getElementById('ss_enable_error_notifications').checked = (s.enable_error_notifications === '1' || s.enable_error_notifications === 1 || s.enable_error_notifications === true || s.enable_error_notifications === undefined);
     document.getElementById('ss_default_paper_size').value = s.default_paper_size || 'A4';
     document.getElementById('ss_default_orientation').value = s.default_orientation || 'Portrait';
-    document.getElementById('ss_show_company_logo_reports').checked = s.show_company_logo_reports == '1';
-    document.getElementById('ss_show_report_footer').checked = s.show_report_footer == '1';
+    document.getElementById('ss_show_company_logo_reports').checked = (s.show_company_logo_reports === '1' || s.show_company_logo_reports === 1 || s.show_company_logo_reports === true || s.show_company_logo_reports === undefined);
+    document.getElementById('ss_show_report_footer').checked = (s.show_report_footer === '1' || s.show_report_footer === 1 || s.show_report_footer === true || s.show_report_footer === undefined);
     document.getElementById('ss_maintenance_mode').checked = (s.maintenance_mode == '1');
     if (document.getElementById('ss_maintenance_message')) {
         document.getElementById('ss_maintenance_message').value = s.maintenance_message || 'The system is currently undergoing scheduled maintenance to improve performance and stability. Please check back shortly.';
@@ -1489,7 +1454,36 @@ async function saveAllSystemSettings() {
                 onRegionalSettingChange();
             }
 
-            showToast('Settings Saved', 'Regional & system settings saved successfully.');
+            // Sync live session timeout and security policy immediately in active window
+            if (payload.settings.session_timeout) {
+                const sTimeoutMin = Math.max(1, parseInt(payload.settings.session_timeout, 10));
+                window.PETRON_SESSION_TIMEOUT_MIN = sTimeoutMin;
+                window.PETRON_SESSION_TIMEOUT_SEC = sTimeoutMin * 60;
+            }
+            window.PETRON_SECURITY_POLICY = {
+                session_timeout:       parseInt(payload.settings.session_timeout, 10),
+                min_password_length:   parseInt(payload.settings.min_password_length, 10),
+                max_login_attempts:    parseInt(payload.settings.max_login_attempts, 10),
+                require_uppercase:     payload.settings.require_uppercase === '1',
+                require_numbers:       payload.settings.require_numbers === '1',
+                require_special_chars: payload.settings.require_special_chars === '1'
+            };
+            if (typeof updateSecurityPolicyPreview === 'function') {
+                updateSecurityPolicyPreview();
+            }
+
+            // Live sync notification & report settings in window.petronSystemSettings
+            if (window.petronSystemSettings) {
+                window.petronSystemSettings.bannerDuration = parseInt(payload.settings.banner_duration, 10);
+                window.petronSystemSettings.enableSystemNotifications = (payload.settings.enable_system_notifications === '1');
+                window.petronSystemSettings.enableErrorNotifications = (payload.settings.enable_error_notifications === '1');
+                window.petronSystemSettings.defaultPaperSize = payload.settings.default_paper_size;
+                window.petronSystemSettings.defaultOrientation = payload.settings.default_orientation;
+                window.petronSystemSettings.showCompanyLogoReports = (payload.settings.show_company_logo_reports === '1');
+                window.petronSystemSettings.showReportFooter = (payload.settings.show_report_footer === '1');
+            }
+
+            showToast('Settings Saved', 'System, notification & report settings saved successfully.');
             loadSystemSettings(stationId);
         } else {
             showToast('Save Error', data.message || 'Failed to save system settings.', true);
@@ -1637,7 +1631,7 @@ function applyColorPreset(sidebarCol, activeCol, accentCol) {
     onAccentColorChange(accentCol);
 }
 
-// ── REAL-TIME REGIONAL SETTINGS LIVE PREVIEW & CLOCK SYNC ─────────────────
+// ── REAL-TIME REGIONAL SETTINGS SYNC ─────────────────
 function onRegionalSettingChange() {
     const tzSel   = document.getElementById('ss_timezone');
     const dateSel = document.getElementById('ss_date_format');
@@ -1669,48 +1663,10 @@ function onRegionalSettingChange() {
         window.PETRON_REGIONAL.currencyRaw    = rawCurr;
     }
 
-    // Update badges
-    const tzBadge   = document.getElementById('previewTzBadge');
-    if (tzBadge)   tzBadge.textContent   = ianaTz;
-    const fmtBadge  = document.getElementById('previewFmtBadge');
-    if (fmtBadge)  fmtBadge.textContent  = dateFmt;
-    const timeBadge = document.getElementById('previewTimeBadge');
-    if (timeBadge) timeBadge.textContent = timeFmt;
-
-    // Update currency samples
-    const subtotalEl = document.getElementById('previewCurrSubtotal');
-    if (subtotalEl) subtotalEl.textContent = `${currSym} 2,500.00`;
-    const vatEl      = document.getElementById('previewCurrVat');
-    if (vatEl)      vatEl.textContent      = `${currSym} 300.00`;
-    const totalEl    = document.getElementById('previewCurrTotal');
-    if (totalEl)    totalEl.textContent    = `${currSym} 2,800.00`;
-
-    // Refresh clocks immediately
-    updateRegionalClockPreview();
+    // Refresh footer clock immediately
     if (typeof updateFooterClock === 'function') {
         updateFooterClock();
     }
 }
-
-function updateRegionalClockPreview() {
-    const clockTime = document.getElementById('previewClockTime');
-    const clockDate = document.getElementById('previewClockDate');
-    if (!clockTime && !clockDate) return;
-
-    const now = new Date();
-    const tzSel   = document.getElementById('ss_timezone');
-    const dateSel = document.getElementById('ss_date_format');
-    const timeSel = document.getElementById('ss_time_format');
-
-    const ianaTz  = tzSel ? tzSel.value.split(' ')[0].trim() : ((window.PETRON_REGIONAL && window.PETRON_REGIONAL.timezone) || 'Asia/Manila');
-    const dateFmt = dateSel ? dateSel.value : ((window.PETRON_REGIONAL && window.PETRON_REGIONAL.dateFormat) || 'YYYY-MM-DD');
-    const timeFmt = timeSel ? timeSel.value : ((window.PETRON_REGIONAL && window.PETRON_REGIONAL.timeFormat) || '12H');
-
-    if (typeof window.formatPetronTime === 'function' && typeof window.formatPetronDate === 'function') {
-        if (clockTime) clockTime.textContent = window.formatPetronTime(now, true, timeFmt, ianaTz);
-        if (clockDate) clockDate.textContent = window.formatPetronDate(now, true, dateFmt, ianaTz);
-    }
-}
-setInterval(updateRegionalClockPreview, 1000);
 </script>
 <?php include __DIR__ . '/../partials/footer.php'; ?>

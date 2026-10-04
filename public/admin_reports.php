@@ -271,6 +271,15 @@ if (isset($_GET['ajax_ar']) && $_GET['ajax_ar'] == '1') {
 }
 
 require_once __DIR__ . '/../partials/header.php';
+// ── LOAD DYNAMIC REPORT SETTINGS FROM SYSTEM SETTINGS ──
+$rpt_paper_size   = $station_settings['default_paper_size'] ?? 'A4';
+$rpt_orientation  = strtolower($station_settings['default_orientation'] ?? 'portrait');
+$rpt_show_logo    = (isset($station_settings['show_company_logo_reports']) && ($station_settings['show_company_logo_reports'] === '0' || $station_settings['show_company_logo_reports'] === 0)) ? false : true;
+$rpt_show_footer  = (isset($station_settings['show_report_footer']) && ($station_settings['show_report_footer'] === '0' || $station_settings['show_report_footer'] === 0)) ? false : true;
+$rpt_logo_url     = $station_settings['company_logo'] ?? $station_settings['logo'] ?? '../assets/img/Petron Logo.png';
+if ($rpt_logo_url === 'none' || empty($rpt_logo_url)) {
+    $rpt_show_logo = false;
+}
 ?>
 
 <style>
@@ -696,7 +705,7 @@ table.rpt-table.rpt-table-fixed .badge {
 /* Print Styles — hide everything except the clean report printable area */
 /* Print Styles — direct native in-page print (matching staff reports flow) */
 @media print {
-    @page { size: A4 landscape; margin: 0.4in 0.5in; }
+    @page { size: <?= htmlspecialchars($rpt_paper_size) ?> <?= htmlspecialchars($rpt_orientation) ?>; margin: 0.4in 0.5in; }
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-shadow: none !important; }
 
     /* Hide all page chrome except sfss-print-only */
@@ -1427,6 +1436,11 @@ table.rpt-table.rpt-table-fixed .badge {
         <div class="rpt-printable-area" id="adminReportPrintable">
             <!-- Manager-Style Centered Header Title (Explicitly Centered) -->
             <div class="rpt-header-title text-center py-2 mb-4" style="text-align: center !important;">
+                <?php if ($rpt_show_logo && !empty($rpt_logo_url)): ?>
+                    <div style="text-align: center; margin-bottom: 10px;" data-report-logo="1">
+                        <img src="<?= htmlspecialchars($rpt_logo_url) ?>" alt="Company Logo" class="rpt-company-logo" style="max-height: 52px; max-width: 180px; object-fit: contain; display: inline-block;">
+                    </div>
+                <?php endif; ?>
                 <h2 style="font-size: 22px !important; font-weight: 800 !important; color: #00264D !important; text-transform: uppercase !important; margin: 0 0 2px !important; letter-spacing: 0.5px !important; text-align: center !important;">
                     <?= htmlspecialchars($main_title) ?>
                 </h2>
@@ -1458,7 +1472,8 @@ table.rpt-table.rpt-table-fixed .badge {
                     $adm_staff_name = trim($me['name'] ?? $me['username'] ?? 'System Admin');
                 }
             ?>
-            <div class="mgr-signature-row" style="display:none; justify-content:space-between; align-items:flex-end; margin-top:30px; padding:10px 4px; page-break-inside:avoid; width:100%;">
+            <?php if ($rpt_show_footer): ?>
+            <div class="mgr-signature-row" data-report-footer="1" style="display:none; justify-content:space-between; align-items:flex-end; margin-top:30px; padding:10px 4px; page-break-inside:avoid; width:100%;">
                 <!-- 1. LEFT: PREPARED BY -->
                 <div style="display:inline-flex; flex-direction:column; align-items:center; text-align:center; width:fit-content;">
                     <div style="font-size:11px; font-weight:800; color:#002F6C; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:28px; align-self:flex-start;">
@@ -1503,6 +1518,7 @@ table.rpt-table.rpt-table-fixed .badge {
                     </div>
                 </div>
             </div>
+            <?php endif; ?>
         </div>
     </div>
 </div>
@@ -1536,6 +1552,7 @@ function buildPrintHTML() {
     if (!printableArea) return null;
 
     let reportCSS = `
+        @page { size: <?= htmlspecialchars($rpt_paper_size) ?> <?= htmlspecialchars($rpt_orientation) ?>; margin: 0.4in 0.5in; }
         body { font-family: Arial, sans-serif; font-size: 10px; margin: 0; padding: 20px; background: white; color: #000; }
         table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
         th { background: #00264D !important; color: #fff !important; font-weight: 700; font-size: 9px; text-transform: uppercase; padding: 6px 8px; border: 1px solid #001a36; text-align: left; }

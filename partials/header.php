@@ -720,6 +720,16 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
     $header_time_fmt = $station_settings['time_format'] ?? (function_exists('petron_time_format') ? petron_time_format() : '12H');
     $header_curr_sym = function_exists('petron_currency_symbol') ? petron_currency_symbol() : '₱';
     $header_curr_raw = $station_settings['currency_symbol'] ?? (function_exists('petron_get_setting_value') ? petron_get_setting_value('currency_symbol', null, 'PHP (₱)') : 'PHP (₱)');
+    $header_sec_policy = function_exists('petron_get_security_policy') ? petron_get_security_policy((int)$myStationId) : [
+        'session_timeout'       => 30,
+        'min_password_length'   => 8,
+        'max_login_attempts'    => 5,
+        'require_uppercase'     => true,
+        'require_numbers'       => true,
+        'require_special_chars' => true,
+    ];
+    $header_session_timeout_min = max(1, (int)round($header_session_timeout_seconds / 60)); // from DB (top of file)
+    $header_session_timeout_sec = (int)$header_session_timeout_seconds;
   ?>
   <script>
     window.PETRON_BASE_PATH = <?php echo json_encode(rtrim($app_base_path, '/')); ?>;
@@ -729,6 +739,11 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
     window.pageData = window.pageData || {};
     window.pageData.appBasePath = <?php echo json_encode(rtrim($app_base_path, '/')); ?>;
     window.pageData.publicBasePath = <?php echo json_encode(rtrim($public_base_url, '/')); ?>;
+
+    // ── Global Petron Security Settings ──
+    window.PETRON_SESSION_TIMEOUT_SEC = <?php echo (int)$header_session_timeout_sec; ?>; // from DB system_settings
+    window.PETRON_SESSION_TIMEOUT_MIN = <?php echo (int)$header_session_timeout_min; ?>; // from DB system_settings
+    window.PETRON_SECURITY_POLICY     = <?php echo json_encode($header_sec_policy); ?>;
 
     // ── Global Petron Regional Settings & Client Engine ──
     window.PETRON_REGIONAL = {
@@ -3684,6 +3699,53 @@ window.petronSystemSettings = {
     showReportFooter: <?php echo (isset($station_settings['show_report_footer']) && $station_settings['show_report_footer'] == '0') ? 'false' : 'true'; ?>
 };
 </script>
+<?php
+$hdr_paper_size   = $station_settings['default_paper_size'] ?? 'A4';
+if (!in_array($hdr_paper_size, ['A4', 'Letter'], true)) $hdr_paper_size = 'A4';
+$hdr_orientation  = strtolower($station_settings['default_orientation'] ?? 'portrait');
+if (!in_array($hdr_orientation, ['portrait', 'landscape'], true)) $hdr_orientation = 'portrait';
+$hdr_show_logo    = !(isset($station_settings['show_company_logo_reports']) && ($station_settings['show_company_logo_reports'] === '0' || $station_settings['show_company_logo_reports'] === 0));
+$hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($station_settings['show_report_footer'] === '0' || $station_settings['show_report_footer'] === 0));
+?>
+<!-- Dynamic Print Styles Enforcing Report Settings (Paper Size, Orientation, Logo, Footer) -->
+<style id="globalPetronReportSettingsPrint">
+@media print {
+    @page {
+        size: <?php echo $hdr_paper_size; ?> <?php echo $hdr_orientation; ?>;
+        margin: 10mm 12mm;
+    }
+    <?php if (!$hdr_show_logo): ?>
+    .rpt-company-logo,
+    .report-logo,
+    .print-report-logo,
+    .sfss-print-only .rpt-company-logo,
+    .rpt-centered-header .rpt-company-logo,
+    .rpt-header-title .rpt-company-logo,
+    .header .rpt-company-logo,
+    [data-report-logo] {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        width: 0 !important;
+    }
+    <?php endif; ?>
+    <?php if (!$hdr_show_footer): ?>
+    .print-only-sig,
+    .sfss-print-only .print-only-sig,
+    .mgr-signature-row,
+    .str-signature-wrap,
+    .rpt-footer,
+    .report-footer,
+    .rpt-signatures,
+    .sfss-print-only .mgr-signature-row,
+    [data-report-footer] {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+    }
+    <?php endif; ?>
+}
+</style>
 <!-- NUCLEAR-HEADER-FIX: Force header above any overlays and ensure clicks reach controls -->
 <style id="nuclearHeaderFix">
     .top-header{ position:fixed !important; top:0; left:0; right:0; z-index:2147483640 !important; pointer-events:auto !important; }
@@ -5582,7 +5644,8 @@ require_once __DIR__ . '/rbac_menu.php';
 
         document.addEventListener('DOMContentLoaded', function() {
             document.querySelectorAll('#petron-toast-container .petron-toast, .petron-flash').forEach(function(toast) {
-                armToast(toast, 4500);
+                var initDur = (window.petronSystemSettings && window.petronSystemSettings.bannerDuration) ? (window.petronSystemSettings.bannerDuration * 1000) : 5000;
+                armToast(toast, initDur);
             });
         });
     })();
@@ -6534,6 +6597,10 @@ require_once __DIR__ . '/rbac_menu.php';
             function renderNotifications(list) {
                 const el = document.getElementById('notificationList');
                 if (!el) return;
+                if (window.petronSystemSettings && window.petronSystemSettings.enableSystemNotifications === false) {
+                    el.innerHTML = '<div style="padding:22px;text-align:center;color:#64748b;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:24px;display:block;margin-bottom:8px;color:#94a3b8;"></i>System notifications are currently disabled in Settings.</div>';
+                    return;
+                }
                 if (!list || list.length === 0) {
                     el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-check-circle" style="font-size:24px;display:block;margin-bottom:8px;color:#28a745;"></i>No new system alerts.</div>';
                     return;
@@ -6580,6 +6647,10 @@ require_once __DIR__ . '/rbac_menu.php';
             function updateBadge(count, categoryCounts) {
                 const badge = document.getElementById('notificationBadge');
                 if (badge) {
+                    if (window.petronSystemSettings && window.petronSystemSettings.enableSystemNotifications === false) {
+                        badge.style.display = 'none';
+                        return;
+                    }
                     if (count > 0) {
                         badge.textContent = count > 99 ? '99+' : count;
                         badge.style.display = 'inline-flex';
@@ -7365,9 +7436,6 @@ try {
             <i class="fas fa-stopwatch" style="margin-right:4px;"></i> <span id="saHeaderTimer" data-endtime="<?= htmlspecialchars($global_maint_end_time) ?>">Calculating...</span>
         </div>
         <?php endif; ?>
-        <a href="<?= htmlspecialchars($public_base_url) ?>/superadmin_system_settings.php" style="background: #ffffff; color: #92400e; padding: 4px 12px; border-radius: 6px; text-decoration: none; font-size: 11.5px; font-weight: 800; display: inline-flex; align-items: center; gap: 5px;">
-            <i class="fas fa-cog"></i> Settings
-        </a>
     </div>
 </div>
 <script>
@@ -7396,14 +7464,19 @@ try {
 <?php endif; ?>
 
 <script>
-// ── Client-Side Session Idle Timeout Tracker (Global Across All Roles & Tabs) ──
+// ── Client-Side Session Idle Timeout Tracker (Non-superadmin/developer roles only) ──
 (function initSessionIdleTracker() {
+    // Superadmin and Developer are exempt — they manage the system and should never be timed out
+    const CURRENT_ROLE = (window.PETRON_USER_ROLE || '').toLowerCase().trim();
+    if (CURRENT_ROLE === 'superadmin' || CURRENT_ROLE === 'developer') return;
+
     const TIMEOUT_SEC       = <?= (int)$header_session_timeout_seconds ?>;  // from DB setting
     const TIMEOUT_MS        = TIMEOUT_SEC * 1000;
     // Show warning before timeout: 60s if >= 2 mins, or half of timeout if < 2 mins (e.g. 30s for 1 min)
     const WARNING_BEFORE_MS = TIMEOUT_MS >= 120000 ? 60000 : Math.max(10000, Math.floor(TIMEOUT_MS / 2));
     const loginUrl          = '<?= htmlspecialchars($public_base_url) ?>/login.php?timeout=1';
     const keepaliveUrl      = '<?= htmlspecialchars($public_base_url) ?>/api_session_keepalive.php';
+
 
     let idleTimer         = null;
     let warnTimer         = null;

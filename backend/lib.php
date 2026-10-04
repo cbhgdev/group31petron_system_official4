@@ -139,7 +139,141 @@ if (!function_exists('petron_format_currency')) {
     }
 }
 
+if (!function_exists('petron_get_security_policy')) {
+    function petron_get_security_policy(?int $station_id = null): array {
+        global $pdo;
+        $policy = [
+            'session_timeout'       => 30, // in minutes
+            'min_password_length'   => 8,
+            'max_login_attempts'    => 5,
+            'require_uppercase'     => true,
+            'require_numbers'       => true,
+            'require_special_chars' => true,
+        ];
+        try {
+            if (!isset($pdo) || !$pdo) {
+                require_once __DIR__ . '/../public/db_connect.php';
+            }
+            if ($station_id === null && function_exists('user_station_id')) {
+                $station_id = (int)user_station_id();
+            }
+            // Check global settings first (station_id = 0)
+            $stmt0 = $pdo->prepare("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('session_timeout','min_password_length','max_login_attempts','require_uppercase','require_numbers','require_special_chars') AND station_id = 0");
+            $stmt0->execute();
+            while ($row = $stmt0->fetch(PDO::FETCH_ASSOC)) {
+                $k = $row['setting_key'];
+                $v = $row['setting_value'];
+                if ($k === 'session_timeout') {
+                    $policy['session_timeout'] = max(1, (int)$v);
+                } elseif ($k === 'min_password_length') {
+                    $policy['min_password_length'] = max(4, (int)$v);
+                } elseif ($k === 'max_login_attempts') {
+                    $policy['max_login_attempts'] = max(1, (int)$v);
+                } elseif (in_array($k, ['require_uppercase', 'require_numbers', 'require_special_chars'], true)) {
+                    $policy[$k] = ($v === '1' || $v === 1 || $v === true || $v === 'true');
+                }
+            }
+            // If station_id specified and > 0, check overrides
+            if ($station_id !== null && $station_id > 0) {
+                $stmtS = $pdo->prepare("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('session_timeout','min_password_length','max_login_attempts','require_uppercase','require_numbers','require_special_chars') AND station_id = ?");
+                $stmtS->execute([$station_id]);
+                while ($row = $stmtS->fetch(PDO::FETCH_ASSOC)) {
+                    $k = $row['setting_key'];
+                    $v = $row['setting_value'];
+                    if ($v !== null && $v !== '') {
+                        if ($k === 'session_timeout') {
+                            $policy['session_timeout'] = max(1, (int)$v);
+                        } elseif ($k === 'min_password_length') {
+                            $policy['min_password_length'] = max(4, (int)$v);
+                        } elseif ($k === 'max_login_attempts') {
+                            $policy['max_login_attempts'] = max(1, (int)$v);
+                        } elseif (in_array($k, ['require_uppercase', 'require_numbers', 'require_special_chars'], true)) {
+                            $policy[$k] = ($v === '1' || $v === 1 || $v === true || $v === 'true');
+                        }
+                    }
+                }
+            }
+        } catch (Throwable $e) {}
+        return $policy;
+    }
+}
+
+if (!function_exists('petron_validate_password_policy')) {
+    function petron_validate_password_policy(string $password, ?array $customPolicy = null): array {
+        $policy = $customPolicy ?? petron_get_security_policy();
+        $errors = [];
+        $minLen = (int)($policy['min_password_length'] ?? 8);
+        if (strlen($password) < $minLen) {
+            $errors[] = "Password must be at least {$minLen} characters long.";
+        }
+        if (!empty($policy['require_uppercase']) && !preg_match('/[A-Z]/', $password)) {
+            $errors[] = "Password must contain at least one uppercase letter (A-Z).";
+        }
+        if (!empty($policy['require_numbers']) && !preg_match('/[0-9]/', $password)) {
+            $errors[] = "Password must contain at least one number (0-9).";
+        }
+        if (!empty($policy['require_special_chars']) && !preg_match('/[!@#$%^&*(),.?":{}|<>\-_]/', $password)) {
+            $errors[] = "Password must contain at least one special character (!@#$%^&* etc.).";
+        }
+        return [
+            'valid' => empty($errors),
+            'errors' => $errors,
+            'message' => empty($errors) ? '' : implode(' ', $errors)
+        ];
+    }
+}
+// ── NOTIFICATION & REPORT SYSTEM SETTINGS HELPERS ──
+if (!function_exists('petron_banner_duration')) {
+    function petron_banner_duration(?int $station_id = null): int {
+        $val = petron_get_setting_value('banner_duration', $station_id, '5');
+        return max(1, (int)$val);
+    }
+}
+
+if (!function_exists('petron_notifications_enabled')) {
+    function petron_notifications_enabled(?int $station_id = null): bool {
+        $val = petron_get_setting_value('enable_system_notifications', $station_id, '1');
+        return !($val === '0' || $val === 0 || $val === false || $val === 'false');
+    }
+}
+
+if (!function_exists('petron_error_notifications_enabled')) {
+    function petron_error_notifications_enabled(?int $station_id = null): bool {
+        $val = petron_get_setting_value('enable_error_notifications', $station_id, '1');
+        return !($val === '0' || $val === 0 || $val === false || $val === 'false');
+    }
+}
+
+if (!function_exists('petron_report_paper_size')) {
+    function petron_report_paper_size(?int $station_id = null): string {
+        $val = strtoupper(trim(petron_get_setting_value('default_paper_size', $station_id, 'A4')));
+        return ($val === 'LETTER') ? 'Letter' : 'A4';
+    }
+}
+
+if (!function_exists('petron_report_orientation')) {
+    function petron_report_orientation(?int $station_id = null): string {
+        $val = strtolower(trim(petron_get_setting_value('default_orientation', $station_id, 'Portrait')));
+        return ($val === 'landscape') ? 'Landscape' : 'Portrait';
+    }
+}
+
+if (!function_exists('petron_report_show_logo')) {
+    function petron_report_show_logo(?int $station_id = null): bool {
+        $val = petron_get_setting_value('show_company_logo_reports', $station_id, '1');
+        return !($val === '0' || $val === 0 || $val === false || $val === 'false');
+    }
+}
+
+if (!function_exists('petron_report_show_footer')) {
+    function petron_report_show_footer(?int $station_id = null): bool {
+        $val = petron_get_setting_value('show_report_footer', $station_id, '1');
+        return !($val === '0' || $val === 0 || $val === false || $val === 'false');
+    }
+}
+
 require_once __DIR__ . '/security_helpers.php';
+
 
 if (!function_exists('is_system_in_maintenance_mode')) {
     function is_system_in_maintenance_mode() {
@@ -517,8 +651,15 @@ function require_login(){
   }
 
   // Check if active user session has expired due to inactivity
+  // NOTE: Superadmin and Developer are exempt from session timeout (they manage the system)
   if (!empty($_SESSION['user'])) {
-    if (isset($_SESSION['last_activity'])) {
+    $__current_role = '';
+    if (!empty($_SESSION['user']['role'])) {
+      $__current_role = function_exists('role_key') ? role_key($_SESSION['user']['role']) : strtolower(trim($_SESSION['user']['role']));
+    }
+    $__is_exempt = in_array($__current_role, ['superadmin', 'developer'], true);
+
+    if (!$__is_exempt && isset($_SESSION['last_activity'])) {
       $inactive_time = time() - (int)$_SESSION['last_activity'];
       if ($inactive_time >= $timeout) {
         // Destroy session data
@@ -2113,6 +2254,7 @@ function require_permission(string $permission){
 
 if (!function_exists('generateSecurePassword')) {
 function generateSecurePassword(int $length = 12): string {
+  $length  = max(4, $length);
   // Allowed symbols: _ . - ! @ #
   $upper   = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   $lower   = 'abcdefghijklmnopqrstuvwxyz';

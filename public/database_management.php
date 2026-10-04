@@ -1256,10 +1256,22 @@ var _DB_TOASTS = <?= json_encode($_toast_msgs) ?>;
               <span class="db-hint">Server-side storage path (managed by system administrator).</span>
             </div>
           </div>
+          <!-- Progress bar (shown when Save & Run Backup Now is clicked) -->
+          <div id="backupProgressWrap" style="display:none; margin-bottom:16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <span style="font-size:14.5px; font-weight:700; color:var(--db-blue);" id="backupProgressLabel">Initializing backup…</span>
+              <span style="font-size:14.5px; font-weight:800; color:var(--db-blue);" id="backupProgressPct">0%</span>
+            </div>
+            <div class="db-progress-wrap">
+              <div class="db-progress-bar" id="backupProgressBar" style="width:0%;"></div>
+            </div>
+            <div id="backupProgressStatus" style="font-size:13.5px; color:#64748b; margin-top:4px;"></div>
+          </div>
+          <div id="backupCompletedMsg" style="display:none; margin-bottom:12px; padding:14px 18px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; color:#166534; font-size:14.5px; font-weight:600;">
+            <i class="fas fa-check-circle" style="margin-right:6px;"></i>
+            Backup Completed Successfully — page will refresh shortly.
+          </div>
           <div style="display:flex; justify-content:flex-end; gap:10px; align-items:center; margin-top:16px;">
-            <button type="submit" class="db-btn db-btn-primary" id="saveConfigBtn">
-              <i class="fas fa-save"></i> Save Configuration
-            </button>
             <button type="button" class="db-btn db-btn-success" id="saveAndRunBackupBtn" onclick="saveAndRunBackupNow()">
               <i class="fas fa-play-circle"></i> Save &amp; Run Backup Now
             </button>
@@ -1268,56 +1280,6 @@ var _DB_TOASTS = <?= json_encode($_toast_msgs) ?>;
       </div>
     </div>
 
-    <!-- Run Manual Backup -->
-    <div class="db-card" id="manualBackupCard">
-      <div class="db-card-header">
-        <h3 class="db-card-title"><i class="fas fa-play-circle"></i> Run Manual Backup</h3>
-      </div>
-      <div class="db-card-body">
-        <p style="color:#555; font-size:14.5px; margin:0 0 16px; line-height:1.5;">
-          Triggers an immediate database backup using the current configuration.
-        </p>
-
-        <!-- Live Synchronized Configuration Summary Banner -->
-        <div class="db-active-config-banner" style="display:flex; flex-wrap:wrap; gap:16px; margin-bottom:18px; padding:12px 16px; background:#f8fafc; border:1.5px solid #cbd5e1; border-radius:8px; font-size:13.5px; color:#334155; align-items:center;">
-          <span style="font-weight:700; color:var(--db-blue); display:flex; align-items:center; gap:6px;">
-            <i class="fas fa-sliders-h"></i> Synchronized Configuration:
-          </span>
-          <span><strong>Frequency:</strong> <span id="summary_freq" style="color:#0f172a; font-weight:600;"><?= ucfirst($cfg_backup_frequency) ?></span></span>
-          <span id="summary_time_block"><strong>Scheduled Time:</strong> <span id="summary_time" style="color:#0f172a; font-weight:600;"><?= in_array($cfg_backup_frequency, ['manual', 'hourly'], true) ? 'Manual / Hourly' : date('h:i A', strtotime($cfg_scheduled_time ?: '02:00')) ?></span></span>
-          <span><strong>Retention:</strong> <span id="summary_ret" style="color:#0f172a; font-weight:600;"><?= htmlspecialchars($cfg_retention_days) ?> Days</span></span>
-          <span><strong>Storage Path:</strong> <code style="font-size:12px; background:#e2e8f0; color:#1e293b; padding:2px 6px; border-radius:4px; font-family:monospace;"><?= htmlspecialchars($backup_dir_display) ?></code></span>
-        </div>
-
-        <!-- Progress bar (animated on click) -->
-        <div id="backupProgressWrap" style="display:none; margin-bottom:16px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-            <span style="font-size:14.5px; font-weight:700; color:var(--db-blue);" id="backupProgressLabel">Initializing backup…</span>
-            <span style="font-size:14.5px; font-weight:800; color:var(--db-blue);" id="backupProgressPct">0%</span>
-          </div>
-          <div class="db-progress-wrap">
-            <div class="db-progress-bar" id="backupProgressBar" style="width:0%;"></div>
-          </div>
-          <div id="backupProgressStatus" style="font-size:13.5px; color:#64748b; margin-top:4px;"></div>
-        </div>
-
-        <form method="POST" id="manualBackupForm" onsubmit="triggerBackupProgress(event)" style="display:flex; justify-content:flex-end;">
-          <input type="hidden" name="tab" value="<?= htmlspecialchars($active_tab) ?>" class="db-form-tab-input">
-          <input type="hidden" name="action" value="run_backup">
-          <input type="hidden" name="backup_frequency" id="m_backup_frequency" value="<?= htmlspecialchars($cfg_backup_frequency) ?>">
-          <input type="hidden" name="scheduled_time" id="m_scheduled_time" value="<?= htmlspecialchars($cfg_scheduled_time) ?>">
-          <input type="hidden" name="retention_days" id="m_retention_days" value="<?= htmlspecialchars($cfg_retention_days) ?>">
-          <button type="submit" class="db-btn db-btn-success" id="runBackupBtn">
-            <i class="fas fa-database"></i> Run Backup Now
-          </button>
-        </form>
-
-        <div id="backupCompletedMsg" style="display:none; margin-top:12px; padding:14px 18px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; color:#166534; font-size:14.5px; font-weight:600;">
-          <i class="fas fa-check-circle" style="margin-right:6px;"></i>
-          Backup Completed Successfully — page will refresh shortly.
-        </div>
-      </div>
-    </div>
 
     <!-- Backup History -->
     <div class="db-card">
@@ -1740,106 +1702,39 @@ var _DB_TOASTS = <?= json_encode($_toast_msgs) ?>;
   window.switchTab = switchTab;
 })();
 
-// ── Scheduled time toggle & live config sync ───────────────────────────
-function syncConfigToManualForm() {
-  const freqVal = document.getElementById('backupFrequencySelect')?.value || 'manual';
-  const timeVal = document.getElementById('scheduledTimeInput')?.value || '02:00';
-  const retVal  = document.querySelector('[name="retention_days"]')?.value || '30';
-
-  const mFreq = document.getElementById('m_backup_frequency');
-  const mTime = document.getElementById('m_scheduled_time');
-  const mRet  = document.getElementById('m_retention_days');
-
-  if (mFreq) mFreq.value = freqVal;
-  if (mTime) mTime.value = timeVal;
-  if (mRet)  mRet.value  = retVal;
-}
-
+// ── Scheduled time toggle ───────────────────────────────────────────
 function updateConfigSummary() {
   const freqSel = document.getElementById('backupFrequencySelect');
-  const timeInp = document.getElementById('scheduledTimeInput');
-  const retSel  = document.querySelector('[name="retention_days"]');
   const wrap    = document.getElementById('sched-time-wrap');
 
   const freqVal = freqSel ? freqSel.value : 'manual';
-  const timeVal = timeInp ? timeInp.value : '02:00';
-  const retVal  = retSel  ? retSel.value  : '30';
 
   if (wrap) {
     const isManual = (freqVal === 'manual' || freqVal === 'hourly');
     wrap.style.opacity       = isManual ? '.45' : '1';
     wrap.style.pointerEvents = isManual ? 'none' : 'auto';
   }
-
-  const sumFreq = document.getElementById('summary_freq');
-  const sumTime = document.getElementById('summary_time');
-  const sumRet  = document.getElementById('summary_ret');
-
-  if (sumFreq) {
-    const labels = {
-      'manual': 'Manual Only',
-      'hourly': 'Every Hour',
-      'daily':  'Daily',
-      'weekly': 'Weekly',
-      'monthly':'Monthly'
-    };
-    sumFreq.textContent = labels[freqVal] || freqVal;
-  }
-
-  if (sumTime) {
-    if (freqVal === 'manual' || freqVal === 'hourly') {
-      sumTime.textContent = 'Manual / Hourly';
-    } else {
-      let parts = timeVal.split(':');
-      if (parts.length >= 2) {
-        let h = parseInt(parts[0], 10);
-        let m = parts[1];
-        let ampm = h >= 12 ? 'PM' : 'AM';
-        h = h % 12;
-        if (h === 0) h = 12;
-        sumTime.textContent = (h < 10 ? '0' + h : h) + ':' + m + ' ' + ampm;
-      } else {
-        sumTime.textContent = timeVal;
-      }
-    }
-  }
-
-  if (sumRet) {
-    sumRet.textContent = retVal + ' Days';
-  }
-
-  syncConfigToManualForm();
 }
 
 // Bind live sync listeners
 document.getElementById('backupFrequencySelect')?.addEventListener('change', updateConfigSummary);
 document.getElementById('scheduledTimeInput')?.addEventListener('input', updateConfigSummary);
-document.querySelector('[name="retention_days"]')?.addEventListener('change', updateConfigSummary);
 // Run once on load
 updateConfigSummary();
 
-// ── Save & Run Backup Now (Instant execution with current configuration)
+
+// ── Save & Run Backup Now (saves config + immediately triggers backup)
 function saveAndRunBackupNow() {
-  syncConfigToManualForm();
-  const mCard = document.getElementById('manualBackupCard') || document.getElementById('backupProgressWrap');
-  if (mCard) {
-    mCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }
-  const mForm = document.getElementById('manualBackupForm');
-  if (mForm) {
-    triggerBackupProgress({
-      preventDefault: function(){},
-      target: mForm
-    });
-  }
+  const configForm = document.getElementById('backupConfigForm');
+  if (!configForm) return;
+  triggerBackupProgress({
+    preventDefault: function(){},
+    target: configForm
+  });
 }
 
 // ── Backup Progress Animation ─────────────────────────────────────────
 function triggerBackupProgress(e) {
-  // Sync the latest configuration values from Backup Configuration form
-  syncConfigToManualForm();
-
-  const btn  = document.getElementById('runBackupBtn');
   const saveAndRunBtn = document.getElementById('saveAndRunBackupBtn');
   const wrap = document.getElementById('backupProgressWrap');
   const bar  = document.getElementById('backupProgressBar');
@@ -1847,15 +1742,12 @@ function triggerBackupProgress(e) {
   const lbl  = document.getElementById('backupProgressLabel');
   const done = document.getElementById('backupCompletedMsg');
 
-  wrap.style.display = 'block';
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running Backup…';
-  }
+  if (wrap) wrap.style.display = 'block';
   if (saveAndRunBtn) {
     saveAndRunBtn.disabled = true;
     saveAndRunBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving &amp; Running…';
   }
+
 
   const steps = [
     [10, 'Synchronizing configuration & connecting…'],
@@ -1870,17 +1762,22 @@ function triggerBackupProgress(e) {
   let si = 0;
   function tick() {
     if (si >= steps.length) {
-      done.style.display = 'block';
+      if (done) done.style.display = 'block';
       setTimeout(() => {
-        const formToSubmit = (e && e.target) ? e.target : document.getElementById('manualBackupForm');
-        if (formToSubmit) formToSubmit.submit();
+        const formToSubmit = (e && e.target) ? e.target : document.getElementById('backupConfigForm');
+        if (formToSubmit) {
+          // Switch action to run_backup so server saves config AND runs backup
+          let hiddenAction = formToSubmit.querySelector('[name="action"]');
+          if (hiddenAction) hiddenAction.value = 'run_backup';
+          formToSubmit.submit();
+        }
       }, 700);
       return;
     }
     const [p, l] = steps[si++];
-    bar.style.width  = p + '%';
-    pct.textContent  = p + '%';
-    lbl.textContent  = l;
+    if (bar) bar.style.width  = p + '%';
+    if (pct) pct.textContent  = p + '%';
+    if (lbl) lbl.textContent  = l;
     setTimeout(tick, 340);
   }
   tick();

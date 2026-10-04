@@ -26,11 +26,15 @@ if (empty($_SESSION['user'])) {
 // Reset the last activity timestamp
 $_SESSION['last_activity'] = time();
 
+$policy = function_exists('petron_get_security_policy') ? petron_get_security_policy() : ['session_timeout' => 30];
+$timeoutMinutes = max(1, (int)($policy['session_timeout'] ?? 30));
+$timeoutSeconds = $timeoutMinutes * 60;
+
 echo json_encode([
     'ok' => true,
     'message' => 'Session refreshed successfully',
     'timestamp' => time(),
-    'timeout_seconds' => 900,
+    'timeout_seconds' => $timeoutSeconds,
     'user' => [
         'id' => $_SESSION['user']['id'] ?? $_SESSION['user']['user_id'] ?? 0,
         'role' => $_SESSION['user']['role'] ?? ''

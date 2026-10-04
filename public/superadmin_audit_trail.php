@@ -1059,6 +1059,11 @@ html, body {
             
             <!-- CENTERED REPORT HEADER (Matching Sales Reports 1-to-1) -->
             <div class="header" style="text-align:center; margin-bottom:16px; border-bottom:2px solid #002F6C; padding-bottom:10px;">
+                <?php if ($rpt_show_logo && !empty($rpt_logo_url)): ?>
+                    <div style="text-align: center; margin-bottom: 10px;" data-report-logo="1">
+                        <img src="<?= htmlspecialchars($rpt_logo_url) ?>" alt="Company Logo" class="rpt-company-logo" style="max-height: 52px; max-width: 180px; object-fit: contain; display: inline-block;">
+                    </div>
+                <?php endif; ?>
                 <h1 style="font-size:24px; font-weight:800; color:#002F6C; margin:0 0 6px 0; letter-spacing:0.5px; font-family:'Segoe UI', sans-serif; text-transform:uppercase;">
                     DEVELOPER AUDIT TRAIL — <?= strtoupper(htmlspecialchars($valid_tabs[$active_tab])) ?>
                 </h1>
@@ -1311,7 +1316,7 @@ html, body {
 
             <!-- SYSTEM DEVELOPED BY SIGNATURE (Print Only — hidden on web view, visible on print) -->
             <?php if ($rpt_show_footer): ?>
-            <table class="print-only-sig" style="width:100%; margin-top:35px; page-break-inside:avoid; border:none; border-collapse:collapse;">
+            <table class="print-only-sig" data-report-footer="1" style="width:100%; margin-top:35px; page-break-inside:avoid; border:none; border-collapse:collapse;">
                 <tr>
                     <td style="border:none;"></td>
                     <td style="border:none; width:220px; text-align:center; vertical-align:bottom;">

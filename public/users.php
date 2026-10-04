@@ -75,23 +75,25 @@ function generateEmployeeID($pdo, $role) {
 }
 
 // ── Load dynamic security policy from system_settings (never hardcoded) ──
-$sec_min_pass_len    = 8;
-$sec_req_upper       = true;
-$sec_req_numbers     = true;
-$sec_req_special     = true;
-try {
-    $secQ = $pdo->query("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('min_password_length','require_uppercase','require_numbers','require_special_chars') AND station_id=0");
-    foreach ($secQ->fetchAll(PDO::FETCH_ASSOC) as $sr) {
-        switch ($sr['setting_key']) {
-            case 'min_password_length':  $sec_min_pass_len = max(6, (int)$sr['setting_value']); break;
-            case 'require_uppercase':    $sec_req_upper    = ((int)$sr['setting_value'] === 1);  break;
-            case 'require_numbers':      $sec_req_numbers  = ((int)$sr['setting_value'] === 1);  break;
-            case 'require_special_chars':$sec_req_special  = ((int)$sr['setting_value'] === 1);  break;
-        }
-    }
-} catch (Exception $e) { /* keep fallback defaults */ }
+$sec_policy          = function_exists('petron_get_security_policy') ? petron_get_security_policy($my_station_id) : [];
+$sec_min_pass_len    = (int)($sec_policy['min_password_length'] ?? 8);
+$sec_req_upper       = !empty($sec_policy['require_uppercase']);
+$sec_req_numbers     = !empty($sec_policy['require_numbers']);
+$sec_req_special     = !empty($sec_policy['require_special_chars']);
 
 function check_user_password_policy(string $password, int $min_len, bool $req_upper, bool $req_num, bool $req_special): void {
+    if (function_exists('petron_validate_password_policy')) {
+        $res = petron_validate_password_policy($password, [
+            'min_password_length'   => $min_len,
+            'require_uppercase'     => $req_upper,
+            'require_numbers'       => $req_num,
+            'require_special_chars' => $req_special
+        ]);
+        if (!$res['valid']) {
+            throw new Exception($res['errors'][0] ?? 'Password does not meet security requirements.');
+        }
+        return;
+    }
     if (strlen($password) < $min_len) {
         throw new Exception("Password must be at least {$min_len} characters long.");
     }
@@ -2127,6 +2129,7 @@ function isValidPhilippineNumber(val) {
 }
 
 function generateSimplePassword() {
+    const cfg = window.SYSTEM_SECURITY_CONFIG || { min_password_length: 8 };
     const upper   = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
     const lower   = 'abcdefghijkmnopqrstuvwxyz';
     const digits  = '23456789';
@@ -2140,7 +2143,9 @@ function generateSimplePassword() {
         symbols.charAt(Math.floor(Math.random() * symbols.length))
     ];
 
-    for (let i = 0; i < 6; i++) {
+    const targetLen = Math.max(10, cfg.min_password_length || 8);
+    const extraNeeded = Math.max(0, targetLen - passArr.length);
+    for (let i = 0; i < extraNeeded; i++) {
         passArr.push(all.charAt(Math.floor(Math.random() * all.length)));
     }
 
@@ -2157,6 +2162,7 @@ function generateSimplePassword() {
 }
 
 function generateResetPassword() {
+    const cfg = window.SYSTEM_SECURITY_CONFIG || { min_password_length: 8 };
     const upper   = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
     const lower   = 'abcdefghijkmnopqrstuvwxyz';
     const digits  = '23456789';
@@ -2170,7 +2176,9 @@ function generateResetPassword() {
         symbols.charAt(Math.floor(Math.random() * symbols.length))
     ];
 
-    for (let i = 0; i < 6; i++) {
+    const targetLen = Math.max(10, cfg.min_password_length || 8);
+    const extraNeeded = Math.max(0, targetLen - passArr.length);
+    for (let i = 0; i < extraNeeded; i++) {
         passArr.push(all.charAt(Math.floor(Math.random() * all.length)));
     }
 

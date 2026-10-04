@@ -9,21 +9,11 @@ $msg   = '';
 $error = '';
 
 // ── Load dynamic security policy from system_settings (never hardcoded) ──
-$sec_min_pass_len    = 8;
-$sec_req_upper       = true;
-$sec_req_numbers     = true;
-$sec_req_special     = true;
-try {
-    $secQ = $pdo->query("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('min_password_length','require_uppercase','require_numbers','require_special_chars') AND station_id=0");
-    foreach ($secQ->fetchAll(PDO::FETCH_ASSOC) as $sr) {
-        switch ($sr['setting_key']) {
-            case 'min_password_length':  $sec_min_pass_len = max(6, (int)$sr['setting_value']); break;
-            case 'require_uppercase':    $sec_req_upper    = ((int)$sr['setting_value'] === 1);  break;
-            case 'require_numbers':      $sec_req_numbers  = ((int)$sr['setting_value'] === 1);  break;
-            case 'require_special_chars':$sec_req_special  = ((int)$sr['setting_value'] === 1);  break;
-        }
-    }
-} catch (Exception $e) { /* keep fallback defaults */ }
+$sec_policy          = function_exists('petron_get_security_policy') ? petron_get_security_policy($me['station_id'] ?? null) : [];
+$sec_min_pass_len    = (int)($sec_policy['min_password_length'] ?? 8);
+$sec_req_upper       = !empty($sec_policy['require_uppercase']);
+$sec_req_numbers     = !empty($sec_policy['require_numbers']);
+$sec_req_special     = !empty($sec_policy['require_special_chars']);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
@@ -33,10 +23,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (empty($current_password))                        throw new Exception('Current password is required.');
         if (empty($new_password))                            throw new Exception('New password is required.');
-        if (strlen($new_password) < $sec_min_pass_len)       throw new Exception("New password must be at least {$sec_min_pass_len} characters long.");
-        if ($sec_req_upper && !preg_match('/[A-Z]/', $new_password)) throw new Exception('New password must contain at least one uppercase letter (A-Z).');
-        if ($sec_req_numbers && !preg_match('/[0-9]/', $new_password)) throw new Exception('New password must contain at least one number (0-9).');
-        if ($sec_req_special && !preg_match('/[!@#$%^&*(),.?":{}|<>\-_]/', $new_password)) throw new Exception('New password must contain at least one special character (!@#$%^&* etc.).');
+        if (function_exists('petron_validate_password_policy')) {
+            $valRes = petron_validate_password_policy($new_password, [
+                'min_password_length'   => $sec_min_pass_len,
+                'require_uppercase'     => $sec_req_upper,
+                'require_numbers'       => $sec_req_numbers,
+                'require_special_chars' => $sec_req_special
+            ]);
+            if (!$valRes['valid']) {
+                throw new Exception($valRes['errors'][0] ?? 'New password does not satisfy security requirements.');
+            }
+        } else {
+            if (strlen($new_password) < $sec_min_pass_len)       throw new Exception("New password must be at least {$sec_min_pass_len} characters long.");
+            if ($sec_req_upper && !preg_match('/[A-Z]/', $new_password)) throw new Exception('New password must contain at least one uppercase letter (A-Z).');
+            if ($sec_req_numbers && !preg_match('/[0-9]/', $new_password)) throw new Exception('New password must contain at least one number (0-9).');
+            if ($sec_req_special && !preg_match('/[!@#$%^&*(),.?":{}|<>\-_]/', $new_password)) throw new Exception('New password must contain at least one special character (!@#$%^&* etc.).');
+        }
         if ($new_password !== $confirm_password)             throw new Exception('New passwords do not match.');
         if ($current_password === $new_password)             throw new Exception('New password must be different from current password.');
 

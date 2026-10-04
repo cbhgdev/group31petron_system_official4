@@ -2557,6 +2557,14 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
 // EXPORT HANDLING - FORMATTED LIKE ACTUAL DAILY FUEL REPORT
 // ============================================================
 if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
+    $pdf_paper_size  = petron_report_paper_size($station_id);
+    $pdf_orientation = strtolower(petron_report_orientation($station_id));
+    $pdf_show_logo   = petron_report_show_logo($station_id);
+    $pdf_show_footer = petron_report_show_footer($station_id);
+    $pdf_logo_url    = petron_get_setting_value('company_logo', $station_id, '../assets/img/Petron Logo.png');
+    if ($pdf_logo_url === 'none' || empty($pdf_logo_url)) {
+        $pdf_show_logo = false;
+    }
     ?>
     <!DOCTYPE html>
     <html>
@@ -2565,9 +2573,15 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
         <title><?= $active_tab === 'merchandise' ? 'Daily Merchandise & Service Sales Report' : 'Daily Fuel Sales Report' ?> - <?= htmlspecialchars($report_period_label) ?></title>
         <style>
             @page {
-                size: A4 portrait;
+                size: <?= htmlspecialchars($pdf_paper_size) ?> <?= htmlspecialchars($pdf_orientation) ?>;
                 margin: 10mm 12mm;
             }
+            <?php if (!$pdf_show_logo): ?>
+            .rpt-company-logo, [data-report-logo] { display: none !important; }
+            <?php endif; ?>
+            <?php if (!$pdf_show_footer): ?>
+            .print-only-signature, .signature-section, .report-footer, [data-report-footer] { display: none !important; }
+            <?php endif; ?>
             @media print {
                 body { margin: 0; padding: 0; }
                 .no-print { display: none !important; }
@@ -2721,6 +2735,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     <body>
         <!-- Report Header -->
         <div class="report-header">
+            <?php if ($pdf_show_logo && !empty($pdf_logo_url)): ?>
+                <div style="text-align: center; margin-bottom: 8px;" data-report-logo="1">
+                    <img src="<?= htmlspecialchars($pdf_logo_url) ?>" alt="Company Logo" class="rpt-company-logo" style="max-height: 48px; max-width: 160px; object-fit: contain; display: inline-block;">
+                </div>
+            <?php endif; ?>
             <div class="report-title">DAILY FUEL SALES REPORT</div>
             <div class="report-title" style="font-size: 11pt; margin-top: 5px;"><?= $summary_title_suffix ?></div>
             <table>
@@ -2963,8 +2982,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
         </div>
         <?php endif; ?>
         
+        <?php if ($pdf_show_footer): ?>
         <!-- Signature Section -->
-        <div class="signature-section">
+        <div class="signature-section" data-report-footer="1">
             <div class="signature-box">
                 <div class="signature-line"></div>
                 <strong>Cashier / Staff</strong><br>
@@ -2978,10 +2998,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
         </div>
         
         <!-- Footer -->
-        <div class="report-footer">
+        <div class="report-footer" data-report-footer="1">
             <p><strong>Generated on:</strong> <?= date('F d, Y h:i:s A') ?></p>
-            <p>Petron Station Management System Â© 2026</p>
+            <p>Petron Station Management System © 2026</p>
         </div>
+        <?php endif; ?>
     </body>
     </html>
     <?php
@@ -3410,7 +3431,7 @@ require_once __DIR__ . '/../partials/flash_toast.php';
     /* ── Print styles — matched to PO invoice (print_supplier_invoice.php) ── */
     @media print {
         @page {
-            size: letter portrait;
+            size: <?= htmlspecialchars($station_settings['default_paper_size'] ?? 'A4') ?> <?= strtolower(htmlspecialchars($station_settings['default_orientation'] ?? 'portrait')) ?>;
             margin: 5mm 5mm 4mm 5mm;
         }
 
