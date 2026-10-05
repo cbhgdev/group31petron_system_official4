@@ -4666,7 +4666,6 @@ setTimeout(function() {
                                 <span class="badge" style="background:#fee2e2;color:#b91c1c;border:1px solid #fca5a5;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;white-space:nowrap;"><i class="fas fa-ban"></i> DEACTIVATED</span>
                                 <?php endif; ?>
                             </div>
-                            <div id="cardMsg_<?= $ft_id ?>" class="fet-row-msg"></div>
                         </td>
 
                         <!-- BEGINNING Column — Auto if previous reading exists, Manual if first entry -->
@@ -4683,9 +4682,7 @@ setTimeout(function() {
                                    <?= $is_manual_beginning ? 'oninput="formatOnInput(this); updateFuelCalc(\'' . $ft_id . '\')" onblur="formatOnBlur(this); updateFuelCalc(\'' . $ft_id . '\')" onkeydown="handleMeterKeydown(event, this)" onfocus="this.select()"' : '' ?>
                                    title="<?= $is_manual_beginning ? 'Manual: Enter the Beginning meter reading for first entry of the shift.' : 'Auto: Beginning reading carried over from latest Ending Reading (read-only).' ?>"
                                    data-pump="<?= htmlspecialchars($display_name) ?>">
-                            <div id="beginning_badge_<?= $ft_id ?>" style="font-size:10px;color:<?= $is_manual_beginning ? '#2563eb' : '#15803d' ?>;font-weight:600;margin-top:2px;">
-                                <?= $is_manual_beginning ? '✏ Manual Entry' : '🔒 Auto' ?>
-                            </div>
+
                         </td>
 
                         <!-- ENDING Column * -->
@@ -4704,6 +4701,7 @@ setTimeout(function() {
                                    onkeydown="handleMeterKeydown(event, this)"
                                    onfocus="this.select()"
                                    title="<?= $is_deactivated ? 'Tank is deactivated in Product & Pricing. Meter encoding is disabled.' : 'Required: Enter the Ending meter reading' ?>">
+                            <div id="cardMsg_<?= $ft_id ?>" style="display:none;margin-top:4px;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:5px;padding:5px 8px;font-size:10.5px;font-weight:600;line-height:1.3;"></div>
                         </td>
 
                         <!-- CALIBRATION Column (Default = 0.00) -->
@@ -4844,9 +4842,9 @@ setTimeout(function() {
                         cEl.style.borderColor = '';
                     }
                     if (msgEl && errMsg) {
-                        msgEl.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:6px;padding:8px 12px;font-size:11px;font-weight:600;margin-top:5px;';
+                        msgEl.style.display = 'block';
                         msgEl.textContent = errMsg;
-                    } else if (msgEl && msgEl.textContent && (msgEl.textContent.indexOf('lower than') !== -1 || msgEl.textContent.indexOf('negative') !== -1)) {
+                    } else if (msgEl) {
                         msgEl.style.display = 'none';
                         msgEl.textContent = '';
                     }
@@ -6360,7 +6358,7 @@ setTimeout(function() {
                                 <div id="joFirstNameResults" 
                                      style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;
                                             background:#fff;border:1px solid #cbd5e1;border-radius:8px;
-                                            max-height:280px;overflow-y:auto;z-index:100;
+                                            max-height:280px;overflow-y:auto;z-index:9999;
                                             box-shadow:0 8px 24px rgba(0,0,0,.12);">
                                 </div>
                             </div>
@@ -6879,7 +6877,7 @@ setTimeout(function() {
 
                     <!-- ── Sub-tab: Form ─────────────────────────────────────── -->
                     <div id="merchTab_form">
-                    <div class="txn-card-body">
+                    <div class="txn-card-body" style="overflow:visible;">
 
                         <!-- Customer Details — New Radio Button Selection -->
                         <div style="font-size:11px;font-weight:700;color:#002F70;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;">
@@ -6908,7 +6906,7 @@ setTimeout(function() {
                                 <div id="merchFirstNameResults" 
                                      style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;
                                             background:#fff;border:1px solid #cbd5e1;border-radius:8px;
-                                            max-height:280px;overflow-y:auto;z-index:100;
+                                            max-height:280px;overflow-y:auto;z-index:9999;
                                             box-shadow:0 8px 24px rgba(0,0,0,.12);">
                                 </div>
                             </div>
