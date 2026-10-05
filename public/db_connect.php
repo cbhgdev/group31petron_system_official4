@@ -335,6 +335,30 @@ try {
     }
 } catch (Throwable $e) {}
 
+// ── Self-healing Database schema for fuel_inventory num_pumps column ──────────
+try {
+    static $fuel_inv_num_pumps_checked = false;
+    if (!$fuel_inv_num_pumps_checked) {
+        $fuel_inv_num_pumps_checked = true;
+        $chk_np = $pdo->query("SHOW COLUMNS FROM fuel_inventory LIKE 'num_pumps'");
+        if (!$chk_np || $chk_np->rowCount() === 0) {
+            $pdo->exec("ALTER TABLE fuel_inventory ADD COLUMN num_pumps INT NOT NULL DEFAULT 0 AFTER capacity");
+        }
+        // Always backfill num_pumps for existing records where num_pumps is 0 but pumps exist
+        $pdo->exec("
+            UPDATE fuel_inventory fi
+            SET fi.num_pumps = (
+                SELECT COUNT(*) FROM fuel_pumps fp WHERE fp.tank_id = fi.id
+            )
+            WHERE fi.num_pumps = 0 AND EXISTS (
+                SELECT 1 FROM fuel_pumps fp WHERE fp.tank_id = fi.id
+            )
+        ");
+    }
+} catch (Throwable $e) {
+    error_log("fuel_inventory num_pumps self-healing error: " . $e->getMessage());
+}
+
 // ── Self-healing Standardized Payment Taxonomy & Table Schema ───────────────
 try {
     static $payment_schema_healed = false;

@@ -6847,10 +6847,17 @@ require_once __DIR__ . '/rbac_menu.php';
             function cleanMojibake(str) {
                 if (!str) return '';
                 return String(str)
-                    .replace(/ΓÇö|ГÇÖ|ΓÇÖ|ΓÇô|â€”|â€“/g, '—')
+                    .replace(/ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â|ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å¡|Ã¢â‚¬â€”|Ã¢â‚¬â€“|â€”|â€“|ΓÇö|ГÇÖ|ΓÇô/g, ' - ')
+                    .replace(/ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦|Ã¢â‚¬Â¦|â€¦/g, '...')
+                    .replace(/ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢|Ã¢â‚¬Â¢|â€¢/g, '•')
                     .replace(/Γé▒|â‚±/g, '₱')
-                    .replace(/â€™|ΓÇÿ/g, "'")
-                    .replace(/â€œ|â€ |ΓÇ£|ΓÇ¥/g, '"');
+                    .replace(/â€™|ΓÇÿ|Ã¢â‚¬â„¢|Ã¢â‚¬Ëœ/g, "'")
+                    .replace(/â€œ|â€ |ΓÇ£|ΓÇ¥|Ã¢â‚¬Å“|Ã¢â‚¬Â/g, '"')
+                    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+                    .replace(/Ã‚Â/g, '')
+                    .replace(/\s*-\s*/g, ' - ')
+                    .replace(/[ \t]{2,}/g, ' ')
+                    .trim();
             }
 
             function escapeJsString(value) {
@@ -6902,10 +6909,13 @@ require_once __DIR__ . '/rbac_menu.php';
             }
 
             // ── Load & render notifications (fast — no generator wait) ────────
-            async function loadNotifications() {
+            async function loadNotifications(showSpinner = false) {
                 const el = document.getElementById('notificationList');
                 if (!el) return;
-                el.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px;"><i class="fas fa-spinner fa-spin"></i> Loading…</div>';
+                const hasExisting = el.children && el.children.length > 0 && !el.querySelector('.fa-spinner');
+                if (!hasExisting || showSpinner) {
+                    el.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px;"><i class="fas fa-spinner fa-spin"></i> Loading…</div>';
+                }
                 try {
                     const ctrl = new AbortController();
                     const tid  = setTimeout(() => ctrl.abort(), 8000); // 8s timeout
@@ -7048,23 +7058,27 @@ require_once __DIR__ . '/rbac_menu.php';
                         clearTimeout(tid);
                         // Do NOT throw on non-ok (403/500 on live server) — treat generator as optional
                         if (!r.ok) {
-                            // Generator unavailable — still load notifications from DB directly
                             fetchUnreadCount();
-                            loadNotifications();
+                            if (isNotificationDropdownOpen()) {
+                                loadNotifications(false);
+                            }
                             return null;
                         }
                         return r.json();
                     })
                     .then(d => {
-                        if (!d) return; // already handled above
+                        if (!d) return;
                         fetchUnreadCount();
-                        loadNotifications();
+                        if (isNotificationDropdownOpen()) {
+                            loadNotifications(false);
+                        }
                     })
                     .catch(() => {
                         clearTimeout(tid);
-                        // On any error (network, abort, etc.) — always try to load notifications
                         fetchUnreadCount();
-                        loadNotifications();
+                        if (isNotificationDropdownOpen()) {
+                            loadNotifications(false);
+                        }
                     });
             }
 
@@ -7104,9 +7118,10 @@ require_once __DIR__ . '/rbac_menu.php';
 
             // ── Direct notifications (run generator on page load) ──
             runGeneratorBackground();
+            // In the background, ONLY poll the unread badge count periodically — do NOT reload the notification list
             setInterval(function() {
-                runGeneratorBackground();
-            }, 10000);
+                fetchUnreadCount();
+            }, 20000);
         })();
         <?php endif; ?>
     </script>

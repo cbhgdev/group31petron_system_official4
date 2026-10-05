@@ -274,6 +274,52 @@ if (!function_exists('petron_report_show_footer')) {
 
 require_once __DIR__ . '/security_helpers.php';
 
+if (!function_exists('clean_mojibake')) {
+    function clean_mojibake(?string $str): string {
+        if ($str === null || $str === '') return '';
+        $s = (string)$str;
+        $replacements = [
+            'ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â'  => ' - ',
+            'ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å¡' => ' - ',
+            'ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦'    => '...',
+            'ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢'    => '•',
+            'Ãƒâ€šÃ‚Â·'           => '•',
+            'Ã¢â‚¬â€”'           => ' - ',
+            'Ã¢â‚¬â€œ'           => ' - ',
+            'Ã¢â‚¬Â¢'            => '•',
+            'Ã¢â‚¬Â¦'            => '...',
+            'Ã¢â‚¬Å“'            => '"',
+            'Ã¢â‚¬Â'            => '"',
+            'Ã¢â‚¬Ëœ'            => "'",
+            'Ã¢â‚¬â„¢'           => "'",
+            'Ã‚Â'                => '',
+            'â€”'                => ' - ',
+            'â€“'                => ' - ',
+            'â€¦'                => '...',
+            'â€¢'                => '•',
+            'â‚±'                => '₱',
+            'â€™'                => "'",
+            'â€˜'                => "'",
+            'â€œ'                => '"',
+            'â€'                 => '"',
+            'â€'                 => '"',
+            'ΓÇö'                => ' - ',
+            'ГÇÖ'                => ' - ',
+            'ΓÇô'                => ' - ',
+            'Γé▒'                => '₱',
+            'ΓÇÿ'                => "'",
+            'ΓÇ£'                => '"',
+            'ΓÇ¥'                => '"',
+        ];
+        $s = str_replace(array_keys($replacements), array_values($replacements), $s);
+        // Remove invisible C0/C1 control characters (e.g. U+009D / \xC2\x9D)
+        $s = preg_replace('/[\x{0080}-\x{009f}\x{0000}-\x{001f}\x{007f}]/u', '', $s);
+        $s = preg_replace('/\s*-\s*/', ' - ', $s);
+        $s = preg_replace('/[ \t]{2,}/', ' ', $s);
+        return trim($s);
+    }
+}
+
 
 if (!function_exists('is_system_in_maintenance_mode')) {
     function is_system_in_maintenance_mode() {
@@ -4113,27 +4159,38 @@ if (!function_exists('fetch_pumps_for_fuel_product')) {
             $prefix = 'KEROSENE - %';
         }
 
-        try {
-            $sql = "SELECT id, pump_number, pump_name, nozzle_number, status 
-                    FROM fuel_pumps 
-                    WHERE station_id = ? 
-                      AND (
-                        (? > 0 AND fuel_type_id = ?)
-                        " . (!empty($ugt_list) ? " OR ugt_no IN (" . implode(',', array_fill(0, count($ugt_list), '?')) . ")" : "") . "
-                        " . ($prefix !== '' ? " OR UPPER(pump_number) LIKE ?" : "") . "
-                      )
-                    ORDER BY id ASC";
-            $params = [$station_id, $ft_id, $ft_id];
-            if (!empty($ugt_list)) {
-                $params = array_merge($params, array_values($ugt_list));
-            }
-            if ($prefix !== '') {
-                $params[] = $prefix;
-            }
-            $p_stmt = $pdo->prepare($sql);
-            $p_stmt->execute($params);
-            $pumps = $p_stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) { $pumps = []; }
+        $tank_id = (int)($fuel['id'] ?? 0);
+        if ($tank_id > 0) {
+            try {
+                $p_stmt = $pdo->prepare("SELECT id, pump_number, pump_name, nozzle_number, status FROM fuel_pumps WHERE station_id = ? AND tank_id = ? ORDER BY id ASC");
+                $p_stmt->execute([$station_id, $tank_id]);
+                $pumps = $p_stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $e) { $pumps = []; }
+        }
+
+        if (empty($pumps)) {
+            try {
+                $sql = "SELECT id, pump_number, pump_name, nozzle_number, status 
+                        FROM fuel_pumps 
+                        WHERE station_id = ? 
+                          AND (
+                            (? > 0 AND fuel_type_id = ?)
+                            " . (!empty($ugt_list) ? " OR ugt_no IN (" . implode(',', array_fill(0, count($ugt_list), '?')) . ")" : "") . "
+                            " . ($prefix !== '' ? " OR UPPER(pump_number) LIKE ?" : "") . "
+                          )
+                        ORDER BY id ASC";
+                $params = [$station_id, $ft_id, $ft_id];
+                if (!empty($ugt_list)) {
+                    $params = array_merge($params, array_values($ugt_list));
+                }
+                if ($prefix !== '') {
+                    $params[] = $prefix;
+                }
+                $p_stmt = $pdo->prepare($sql);
+                $p_stmt->execute($params);
+                $pumps = $p_stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $e) { $pumps = []; }
+        }
 
         if (empty($pumps)) {
             try {

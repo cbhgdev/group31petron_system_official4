@@ -271,6 +271,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $critical_level = (float)($_POST['critical_level'] ?? 0);
         $reorder_level  = (float)($_POST['reorder_level'] ?? 0);
         $status_val     = trim($_POST['status'] ?? 'active');
+        $num_pumps      = isset($_POST['num_pumps']) && $_POST['num_pumps'] !== '' ? max(0, (int)$_POST['num_pumps']) : null;
 
         if ($id <= 0) throw new Exception('Invalid fuel product ID.');
         if (empty($fuel_name)) throw new Exception('Fuel product name cannot be empty.');
@@ -299,6 +300,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $old_crit    = (float)($old_fuel['critical_level'] ?? 0);
             $old_reorder = (float)($old_fuel['reorder_level'] ?? 0);
             $old_status  = strtolower($old_fuel['status'] ?? 'active');
+            $old_num_pumps = isset($old_fuel['num_pumps']) ? (int)$old_fuel['num_pumps'] : 0;
             $user_name   = $me['username'] ?? ($me['first_name'] ?? 'Admin');
 
             $target_fuel_name = !empty($fuel_name) ? $fuel_name : $old_name;
@@ -363,6 +365,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare("INSERT INTO fuel_config_history (station_id, fuel_inventory_id, fuel_type, field_name, old_value, new_value, updated_by, updated_by_name, created_at) VALUES (?, ?, ?, 'Reorder Level', ?, ?, ?, ?, NOW())")
                     ->execute([$fuel_station_id, $id, $target_fuel_name, number_format($old_reorder, 2) . ' L', number_format($reorder_level, 2) . ' L', $me['id'], $user_name]);
             }
+            if ($num_pumps !== null && $num_pumps !== $old_num_pumps) {
+                $pdo->prepare("INSERT INTO fuel_config_history (station_id, fuel_inventory_id, fuel_type, field_name, old_value, new_value, updated_by, updated_by_name, created_at) VALUES (?, ?, ?, 'Number of Pumps', ?, ?, ?, ?, NOW())")
+                    ->execute([$fuel_station_id, $id, $target_fuel_name, "{$old_num_pumps} Pumps", "{$num_pumps} Pumps", $me['id'], $user_name]);
+            }
             if (strcasecmp($old_status, $status_val) !== 0) {
                 $status_label = (strtolower($status_val) === 'active') ? 'Activated' : 'Deactivated';
                 $pdo->prepare("INSERT INTO fuel_status_history (station_id, fuel_inventory_id, fuel_type, old_status, new_status, status, reason, changed_by, changed_by_name, created_at) VALUES (?, ?, ?, ?, ?, ?, 'Direct Admin Edit', ?, ?, NOW())")
@@ -371,8 +377,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // ── Admin always updates ALL fields immediately — no approval needed ──
             // 1. Update this specific fuel inventory record
-            $pdo->prepare("UPDATE fuel_inventory SET ugt_no=?, fuel_type=?, price_per_liter=?, capacity=?, critical_level=?, reorder_level=?, status=?, updated_by=?, last_updated=NOW() WHERE id=?")
-                ->execute([$target_ugt, $target_fuel_name, $price, $capacity, $critical_level, $reorder_level, $status_val, $me['id'], $id]);
+            if ($num_pumps !== null) {
+                $pdo->prepare("UPDATE fuel_inventory SET ugt_no=?, fuel_type=?, price_per_liter=?, capacity=?, critical_level=?, reorder_level=?, status=?, num_pumps=?, updated_by=?, last_updated=NOW() WHERE id=?")
+                    ->execute([$target_ugt, $target_fuel_name, $price, $capacity, $critical_level, $reorder_level, $status_val, $num_pumps, $me['id'], $id]);
+
+                // Synchronize fuel_pumps and nozzles for this tank
+                $chk_pumps = $pdo->prepare("SELECT id, pump_number, status FROM fuel_pumps WHERE station_id = ? AND tank_id = ? ORDER BY id ASC");
+                $chk_pumps->execute([$fuel_station_id, $id]);
+                $cur_pumps = $chk_pumps->fetchAll(PDO::FETCH_ASSOC);
+                $cur_count = count($cur_pumps);
+
+                if ($num_pumps > $cur_count) {
+                    $clean_fuel_tag = strtoupper(trim($target_fuel_name));
+                    $ft_id = (int)($old_fuel['fuel_type_id'] ?? 0);
+                    for ($pi = $cur_count + 1; $pi <= $num_pumps; $pi++) {
+                        $pump_num = "{$clean_fuel_tag} - {$pi}";
+                        $pump_name = "Pump {$pi}";
+                        $nozzle_num = "Nozzle {$pi}";
+                        
+                        $ins_pump = $pdo->prepare("INSERT INTO fuel_pumps (station_id, tank_id, pump_number, pump_name, nozzle_number, fuel_type_id, ugt_no, capacity, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active', NOW())");
+                        $ins_pump->execute([$fuel_station_id, $id, $pump_num, $pump_name, $nozzle_num, $ft_id, $target_ugt, $capacity]);
+                        $new_pid = (int)$pdo->lastInsertId();
+
+                        try {
+                            $pdo->prepare("INSERT INTO nozzles (station_id, pump_id, pump_name, nozzle_number, fuel_type_id, ugt_no, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'Active', NOW())")
+                                ->execute([$fuel_station_id, $new_pid, $pump_name, $nozzle_num, $ft_id, $target_ugt]);
+                        } catch (Exception $e_nz) {}
+                    }
+                } elseif ($num_pumps < $cur_count) {
+                    $excess = array_slice($cur_pumps, $num_pumps);
+                    foreach ($excess as $ep) {
+                        $ep_id = (int)$ep['id'];
+                        $pdo->prepare("UPDATE fuel_pumps SET status = 'Inactive' WHERE id = ? AND station_id = ?")->execute([$ep_id, $fuel_station_id]);
+                        $pdo->prepare("UPDATE nozzles SET status = 'Inactive' WHERE pump_id = ? AND station_id = ?")->execute([$ep_id, $fuel_station_id]);
+                    }
+                }
+            } else {
+                $pdo->prepare("UPDATE fuel_inventory SET ugt_no=?, fuel_type=?, price_per_liter=?, capacity=?, critical_level=?, reorder_level=?, status=?, updated_by=?, last_updated=NOW() WHERE id=?")
+                    ->execute([$target_ugt, $target_fuel_name, $price, $capacity, $critical_level, $reorder_level, $status_val, $me['id'], $id]);
+            }
 
             // 2. Sync price_per_liter ONLY to other matching fuel tanks (do NOT touch fuel_type to prevent duplicate key error)
             if (count($matching_ids) > 1) {
@@ -543,7 +586,7 @@ try {
     $fi_lookup = [];
     $fi_lookup_by_id = [];
     $fi_status_by_id = [];
-    $s = $pdo->prepare("SELECT id, fuel_type, ugt_no, current_level, current_stock, capacity, price_per_liter, latest_calibration, status, last_updated, reorder_level, critical_level FROM fuel_inventory WHERE station_id = ? ORDER BY CAST(REGEXP_REPLACE(COALESCE(ugt_no,'0'), '[^0-9]', '') AS UNSIGNED) ASC, id ASC");
+    $s = $pdo->prepare("SELECT id, fuel_type, ugt_no, current_level, current_stock, capacity, price_per_liter, latest_calibration, status, last_updated, reorder_level, critical_level, num_pumps FROM fuel_inventory WHERE station_id = ? ORDER BY CAST(REGEXP_REPLACE(COALESCE(ugt_no,'0'), '[^0-9]', '') AS UNSIGNED) ASC, id ASC");
     $s->execute([$target_sid]);
     $fi_raw = $s->fetchAll(PDO::FETCH_ASSOC);
     foreach ($fi_raw as $row) {
@@ -690,25 +733,28 @@ try {
 
                 $matched = false;
                 // Direct match by tank_id (guarantees exact 1:1 match with fuel management)
-                if (!empty($pr['tank_id']) && (int)$pr['tank_id'] === $_fi_id) {
-                    $matched = true;
-                }
-                // Match by fuel_type_id
-                if (!$matched && $_ft_id && (int)$pr['fuel_type_id'] === $_ft_id) {
-                    $matched = true;
-                }
-                // Match by ugt_no (canonical number comparison)
-                if (!$matched && $_ugt_num > 0) {
-                    $pr_ugt_num = (int)preg_replace('/[^0-9]/', '', strtolower(trim($pr['ugt_no'] ?? '')));
-                    if ($pr_ugt_num && $pr_ugt_num === $_ugt_num) {
+                if (!empty($pr['tank_id'])) {
+                    if ((int)$pr['tank_id'] === $_fi_id) {
                         $matched = true;
                     }
-                }
-                // Match by pump_number pattern (e.g. "Diesel 1", "UGT-01")
-                if (!$matched && $_ugt_num > 0) {
-                    $pn = strtoupper(trim($pr['pump_number'] ?? ''));
-                    if (preg_match('/UGT[-_ #]*0*' . $_ugt_num . '\b/i', $pn)) {
+                } else {
+                    // Match by fuel_type_id
+                    if (!$matched && $_ft_id && (int)$pr['fuel_type_id'] === $_ft_id) {
                         $matched = true;
+                    }
+                    // Match by ugt_no (canonical number comparison)
+                    if (!$matched && $_ugt_num > 0) {
+                        $pr_ugt_num = (int)preg_replace('/[^0-9]/', '', strtolower(trim($pr['ugt_no'] ?? '')));
+                        if ($pr_ugt_num && $pr_ugt_num === $_ugt_num) {
+                            $matched = true;
+                        }
+                    }
+                    // Match by pump_number pattern (e.g. "Diesel 1", "UGT-01")
+                    if (!$matched && $_ugt_num > 0) {
+                        $pn = strtoupper(trim($pr['pump_number'] ?? ''));
+                        if (preg_match('/UGT[-_ #]*0*' . $_ugt_num . '\b/i', $pn)) {
+                            $matched = true;
+                        }
                     }
                 }
 
@@ -764,8 +810,10 @@ try {
             $price = (float)$price_lookup[$ft_key];
         }
 
-        // Pump count — directly from the deduplicated fuel management lookup
-        $p_count = count($pumps_by_fi_id[$r_id] ?? []);
+        // Pump count — num_pumps stored directly on the fuel inventory record, fallback to matched pumps
+        $p_count = (isset($row['num_pumps']) && $row['num_pumps'] !== null && (int)$row['num_pumps'] > 0)
+            ? (int)$row['num_pumps']
+            : count($pumps_by_fi_id[$r_id] ?? []);
 
         // Pending approval check
         $app = null;
@@ -800,7 +848,8 @@ try {
             'pending_price'  => $app ? (float)$app['new_value'] : null,
             'approval_status'=> $app ? $app['status'] : null,
             'approval_id'    => $app ? $app['approval_id'] : null,
-            'pump_count'     => $p_count
+            'pump_count'     => $p_count,
+            'num_pumps'      => (int)($row['num_pumps'] ?? $p_count)
         ];
     }
 
@@ -1978,7 +2027,7 @@ table.pricing-table tbody tr:hover {
                                     </button>
                                     
                                     <!-- Edit Button -->
-                                    <button type="button" onclick="openEditPriceModalAdmin(<?php echo $f['id']; ?>, '<?php echo htmlspecialchars(addslashes($full_fuel_name)); ?>', <?php echo (float)($f['price_per_liter'] ?? 0); ?>, <?php echo (float)($f['capacity'] ?? 0); ?>, <?php echo (float)($f['critical_level'] ?? 0); ?>, <?php echo (float)($f['reorder_level'] ?? 0); ?>, '<?php echo htmlspecialchars(addslashes($ugt_str)); ?>', <?php echo $req_status === 'pending' ? 'true' : 'false'; ?>)" class="act-btn act-btn-edit">
+                                    <button type="button" onclick="openEditPriceModalAdmin(<?php echo $f['id']; ?>, '<?php echo htmlspecialchars(addslashes($full_fuel_name)); ?>', <?php echo (float)($f['price_per_liter'] ?? 0); ?>, <?php echo (float)($f['capacity'] ?? 0); ?>, <?php echo (float)($f['critical_level'] ?? 0); ?>, <?php echo (float)($f['reorder_level'] ?? 0); ?>, '<?php echo htmlspecialchars(addslashes($ugt_str)); ?>', <?php echo $req_status === 'pending' ? 'true' : 'false'; ?>, <?php echo (int)($f['pump_count'] ?? 0); ?>)" class="act-btn act-btn-edit">
                                         <i class="fas fa-edit"></i> Edit
                                     </button>
 
@@ -4025,7 +4074,7 @@ function editFuelFromViewAdmin() {
     var f = _currentAdminViewFuel;
     closeViewFuelModalAdmin();
     var fName = (f.raw_fuel_type || f.fuel_type || 'Fuel').replace(/\s*\(UGT\s*#?\d+\)/gi, '').trim();
-    openEditPriceModalAdmin(f.id, fName, f.price_per_liter, f.capacity, f.critical_level, f.reorder_level, f.ugt_no, false);
+    openEditPriceModalAdmin(f.id, fName, f.price_per_liter, f.capacity, f.critical_level, f.reorder_level, f.ugt_no, false, f.pump_count || f.num_pumps || 0);
 }
 
 // Global helper: smart default based on tank capacity (mirrors PHP fallback)
@@ -4045,7 +4094,7 @@ function getCleanCanonicalFuelName(name) {
     return String(name).replace(/\s*\(UGT\s*#?[^)]*\)/gi, '').trim();
 }
 
-function openEditPriceModalAdmin(id, fuelName, currentPrice, capacity, critical, reorder, ugtNo, hasPending) {
+function openEditPriceModalAdmin(id, fuelName, currentPrice, capacity, critical, reorder, ugtNo, hasPending, pumpCount) {
     // Pre-fill form fields immediately from inline PHP values
     if (document.getElementById('aef_fuel_id')) document.getElementById('aef_fuel_id').value = id;
     var cleanFuelName = getCleanCanonicalFuelName(fuelName);
@@ -4055,6 +4104,9 @@ function openEditPriceModalAdmin(id, fuelName, currentPrice, capacity, critical,
     if (document.getElementById('aef_price')) document.getElementById('aef_price').value = parseFloat(currentPrice || 0).toFixed(2);
     if (document.getElementById('aef_critical')) document.getElementById('aef_critical').value = adminSmartDefault(critical, capacity, false);
     if (document.getElementById('aef_reorder')) document.getElementById('aef_reorder').value = adminSmartDefault(reorder, capacity, true);
+    if (document.getElementById('aef_num_pumps')) {
+        document.getElementById('aef_num_pumps').value = (pumpCount !== undefined && pumpCount !== null && parseInt(pumpCount) >= 0) ? parseInt(pumpCount) : '';
+    }
 
     // Admin can always edit price directly
     var priceInput  = document.getElementById('aef_price');
@@ -4103,6 +4155,13 @@ function openEditPriceModalAdmin(id, fuelName, currentPrice, capacity, critical,
 
                 // Overwrite reorder level — DB first, smart default as fallback
                 document.getElementById('aef_reorder').value  = adminSmartDefault(f.reorder_level, cap, true);
+
+                // Overwrite number of pumps
+                if (document.getElementById('aef_num_pumps')) {
+                    if (f.num_pumps !== undefined && f.num_pumps !== null && f.num_pumps !== '') {
+                        document.getElementById('aef_num_pumps').value = parseInt(f.num_pumps) || 0;
+                    }
+                }
 
                 // Sync status radio buttons
                 var liveStatus  = (f.status || 'active').toLowerCase();
@@ -4295,6 +4354,15 @@ function validateEditFuelForm() {
         showCustomAlert('Reorder Level cannot be greater than or equal to Tank Capacity (' + c + ' L).', 'error');
         if (rEl) rEl.focus();
         return false;
+    }
+    const npEl = document.getElementById('aef_num_pumps');
+    if (npEl && npEl.value.trim() !== '') {
+        const np = parseInt(npEl.value);
+        if (isNaN(np) || np < 0) {
+            showCustomAlert('Number of Pumps must be 0 or a positive whole number.', 'warning');
+            npEl.focus();
+            return false;
+        }
     }
     return true;
 }
@@ -5565,16 +5633,23 @@ safeAddListener('addServiceForm', 'submit', function(e) {
         </div>
       </div>
 
-      <!-- Row 4: Status -->
-      <div style="margin-bottom:7px;display:flex;align-items:center;gap:16px;">
-        <label style="font-size:12px;font-weight:700;color:#334155;text-transform:uppercase;margin:0;">Status <span style="color:#dc2626;">*</span>:</label>
-        <div style="display:flex;gap:16px;align-items:center;">
-          <label style="display:flex;align-items:center;gap:5px;font-size:13.5px;cursor:pointer;font-weight:600;color:#166534;">
-            <input type="radio" id="aef_status_active" name="status" value="active" checked style="accent-color:#16a34a;"> Active
-          </label>
-          <label style="display:flex;align-items:center;gap:5px;font-size:13.5px;cursor:pointer;font-weight:600;color:#991b1b;">
-            <input type="radio" id="aef_status_inactive" name="status" value="inactive" style="accent-color:#dc2626;"> Inactive
-          </label>
+      <!-- Row 4: Number of Pumps + Status -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:7px;align-items:start;">
+        <div>
+          <label style="display:block;font-size:12px;font-weight:700;color:#334155;text-transform:uppercase;margin-bottom:2px;">Number of Pumps <span style="color:#dc2626;">*</span></label>
+          <input type="number" id="aef_num_pumps" name="num_pumps" min="0" max="30" step="1" required style="width:100%;padding:5px 10px;border:1.5px solid #d1d5db;border-radius:6px;font-size:13.5px;box-sizing:border-box;" placeholder="e.g. 4">
+          <small style="font-size:11px;color:#64748b;display:block;margin-top:2px;">Configured pumps for this fuel product.</small>
+        </div>
+        <div>
+          <label style="display:block;font-size:12px;font-weight:700;color:#334155;text-transform:uppercase;margin-bottom:6px;">Status <span style="color:#dc2626;">*</span></label>
+          <div style="display:flex;gap:16px;align-items:center;padding-top:4px;">
+            <label style="display:flex;align-items:center;gap:5px;font-size:13.5px;cursor:pointer;font-weight:600;color:#166534;">
+              <input type="radio" id="aef_status_active" name="status" value="active" checked style="accent-color:#16a34a;"> Active
+            </label>
+            <label style="display:flex;align-items:center;gap:5px;font-size:13.5px;cursor:pointer;font-weight:600;color:#991b1b;">
+              <input type="radio" id="aef_status_inactive" name="status" value="inactive" style="accent-color:#dc2626;"> Inactive
+            </label>
+          </div>
         </div>
       </div>
 
