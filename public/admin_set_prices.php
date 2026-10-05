@@ -34,9 +34,9 @@ if (!function_exists('get_canonical_fuel_name')) {
         } elseif (strpos($name_lower, 'xcs') !== false) {
             return 'XCS Plus';
         } elseif (strpos($name_lower, 'xtra') !== false || strpos($name_lower, 'unl') !== false || strpos($name_lower, 'advance') !== false) {
-            return 'XTR ADVANCE';
+            return 'Xtra UNL';
         }
-        return $name;
+        return trim($name);
     }
 }
 
@@ -1704,14 +1704,45 @@ table.pricing-table tbody tr:hover {
         $raw_name = !empty($fp['fuel_type']) ? $fp['fuel_type'] : ($fp['raw_fuel_type'] ?? '');
         $clean_name = trim(preg_replace('/\s*\(UGT\s*#?\d+\)/i', '', $raw_name));
         $full_name = $clean_name !== '' ? $clean_name : $raw_name;
-        if ($full_name !== '') {
-            $station_fuel_types[$full_name] = $full_name;
+        $canonical_ft = get_canonical_fuel_name($full_name);
+        if ($canonical_ft !== '') {
+            $station_fuel_types[$canonical_ft] = $canonical_ft;
         }
 
         $ugt_str = !empty($fp['ugt_no']) ? $fp['ugt_no'] : (!empty($fp['pump_id']) ? ('UGT #' . $fp['pump_id']) : '');
         if ($ugt_str !== '') {
             $station_ugts[$ugt_str] = $ugt_str;
         }
+    }
+
+    // Ensure the 5 canonical fuel types matching Manager view are accurately fetched and populated
+    try {
+        $db_ft_stmt = $pdo->query("
+            SELECT DISTINCT
+                CASE
+                    WHEN UPPER(name) LIKE '%TURBO%DIESEL%' THEN 'Turbo Diesel'
+                    WHEN UPPER(name) LIKE '%KEROSENE%'     THEN 'Kerosene'
+                    WHEN UPPER(name) LIKE '%XCS%'          THEN 'XCS Plus'
+                    WHEN UPPER(name) LIKE '%XTRA%UNL%'     THEN 'Xtra UNL'
+                    WHEN UPPER(name) LIKE '%DIESEL%'       THEN 'Diesel'
+                    ELSE TRIM(name)
+                END AS canonical_name
+            FROM fuel_types
+            WHERE name IS NOT NULL AND TRIM(name) != ''
+            ORDER BY canonical_name ASC
+        ");
+        foreach ($db_ft_stmt->fetchAll(PDO::FETCH_COLUMN) as $dft) {
+            $c_name = get_canonical_fuel_name($dft);
+            if ($c_name !== '') {
+                $station_fuel_types[$c_name] = $c_name;
+            }
+        }
+    } catch (Exception $e) {}
+
+    // Guarantee exactly the 5 standard Petron fuel types matching Manager
+    $standard_5_fuels = ['Diesel', 'Kerosene', 'Turbo Diesel', 'XCS Plus', 'Xtra UNL'];
+    foreach ($standard_5_fuels as $s5) {
+        $station_fuel_types[$s5] = $s5;
     }
     ksort($station_fuel_types);
     natsort($station_ugts);
@@ -1850,7 +1881,7 @@ table.pricing-table tbody tr:hover {
                         $raw_name = !empty($f['fuel_type']) ? $f['fuel_type'] : ($f['raw_fuel_type'] ?? 'Fuel');
                         $clean_name = trim(preg_replace('/\s*\(UGT\s*#?\d+\)/i', '', $raw_name));
                         $full_fuel_name = $clean_name !== '' ? $clean_name : $raw_name;
-                        $canonical_type = strtolower($full_fuel_name);
+                        $canonical_type = get_canonical_fuel_name($full_fuel_name);
                         $req_status = strtolower($f['approval_status'] ?? '');
                     ?>
                     <tr class="admin-fuel-row" 
@@ -1868,10 +1899,10 @@ table.pricing-table tbody tr:hover {
                         
                         <!-- Fuel Type -->
                         <td style="vertical-align:middle;">
-                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                            <div style="display:flex;flex-direction:column;align-items:flex-start;gap:4px;">
                                 <strong style="font-size:13.5px;<?php echo $is_deactivated ? 'color:#64748b;' : 'color:#0f172a;'; ?>line-height:1.3;word-break:break-word;"><?php echo htmlspecialchars($full_fuel_name); ?></strong>
                                 <?php if (!empty($f['pump_count']) && (int)$f['pump_count'] > 0): ?>
-                                    <span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;">
+                                    <span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;">
                                         <i class="fas fa-gas-pump" style="font-size:10px;"></i> <?php echo (int)$f['pump_count']; ?> <?php echo ((int)$f['pump_count'] === 1) ? 'Pump' : 'Pumps'; ?>
                                     </span>
                                 <?php endif; ?>
@@ -3717,8 +3748,8 @@ function filterAdminFuelTable() {
         var reqstatus = row.getAttribute('data-reqstatus') || 'none';
         var activestatus = row.getAttribute('data-activestatus') || 'active';
 
-        var matchesSearch = !searchVal || ugt.toLowerCase().indexOf(searchVal) !== -1 || fullname.toLowerCase().indexOf(searchVal) !== -1;
-        var matchesFuelType = !fuelTypeVal || fueltype.toLowerCase() === fuelTypeVal.toLowerCase() || fullname.toLowerCase().indexOf(fuelTypeVal.toLowerCase()) !== -1;
+        var matchesSearch = !searchVal || ugt.toLowerCase().indexOf(searchVal) !== -1 || fullname.toLowerCase().indexOf(searchVal) !== -1 || fueltype.toLowerCase().indexOf(searchVal) !== -1;
+        var matchesFuelType = !fuelTypeVal || fueltype.toLowerCase() === fuelTypeVal.toLowerCase();
         var matchesUgt = !ugtVal || ugt.toLowerCase() === ugtVal.toLowerCase();
         var matchesReqStatus = !reqStatusVal || (reqStatusVal === 'pending' && reqstatus === 'pending') || (reqStatusVal === 'rejected' && reqstatus === 'rejected') || (reqStatusVal === 'none' && (reqstatus === 'none' || reqstatus === 'approved' || !reqstatus));
         var matchesStatus = !statusVal || activestatus === statusVal;

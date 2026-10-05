@@ -1027,6 +1027,14 @@ body, html { overflow-x: hidden; max-width: 100%; }
 <div id="tab-fuel" class="tab-panel <?php echo $active_tab === 'fuel' ? 'active' : ''; ?>">
     <div style="display:flex;align-items:center;justify-content:flex-start;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
         <input type="text" id="fuelSearchInput" oninput="filterFuelTable()" placeholder="&#x1F50D; Search UGT or Fuel Type..." style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:15.5px;color:#334155;background:#fff;min-width:220px;">
+        <select id="fuelTypeFilter" onchange="filterFuelTable()" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:15.5px;color:#334155;background:#fff;">
+            <option value="">All Fuel Types</option>
+            <option value="Diesel">Diesel</option>
+            <option value="Kerosene">Kerosene</option>
+            <option value="Turbo Diesel">Turbo Diesel</option>
+            <option value="XCS Plus">XCS Plus</option>
+            <option value="Xtra UNL">Xtra UNL</option>
+        </select>
         <select id="fuelStatusFilter" onchange="filterFuelTable()" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:15.5px;color:#334155;background:#fff;">
             <option value="">All Statuses</option>
             <option value="Normal">Normal</option>
@@ -1115,17 +1123,17 @@ body, html { overflow-x: hidden; max-width: 100%; }
                         $raw_name = !empty($f['fuel_type']) ? $f['fuel_type'] : ($f['raw_fuel_type'] ?? 'Fuel');
                         $clean_name = trim(preg_replace('/\s*\(UGT\s*#?\d+\)/i', '', $raw_name));
                         $full_fuel_name = $clean_name !== '' ? $clean_name : $raw_name;
-                        $canonical_type = $full_fuel_name;
+                        $canonical_type = get_canonical_fuel_name($full_fuel_name);
                     ?>
-                    <tr class="fuel-row" data-ugt="<?php echo htmlspecialchars(strtolower($ugt_str)); ?>" data-name="<?php echo htmlspecialchars(strtolower($full_fuel_name)); ?>" data-status="<?php echo htmlspecialchars($status_label); ?>" data-active="<?php echo $is_deactivated ? 'inactive' : 'active'; ?>" style="<?php echo $is_deactivated ? 'background:#fff5f5;' : ''; ?>">
+                    <tr class="fuel-row" data-ugt="<?php echo htmlspecialchars(strtolower($ugt_str)); ?>" data-name="<?php echo htmlspecialchars(strtolower($full_fuel_name)); ?>" data-fueltype="<?php echo htmlspecialchars(strtolower($canonical_type)); ?>" data-status="<?php echo htmlspecialchars($status_label); ?>" data-active="<?php echo $is_deactivated ? 'inactive' : 'active'; ?>" style="<?php echo $is_deactivated ? 'background:#fff5f5;' : ''; ?>">
                         <td style="padding-left:12px;white-space:nowrap;">
                             <strong style="font-family:monospace;color:#002F6C;font-size:13px;letter-spacing:0.2px;"><?php echo htmlspecialchars($ugt_str); ?></strong>
                         </td>
-                        <td style="word-break:break-word;line-height:1.25;">
-                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                                <strong style="<?php echo $is_deactivated ? 'color:#64748b;' : 'color:#0f172a;'; ?>font-size:13px;"><?php echo htmlspecialchars($full_fuel_name); ?></strong>
+                        <td style="word-break:break-word;line-height:1.25;vertical-align:middle;">
+                            <div style="display:flex;flex-direction:column;align-items:flex-start;gap:4px;">
+                                <strong style="<?php echo $is_deactivated ? 'color:#64748b;' : 'color:#0f172a;'; ?>font-size:13px;line-height:1.3;word-break:break-word;"><?php echo htmlspecialchars($full_fuel_name); ?></strong>
                                 <?php if (!empty($f['pump_count']) && (int)$f['pump_count'] > 0): ?>
-                                    <span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;">
+                                    <span class="badge" style="background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap;display:inline-flex;align-items:center;gap:4px;">
                                         <i class="fas fa-gas-pump" style="font-size:10px;"></i> <?php echo (int)$f['pump_count']; ?> <?php echo ((int)$f['pump_count'] === 1) ? 'Pump' : 'Pumps'; ?>
                                     </span>
                                 <?php endif; ?>
@@ -1777,31 +1785,35 @@ window.filterFuelTable = function filterFuelTable() {
     var searchEl = document.getElementById('fuelSearchInput');
     var q        = searchEl ? (searchEl.value || '').toLowerCase().trim() : '';
     var stFilter = document.getElementById('fuelStatusFilter') ? document.getElementById('fuelStatusFilter').value.trim() : '';
+    var ftFilter = document.getElementById('fuelTypeFilter') ? document.getElementById('fuelTypeFilter').value.trim().toLowerCase() : '';
 
     // Persist filter values
     try {
         sessionStorage.setItem('petron_mgr_fuel_q', q);
         sessionStorage.setItem('petron_mgr_fuel_st', stFilter);
+        sessionStorage.setItem('petron_mgr_fuel_ft', ftFilter);
     } catch(e) {}
 
     var rows    = document.querySelectorAll('#fuelPricingTable tr.fuel-row, #tab-fuel tr.fuel-row');
     var visible = 0;
 
     rows.forEach(function(row) {
-        var ugt     = (row.getAttribute('data-ugt') || '').toLowerCase();
-        var name    = (row.getAttribute('data-name') || '').toLowerCase();
-        var status  = (row.getAttribute('data-status') || '').trim();
-        var active  = (row.getAttribute('data-active') || '').trim();
-        var rowText = (row.textContent || '').toLowerCase();
+        var ugt      = (row.getAttribute('data-ugt') || '').toLowerCase();
+        var name     = (row.getAttribute('data-name') || '').toLowerCase();
+        var fueltype = (row.getAttribute('data-fueltype') || '').toLowerCase().trim();
+        var status   = (row.getAttribute('data-status') || '').trim();
+        var active   = (row.getAttribute('data-active') || '').trim();
+        var rowText  = (row.textContent || '').toLowerCase();
 
         var matchQ  = !q || ugt.indexOf(q) !== -1 || name.indexOf(q) !== -1 || rowText.indexOf(q) !== -1;
+        var matchFt = !ftFilter || fueltype === ftFilter;
         var matchSt = true;
         if (stFilter === 'Normal') matchSt = (status === 'Normal' && active !== 'inactive');
         else if (stFilter === 'Low Stock') matchSt = (status === 'Low Stock' && active !== 'inactive');
         else if (stFilter === 'Out of Stock') matchSt = (status === 'Out of Stock' && active !== 'inactive');
         else if (stFilter === 'Deactivated') matchSt = (status === 'Deactivated' || active === 'inactive');
 
-        var show = matchQ && matchSt;
+        var show = matchQ && matchFt && matchSt;
         row.style.display = show ? '' : 'none';
         if (show) visible++;
     });
@@ -4806,24 +4818,27 @@ var _svcOriginalFee   = 0;
 var _svcOriginalLabor = 0;
 var _viewSvcData      = null; // keeps current view data so "Edit from View" works
 
-// ── Fuel Products Filter (search + status) ────────────────────────────────
+// ── Fuel Products Filter (search + fuel type + status) ───────────────────
 function filterFuelTable() {
-    var q      = (document.getElementById('fuelSearchInput') || {}).value || '';
-    var status = (document.getElementById('fuelStatusFilter') || {}).value || '';
+    var q        = (document.getElementById('fuelSearchInput') || {}).value || '';
+    var status   = (document.getElementById('fuelStatusFilter') || {}).value || '';
+    var ftFilter = ((document.getElementById('fuelTypeFilter') || {}).value || '').toLowerCase().trim();
     q = q.toLowerCase().trim();
 
     var rows    = document.querySelectorAll('.fuel-row');
     var visible = 0;
 
     rows.forEach(function(row) {
-        var ugt    = row.getAttribute('data-ugt') || '';
-        var name   = row.getAttribute('data-name') || '';
-        var rSt    = row.getAttribute('data-status') || '';
+        var ugt      = (row.getAttribute('data-ugt') || '').toLowerCase();
+        var name     = (row.getAttribute('data-name') || '').toLowerCase();
+        var fueltype = (row.getAttribute('data-fueltype') || '').toLowerCase().trim();
+        var rSt      = (row.getAttribute('data-status') || '').trim();
 
-        var matchQ  = !q || ugt.indexOf(q) !== -1 || name.indexOf(q) !== -1;
+        var matchQ  = !q || ugt.indexOf(q) !== -1 || name.indexOf(q) !== -1 || fueltype.indexOf(q) !== -1;
+        var matchFt = !ftFilter || fueltype === ftFilter;
         var matchSt = !status || rSt.toLowerCase() === status.toLowerCase();
 
-        if (matchQ && matchSt) {
+        if (matchQ && matchFt && matchSt) {
             row.style.display = '';
             visible++;
         } else {
