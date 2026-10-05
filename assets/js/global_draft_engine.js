@@ -30,7 +30,13 @@
         init: function(moduleKey, containerSelector, options) {
             options = options || {};
             const container = typeof containerSelector === 'string' ? document.querySelector(containerSelector) : containerSelector;
-            if (!container) return;
+            if (!container || container.getAttribute('data-petron-draft-module') === 'disabled' || container.hasAttribute('data-no-draft')) return;
+
+            const pathname = window.location.pathname.split('/').pop().replace(/\.php$/, '');
+            const isTxnPage = (pathname === 'staff_transactions_hub' || pathname === 'staff_transactions' || pathname === 'pos' || pathname === 'transactions' || window.location.pathname.includes('transactions_hub') || window.location.pathname.includes('staff_transactions') || window.location.pathname.includes('pos.php'));
+            if (isTxnPage || (moduleKey && (moduleKey.includes('fuel') || moduleKey.includes('meter_readings') || moduleKey.startsWith('pos_merchandise')))) {
+                return;
+            }
 
             container.setAttribute('data-petron-draft-module', moduleKey);
 
@@ -258,6 +264,10 @@
          * Instant synchronous save to LocalStorage (0ms latency)
          */
         saveToLocalStorage: function(moduleKey, container, options) {
+            const pathname = window.location.pathname.split('/').pop().replace(/\.php$/, '');
+            const isTxnPage = (pathname === 'staff_transactions_hub' || pathname === 'staff_transactions' || pathname === 'pos' || pathname === 'transactions' || window.location.pathname.includes('transactions_hub') || window.location.pathname.includes('staff_transactions') || window.location.pathname.includes('pos.php'));
+            if (isTxnPage || (moduleKey && (moduleKey.includes('fuel') || moduleKey.includes('meter_readings')))) return;
+
             const data = this.collectFormData(container, options);
             const storageKey = `petron_draft_${USER_ID}_${moduleKey}`;
 
@@ -290,6 +300,10 @@
          * Save draft immediately to LocalStorage and Server API
          */
         saveNow: function(moduleKey, container, options, isSync) {
+            const pathname = window.location.pathname.split('/').pop().replace(/\.php$/, '');
+            const isTxnPage = (pathname === 'staff_transactions_hub' || pathname === 'staff_transactions' || pathname === 'pos' || pathname === 'transactions' || window.location.pathname.includes('transactions_hub') || window.location.pathname.includes('staff_transactions') || window.location.pathname.includes('pos.php'));
+            if (isTxnPage || (moduleKey && (moduleKey.includes('fuel') || moduleKey.includes('meter_readings')))) return;
+
             const data = this.collectFormData(container, options);
             const storageKey = `petron_draft_${USER_ID}_${moduleKey}`;
 
@@ -344,10 +358,11 @@
          * Check for existing draft on page load and automatically restore it silently
          */
         checkForDraft: function(moduleKey, container, options) {
-            // Skip draft checking for POS transaction & cart modules on transaction pages
-            const isTxnModule = !moduleKey || moduleKey.startsWith('pos_merchandise') || moduleKey.includes('job_order') || moduleKey.includes('merchandise_transaction');
-            const isTxnPage = window.location.pathname.includes('transactions_hub') || window.location.pathname.includes('staff_transactions') || window.location.pathname.includes('pos.php');
-            if (isTxnModule && isTxnPage) {
+            // Completely disable draft checking on live transaction/encoding screens
+            const pathname = window.location.pathname.split('/').pop().replace(/\.php$/, '');
+            const isTxnPage = (pathname === 'staff_transactions_hub' || pathname === 'staff_transactions' || pathname === 'pos' || pathname === 'transactions' || window.location.pathname.includes('transactions_hub') || window.location.pathname.includes('staff_transactions') || window.location.pathname.includes('pos.php'));
+            const isTxnModule = !moduleKey || moduleKey.includes('fuel') || moduleKey.includes('meter_readings') || moduleKey.startsWith('pos_merchandise') || moduleKey.includes('job_order') || moduleKey.includes('merchandise_transaction');
+            if (isTxnPage || isTxnModule) {
                 return;
             }
 
@@ -419,10 +434,15 @@
             const pathname = window.location.pathname.split('/').pop().replace(/\.php$/, '');
             const searchParams = new URLSearchParams(window.location.search);
             const section = searchParams.get('section') || searchParams.get('tab') || searchParams.get('active_tab') || '';
-            const isTxnPage = (pathname === 'staff_transactions_hub' || pathname === 'staff_transactions' || pathname === 'pos' || pathname === 'transactions');
+            const isTxnPage = (pathname === 'staff_transactions_hub' || pathname === 'staff_transactions' || pathname === 'pos' || pathname === 'transactions' || window.location.pathname.includes('transactions_hub') || window.location.pathname.includes('staff_transactions') || window.location.pathname.includes('pos.php'));
 
             // Clean up any residual banner elements
             document.querySelectorAll('[id^="draftBanner_"], .petron-draft-status-badge').forEach(function(b) { b.remove(); });
+
+            // On live transaction and encoding screens, draft engine is completely disabled to protect live entries
+            if (isTxnPage) {
+                return;
+            }
 
             // 1. Explicit data-draft-module containers (skip on txn page)
             if (!isTxnPage) {
@@ -441,11 +461,13 @@
                 }
             }
 
-            // 3. Fuel Meter Readings encoding grid / table
-            const meterTable = document.querySelector('#encodeCard, #fuelReadingTable, table.fuel-encode-table, #fuelHistoryTable');
-            if (meterTable && !meterTable.hasAttribute('data-petron-draft-module')) {
-                const meterModuleKey = 'fuel_meter_readings' + (section ? '_' + section : '');
-                self.init(meterModuleKey, meterTable);
+            // 3. Fuel Meter Readings encoding grid / table (disabled on transaction pages to protect live encoding)
+            if (!isTxnPage) {
+                const meterTable = document.querySelector('#encodeCard, #fuelReadingTable, table.fuel-encode-table, #fuelHistoryTable');
+                if (meterTable && !meterTable.hasAttribute('data-petron-draft-module') && !meterTable.hasAttribute('data-no-draft') && meterTable.getAttribute('data-petron-draft-module') !== 'disabled') {
+                    const meterModuleKey = 'fuel_meter_readings' + (section ? '_' + section : '');
+                    self.init(meterModuleKey, meterTable);
+                }
             }
 
             // 4. Product & Pricing Management Form & Modal Mappings (Fuel, Merchandise, Services)

@@ -210,7 +210,7 @@ try {
                                 LIMIT 1
                             )
                           )
-                          AND LOWER(COALESCE(status, '')) IN ('closing_completed', 'completed', 'reported', 'approved', 'verified', 'adjusted', 'saved')
+                          AND LOWER(COALESCE(status, '')) NOT IN ('voided', 'rejected', 'cancelled', 'canceled')
                         ORDER BY transaction_date DESC, id DESC LIMIT 1
                     ");
                     $prev_stmt->execute([

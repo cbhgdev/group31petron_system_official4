@@ -364,13 +364,11 @@ try {
     // We detect current shift from session (fuel_shift_key is populated after line 318)
     // Use a two-pass approach: run after shift detection (we'll re-run below after shift is known)
     // Store a deferred closure pattern — actually set a flag, then run after shift variables are set
-    $__fetch_prev_readings = function() use ($pdo, $station_id) {
-        global $last_readings_by_pump;
-
+    $__fetch_prev_readings = function() use ($pdo, $station_id, &$last_readings_by_pump) {
         try {
             // Fetch latest present_reading (ending meter) for each pump from any valid/completed submission
             $latest_stmt = $pdo->prepare("
-                SELECT ft.id, COALESCE(fp.pump_number, ft.fuel_type) AS pump_label, ft.fuel_type, ft.present_reading
+                SELECT ft.id, COALESCE(fp.pump_number, ft.fuel_type) AS pump_label, ft.fuel_type, ft.present_reading, ft.pump_id
                 FROM fuel_transactions ft
                 LEFT JOIN fuel_pumps fp ON ft.pump_id = fp.id
                 WHERE ft.station_id = ?
@@ -384,11 +382,23 @@ try {
             foreach ($latest_rows as $row) {
                 $lbl = strtoupper(trim($row['pump_label'] ?? ''));
                 $ft_name = strtoupper(trim($row['fuel_type'] ?? ''));
+                $val = (float)$row['present_reading'];
+
                 if ($lbl !== '' && !isset($last_readings_by_pump[$lbl])) {
-                    $last_readings_by_pump[$lbl] = (float)$row['present_reading'];
+                    $last_readings_by_pump[$lbl] = $val;
+                    $last_readings_by_pump[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $lbl))] = $val;
+                    $last_readings_by_pump[str_replace(' ', '', $lbl)] = $val;
                 }
                 if ($ft_name !== '' && !isset($last_readings_by_pump[$ft_name])) {
-                    $last_readings_by_pump[$ft_name] = (float)$row['present_reading'];
+                    $last_readings_by_pump[$ft_name] = $val;
+                    $last_readings_by_pump[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $ft_name))] = $val;
+                    $last_readings_by_pump[str_replace(' ', '', $ft_name)] = $val;
+                }
+                if (!empty($row['pump_id'])) {
+                    $p_key = 'PUMP_' . (int)$row['pump_id'];
+                    if (!isset($last_readings_by_pump[$p_key])) {
+                        $last_readings_by_pump[$p_key] = $val;
+                    }
                 }
             }
         } catch (Exception $e) {}
@@ -492,7 +502,7 @@ if (!$is_closing_completed && ($current_shift_status === 'DRAFT' || empty($curre
 
 try {
     $st_readings = $pdo->prepare("
-        SELECT ft.id, COALESCE(NULLIF(fp.pump_number, ''), ft.fuel_type) AS pump_label, ft.fuel_type,
+        SELECT ft.id, COALESCE(NULLIF(fp.pump_number, ''), ft.fuel_type) AS pump_label, ft.fuel_type, ft.pump_id,
                ft.present_reading, ft.previous_reading, ft.calibration, ft.liters_sold, ft.total_amount, ft.status
         FROM fuel_transactions ft
         LEFT JOIN fuel_pumps fp ON ft.pump_id = fp.id
@@ -507,8 +517,19 @@ try {
     foreach ($saved_rows as $sr) {
         $lbl_u = strtoupper(trim($sr['pump_label'] ?? ''));
         $ft_u  = strtoupper(trim($sr['fuel_type'] ?? ''));
-        if ($lbl_u !== '') $today_saved_readings[$lbl_u] = $sr;
-        if ($ft_u !== '')  $today_saved_readings[$ft_u]  = $sr;
+        if ($lbl_u !== '') {
+            $today_saved_readings[$lbl_u] = $sr;
+            $today_saved_readings[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $lbl_u))] = $sr;
+            $today_saved_readings[str_replace(' ', '', $lbl_u)] = $sr;
+        }
+        if ($ft_u !== '') {
+            $today_saved_readings[$ft_u]  = $sr;
+            $today_saved_readings[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $ft_u))] = $sr;
+            $today_saved_readings[str_replace(' ', '', $ft_u)] = $sr;
+        }
+        if (!empty($sr['pump_id'])) {
+            $today_saved_readings['PUMP_' . (int)$sr['pump_id']] = $sr;
+        }
     }
 } catch (Exception $e) {}
 
@@ -3965,43 +3986,62 @@ setTimeout(function() {
         if (isset($_GET['fuel_tab']) && in_array($_GET['fuel_tab'], ['encode', 'readings'])) {
             $fuel_tab_default = $_GET['fuel_tab'];
         }
+        // Purge any drafts from user_form_drafts table so draft engine never restores them into fuel encoding
+        try {
+            $clean_uid = (int)($me['id'] ?? $me['user_id'] ?? 0);
+            if ($clean_uid > 0) {
+                $pdo->prepare("DELETE FROM user_form_drafts WHERE user_id = ? AND (module_key LIKE '%fuel%' OR module_key LIKE '%meter%' OR module_key LIKE '%reading%' OR module_key LIKE '%transactions_hub%')")->execute([$clean_uid]);
+            }
+        } catch (Exception $e) {}
         ?>
 
         <script>
+        // Clean and reliable input formatting - allows free numeric/decimal entry without cursor jumping
         window.formatOnInput = function(input) {
             if (!input) return;
-            var raw = input.value;
-            if (raw.indexOf('.') === -1 && raw.lastIndexOf(',') !== -1 && (raw.length - raw.lastIndexOf(',')) <= 4) {
-                var lastIdx = raw.lastIndexOf(',');
-                raw = raw.substring(0, lastIdx) + '.' + raw.substring(lastIdx + 1);
+            var val = input.value;
+            // Strip any commas
+            var clean = val.replace(/,/g, '');
+            // Strip any character that is not a digit or dot
+            clean = clean.replace(/[^\d.]/g, '');
+            // Only allow a single dot
+            var parts = clean.split('.');
+            if (parts.length > 2) {
+                clean = parts[0] + '.' + parts.slice(1).join('');
             }
-            var val = raw.replace(/[^\d.]/g, '');
-            var parts = val.split('.');
-            if (parts.length > 2) parts = [parts[0], parts.slice(1).join('')];
-            var intPart = parts[0] ? parseInt(parts[0], 10).toLocaleString('en-US') : '';
-            input.value = parts.length > 1 ? intPart + '.' + parts[1].substring(0, 3) : intPart;
+            // Max 3 decimal places
+            if (parts.length > 1 && parts[1].length > 3) {
+                clean = parts[0] + '.' + parts[1].substring(0, 3);
+            }
+            if (input.value !== clean) {
+                input.value = clean;
+            }
         };
 
         window.formatOnBlur = function(input) {
             if (!input) return;
-            let val = input.value.replace(/,/g, '').trim();
-            if (val.startsWith('.')) {
-                if (val.length > 3 && !val.includes('.', 1)) {
-                    val = val.substring(1);
-                } else {
-                    val = '0' + val;
+            var raw = (input.value || '').replace(/,/g, '').trim();
+            if (raw === '') {
+                if (input.id && input.id.indexOf('cal_') === 0) {
+                    input.value = '0.00';
                 }
+                return;
             }
-            let num = parseFloat(val);
-            if (!isNaN(num)) {
-                let dec = 2;
-                let parts = val.split('.');
-                if (parts.length > 1 && parts[1].length > 2) dec = Math.min(parts[1].length, 3);
-                input.value = num.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: 3});
-            } else if (input.id && input.id.indexOf('cal_') === 0) {
-                input.value = '0.00';
+            if (raw.startsWith('.')) raw = '0' + raw;
+            var num = parseFloat(raw);
+            if (!isNaN(num) && num >= 0) {
+                var dec = 2;
+                var parts = raw.split('.');
+                if (parts.length > 1 && parts[1].length > 2) {
+                    dec = Math.min(parts[1].length, 3);
+                }
+                input.value = num.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: 3 });
             } else {
-                input.value = '';
+                if (input.id && input.id.indexOf('cal_') === 0) {
+                    input.value = '0.00';
+                } else {
+                    input.value = '';
+                }
             }
         };
 
@@ -4010,6 +4050,8 @@ setTimeout(function() {
             if (key !== 'Enter' && key !== 'ArrowDown' && key !== 'ArrowUp') {
                 return;
             }
+            e.preventDefault();
+            e.stopPropagation();
 
             var currentId = input.id || '';
             var m = currentId.match(/^(beginning|ending|cal)_(.+)$/);
@@ -4018,55 +4060,54 @@ setTimeout(function() {
             var inputType = m[1]; // 'beginning', 'ending', or 'cal'
             var ftId = m[2];
 
+            if (typeof window.formatOnBlur === 'function') window.formatOnBlur(input);
+            if (typeof window.updateFuelCalc === 'function') window.updateFuelCalc(ftId);
+
             var rows = Array.from(document.querySelectorAll('tr[id^="fuelRow_"]'));
             var currentRow = input.closest('tr');
             var currentRowIdx = rows.indexOf(currentRow);
-
             var targetInput = null;
 
-            if (key === 'Enter' || key === 'ArrowDown') {
-                e.preventDefault();
-                if (typeof window.formatOnBlur === 'function') window.formatOnBlur(input);
-                if (typeof window.updateFuelCalc === 'function') window.updateFuelCalc(ftId);
-
-                // Move VERTICALLY DOWN in the SAME column
-                if (currentRowIdx !== -1) {
-                    for (var i = currentRowIdx + 1; i < rows.length; i++) {
-                        var nextFtId = (rows[i].id || '').replace('fuelRow_', '');
-                        var candidate = document.getElementById(inputType + '_' + nextFtId);
-                        if (candidate && !candidate.readOnly && candidate.offsetParent !== null) {
-                            targetInput = candidate;
-                            break;
-                        }
-                    }
-                }
-
-                // If at the end of the column on Enter, wrap to next column's first editable input
-                if (!targetInput && key === 'Enter') {
-                    var nextType = (inputType === 'beginning') ? 'ending' : ((inputType === 'ending') ? 'cal' : null);
-                    if (nextType) {
-                        for (var j = 0; j < rows.length; j++) {
-                            var wrapFtId = (rows[j].id || '').replace('fuelRow_', '');
-                            var wrapCandidate = document.getElementById(nextType + '_' + wrapFtId);
-                            if (wrapCandidate && !wrapCandidate.readOnly && wrapCandidate.offsetParent !== null) {
-                                targetInput = wrapCandidate;
+            if (key === 'Enter') {
+                // Natural workflow: Beginning -> Ending -> Calibration -> Next pump row
+                if (inputType === 'beginning') {
+                    targetInput = document.getElementById('ending_' + ftId);
+                } else if (inputType === 'ending') {
+                    targetInput = document.getElementById('cal_' + ftId);
+                } else if (inputType === 'cal') {
+                    if (currentRowIdx !== -1 && currentRowIdx < rows.length - 1) {
+                        for (var i = currentRowIdx + 1; i < rows.length; i++) {
+                            var nextFtId = (rows[i].id || '').replace('fuelRow_', '');
+                            var begInput = document.getElementById('beginning_' + nextFtId);
+                            var endInput = document.getElementById('ending_' + nextFtId);
+                            if (begInput && !begInput.readOnly && begInput.offsetParent !== null) {
+                                targetInput = begInput;
+                                break;
+                            } else if (endInput && !endInput.readOnly && !endInput.disabled && endInput.offsetParent !== null) {
+                                targetInput = endInput;
                                 break;
                             }
                         }
                     }
                 }
+            } else if (key === 'ArrowDown') {
+                if (currentRowIdx !== -1 && currentRowIdx < rows.length - 1) {
+                    for (var r = currentRowIdx + 1; r < rows.length; r++) {
+                        var downFtId = (rows[r].id || '').replace('fuelRow_', '');
+                        var candDown = document.getElementById(inputType + '_' + downFtId);
+                        if (candDown && !candDown.readOnly && !candDown.disabled && candDown.offsetParent !== null) {
+                            targetInput = candDown;
+                            break;
+                        }
+                    }
+                }
             } else if (key === 'ArrowUp') {
-                e.preventDefault();
-                if (typeof window.formatOnBlur === 'function') window.formatOnBlur(input);
-                if (typeof window.updateFuelCalc === 'function') window.updateFuelCalc(ftId);
-
-                // Move VERTICALLY UP in the SAME column
                 if (currentRowIdx > 0) {
-                    for (var k = currentRowIdx - 1; k >= 0; k--) {
-                        var prevFtId = (rows[k].id || '').replace('fuelRow_', '');
-                        var candidateUp = document.getElementById(inputType + '_' + prevFtId);
-                        if (candidateUp && !candidateUp.readOnly && candidateUp.offsetParent !== null) {
-                            targetInput = candidateUp;
+                    for (var u = currentRowIdx - 1; u >= 0; u--) {
+                        var upFtId = (rows[u].id || '').replace('fuelRow_', '');
+                        var candUp = document.getElementById(inputType + '_' + upFtId);
+                        if (candUp && !candUp.readOnly && !candUp.disabled && candUp.offsetParent !== null) {
+                            targetInput = candUp;
                             break;
                         }
                     }
@@ -4081,25 +4122,6 @@ setTimeout(function() {
                 if (typeof targetInput.scrollIntoView === 'function') {
                     targetInput.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
                 }
-            }
-        };
-
-        window.switchFuelSubTab = function(tab) {
-            var isReadings = (tab === 'readings');
-            var encodeCard  = document.getElementById('encodeCard');
-            var todayCard   = document.getElementById('todayEntriesCard');
-            var encodeBtn   = document.getElementById('fuelSubTabBtn_encode');
-            var readingsBtn = document.getElementById('fuelSubTabBtn_readings');
-            if (encodeCard) encodeCard.style.display = isReadings ? 'none' : 'block';
-            if (todayCard)  todayCard.style.display  = isReadings ? 'block' : 'none';
-            if (encodeBtn)  encodeBtn.className  = 'txn-subtab-btn blue ' + (isReadings ? 'inactive' : 'active');
-            if (readingsBtn) readingsBtn.className = 'txn-subtab-btn blue ' + (isReadings ? 'active' : 'inactive');
-            if (isReadings && typeof refreshTodayEntries === 'function') refreshTodayEntries();
-            if (window.history && window.history.replaceState) {
-                var url = new URL(window.location.href);
-                if (isReadings) url.searchParams.set('fuel_tab', 'readings');
-                else url.searchParams.delete('fuel_tab');
-                window.history.replaceState(null, '', url);
             }
         };
 
@@ -4457,7 +4479,7 @@ setTimeout(function() {
             </button>
         </div>
 
-        <div class="txn-card" style="margin-bottom:20px;" id="encodeCard">
+        <div class="txn-card" style="margin-bottom:20px;" id="encodeCard" data-petron-draft-module="disabled" data-no-draft="1">
 
             <?php /* ── Hidden forms for each fuel row — placed OUTSIDE the table.
                         Inputs inside the table rows use form="fuelForm_..." to associate.
@@ -4549,7 +4571,7 @@ setTimeout(function() {
             <form id="fuelForm_<?= $p_row['ft_id'] ?>"
                   method="POST"
                   action="api_fuel_readings.php"
-                  onsubmit="return submitFuelCard(event, '<?= $p_row['ft_id'] ?>')"
+                  onsubmit="event.preventDefault(); return false;"
                   style="display:none;">
                 <input type="hidden" name="action"           value="encode_reading">
                 <input type="hidden" name="api_token"        value="<?= htmlspecialchars($_api_token) ?>">
@@ -4647,17 +4669,23 @@ setTimeout(function() {
                             <div id="cardMsg_<?= $ft_id ?>" class="fet-row-msg"></div>
                         </td>
 
-                        <!-- BEGINNING Column — Auto-carried over from previous Ending Reading (Strictly Read-Only) -->
+                        <!-- BEGINNING Column — Auto if previous reading exists, Manual if first entry -->
+                        <?php $is_manual_beginning = ($pump_prev_reading == 0.00); ?>
                         <td style="border:1px solid #e2e8f0;padding:6px 6px;">
                             <input type="text"
                                    form="fuelForm_<?= $ft_id ?>"
                                    name="beginning_reading"
                                    id="beginning_<?= $ft_id ?>"
-                                   style="width:100%;box-sizing:border-box;padding:7px 8px;font-size:12.5px;height:34px;border:1.5px solid #86efac;border-radius:6px;text-align:right;background:#f0fdf4;font-weight:700;font-family:monospace;color:#15803d;cursor:not-allowed;"
-                                   value="<?= number_format((float)$pump_prev_reading, 2, '.', ',') ?>"
-                                   readonly
-                                   title="Beginning reading: <?= number_format((float)$pump_prev_reading, 2, '.', ',') ?> (Auto-carried over from latest Ending Reading. Read-only)."
+                                   style="width:100%;box-sizing:border-box;padding:7px 8px;font-size:12.5px;height:34px;border:1.5px solid <?= $is_manual_beginning ? '#2563eb' : '#86efac' ?>;border-radius:6px;text-align:right;background:<?= $is_manual_beginning ? '#ffffff' : '#f0fdf4' ?>;font-weight:700;font-family:monospace;color:<?= $is_manual_beginning ? '#0f172a' : '#15803d' ?>;<?= $is_manual_beginning ? '' : 'cursor:not-allowed;' ?>"
+                                   value="<?= $is_manual_beginning ? '' : number_format((float)$pump_prev_reading, 2, '.', ',') ?>"
+                                   <?= $is_manual_beginning ? 'placeholder="0.00" required' : 'readonly' ?>
+                                   autocomplete="off"
+                                   <?= $is_manual_beginning ? 'oninput="formatOnInput(this); updateFuelCalc(\'' . $ft_id . '\')" onblur="formatOnBlur(this); updateFuelCalc(\'' . $ft_id . '\')" onkeydown="handleMeterKeydown(event, this)" onfocus="this.select()"' : '' ?>
+                                   title="<?= $is_manual_beginning ? 'Manual: Enter the Beginning meter reading for first entry of the shift.' : 'Auto: Beginning reading carried over from latest Ending Reading (read-only).' ?>"
                                    data-pump="<?= htmlspecialchars($display_name) ?>">
+                            <div id="beginning_badge_<?= $ft_id ?>" style="font-size:10px;color:<?= $is_manual_beginning ? '#2563eb' : '#15803d' ?>;font-weight:600;margin-top:2px;">
+                                <?= $is_manual_beginning ? '✏ Manual Entry' : '🔒 Auto' ?>
+                            </div>
                         </td>
 
                         <!-- ENDING Column * -->
@@ -4761,11 +4789,11 @@ setTimeout(function() {
             (function() {
                 'use strict';
 
-                // Immediately purge any stale/corrupted drafts from localStorage for fuel meter readings
+                // Immediately purge any stale/corrupted drafts from localStorage for fuel meter readings & transaction hub
                 try {
                     for (var i = localStorage.length - 1; i >= 0; i--) {
                         var lk = localStorage.key(i);
-                        if (lk && (lk.indexOf('fuel_meter_readings') !== -1 || (localStorage.getItem(lk) && localStorage.getItem(lk).indexOf('Γé') !== -1))) {
+                        if (lk && (lk.indexOf('fuel') !== -1 || lk.indexOf('meter') !== -1 || lk.indexOf('reading') !== -1 || lk.indexOf('transactions_hub') !== -1 || (localStorage.getItem(lk) && localStorage.getItem(lk).indexOf('Γé') !== -1))) {
                             localStorage.removeItem(lk);
                         }
                     }
@@ -5188,32 +5216,7 @@ setTimeout(function() {
             }
         }
 
-        // Helper functions for dynamic comma-formatting as user types
-        function formatOnInput(input) {
-            var val = input.value.replace(/[^\d.]/g, '');
-            var parts = val.split('.');
-            if (parts.length > 2) parts = [parts[0], parts.slice(1).join('')];
-            var intPart = parts[0] ? parseInt(parts[0], 10).toLocaleString('en-US') : '';
-            input.value = parts.length > 1 ? intPart + '.' + parts[1] : intPart;
-        }
-        window.formatOnInput = formatOnInput;
-
-        function formatOnBlur(input) {
-            if (!input) return;
-            let val = input.value.replace(/,/g, '');
-            let num = parseFloat(val);
-            if (!isNaN(num)) {
-                let dec = 2;
-                let parts = val.split('.');
-                if (parts.length > 1 && parts[1].length > 2) dec = Math.min(parts[1].length, 3);
-                input.value = num.toLocaleString('en-US', {minimumFractionDigits: dec, maximumFractionDigits: 3});
-            } else if (input.id && input.id.indexOf('cal_') === 0) {
-                input.value = '0.00';
-            } else {
-                input.value = '';
-            }
-        }
-        window.formatOnBlur = formatOnBlur;
+        // formatOnInput and formatOnBlur are defined authoritatively at the top of the fuel section
 
         function formatAllFuelInputs() {
             document.querySelectorAll('input[id^="beginning_"], input[id^="ending_"], input[id^="cal_"]').forEach(function(inp) {
@@ -5350,8 +5353,13 @@ setTimeout(function() {
                         beginningEl.style.background = '#f0fdf4';
                         beginningEl.style.fontWeight = '700';
                         beginningEl.style.color      = '#15803d';
-                        beginningEl.style.border     = '1px solid #86efac';
                         beginningEl.style.cursor     = 'not-allowed';
+                        beginningEl.removeAttribute('required');
+                        const badgeEl = document.getElementById('beginning_badge_' + ftId);
+                        if (badgeEl) {
+                            badgeEl.style.color = '#15803d';
+                            badgeEl.innerHTML = '🔒 Auto';
+                        }
                     }
 
                     // Clear ending and computed fields
@@ -5631,8 +5639,14 @@ setTimeout(function() {
                             beginningEl.style.background = '#f0fdf4';
                             beginningEl.style.fontWeight = '700';
                             beginningEl.style.color      = '#15803d';
-                            beginningEl.style.border     = '1px solid #86efac';
+                            beginningEl.style.border     = '1.5px solid #86efac';
                             beginningEl.style.cursor     = 'not-allowed';
+                            beginningEl.removeAttribute('required');
+                            const badgeEl = document.getElementById('beginning_badge_' + ftId);
+                            if (badgeEl) {
+                                badgeEl.style.color = '#15803d';
+                                badgeEl.innerHTML = '🔒 Auto';
+                            }
                         }
                         if (endingEl)    endingEl.value    = '';
                         if (calEl)       calEl.value       = '0.00';

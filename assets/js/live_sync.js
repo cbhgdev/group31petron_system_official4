@@ -174,12 +174,28 @@
     // ── Dynamic DOM Fragment Refreshing (No Page Reload) ───────────
     async function refreshDynamicPageFragments() {
         if (isSyncingData || document.hidden) return;
+
+        // Never interrupt user while focused or typing in any form input
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) {
+            return;
+        }
+
+        // Never perform background DOM fragment replacement while staff is on fuel encode screen
+        const encodeCard = document.getElementById('encodeCard');
+        if (encodeCard && encodeCard.style.display !== 'none') {
+            return;
+        }
+
         isSyncingData = true;
 
         try {
-            // 1. If page has dedicated refresh routines, invoke them first
+            // 1. If page has dedicated refresh routines, invoke them first ONLY if viewing history
             if (typeof window.loadTodayEntries === 'function') {
-                try { window.loadTodayEntries(); } catch(e) {}
+                const todayCard = document.getElementById('todayEntriesCard');
+                if (todayCard && todayCard.style.display !== 'none') {
+                    try { window.loadTodayEntries(true, true); } catch(e) {}
+                }
             }
             if (typeof window.loadJobOrderTracker === 'function') {
                 try { window.loadJobOrderTracker(); } catch(e) {}
