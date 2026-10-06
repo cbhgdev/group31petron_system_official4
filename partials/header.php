@@ -5079,14 +5079,14 @@ require_once __DIR__ . '/rbac_menu.php';
             <?php if(in_array($role, ['staff','admin','manager','superadmin','developer']) && $show_notifications_widget): ?>
             <div class="notification-bell" id="notificationBell" onclick="petronToggleNotif(event)" style="z-index: 2147483645 !important; pointer-events: auto !important; position: relative !important; cursor: pointer !important;">
                 <i class="fas fa-bell" style="pointer-events: none !important;"></i>
-                <span class="badge" id="notificationBadge" data-server-count="<?php echo (int)$header_unread_count; ?>" style="display: <?php echo ($header_unread_count > 0 || !empty($header_notifications)) ? 'inline-flex' : 'none'; ?>; background: <?php echo $header_unread_count > 0 ? '#dc2626' : '#64748b'; ?> !important; pointer-events: none !important;"><?php echo $header_unread_count > 0 ? ($header_unread_count > 99 ? '99+' : (int)$header_unread_count) : '0'; ?></span>
+                <span class="badge" id="notificationBadge" data-server-count="<?php echo (int)$header_unread_count; ?>" style="display: <?php echo $header_unread_count > 0 ? 'inline-flex' : 'none'; ?>; background: #dc2626 !important; pointer-events: none !important;"><?php echo $header_unread_count > 99 ? '99+' : (int)$header_unread_count; ?></span>
 
                 <div class="notif-dropdown" id="notificationDropdown">
                     <div class="notif-dropdown-header">
                         <div style="display:flex; align-items:center; gap:8px;">
                             <span>Notifications</span>
                             <span class="notif-count-pill" id="notifDropdownBadge" style="display:inline-flex; align-items:center; justify-content:center; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; background:<?php echo $header_unread_count > 0 ? '#dc2626' : '#002F6C'; ?>; color:#ffffff; letter-spacing:0.3px;">
-                                <?php echo $header_unread_count > 0 ? ($header_unread_count . ' New') : (count($header_notifications) . ' Total'); ?>
+                                <?php echo $header_unread_count > 0 ? ($header_unread_count . ' New') : '0 New'; ?>
                             </span>
                         </div>
                         <div class="notif-header-actions">
@@ -6632,7 +6632,6 @@ require_once __DIR__ . '/rbac_menu.php';
 
             function updateBadge(count, categoryCounts, totalCount) {
                 const badge = document.getElementById('notificationBadge');
-                const tot = (typeof totalCount !== 'undefined') ? totalCount : document.querySelectorAll('#notificationList .notif-item').length;
                 if (badge) {
                     if (window.petronSystemSettings && window.petronSystemSettings.enableSystemNotifications === false) {
                         badge.style.display = 'none';
@@ -6643,13 +6642,10 @@ require_once __DIR__ . '/rbac_menu.php';
                         badge.style.display = 'inline-flex';
                         badge.style.setProperty('background', '#dc2626', 'important');
                         badge.title = `${count} unread notification(s)`;
-                    } else if (tot > 0) {
-                        badge.textContent = '0';
-                        badge.style.display = 'inline-flex';
-                        badge.style.setProperty('background', '#64748b', 'important');
-                        badge.title = `0 unread (${tot} total notifications)`;
                     } else {
+                        badge.textContent = '';
                         badge.style.display = 'none';
+                        badge.title = 'No unread notifications';
                     }
                 }
                 const ddBadge = document.getElementById('notifDropdownBadge');
@@ -6658,7 +6654,7 @@ require_once __DIR__ . '/rbac_menu.php';
                         ddBadge.textContent = `${count} New`;
                         ddBadge.style.background = '#dc2626';
                     } else {
-                        ddBadge.textContent = tot > 0 ? `${tot} Total` : '0 Total';
+                        ddBadge.textContent = '0 New';
                         ddBadge.style.background = '#002F6C';
                     }
                 }
@@ -6715,9 +6711,11 @@ require_once __DIR__ . '/rbac_menu.php';
                         cur = Math.max(0, cur - 1);
                         if (cur > 0) {
                             badge.textContent = cur > 99 ? '99+' : cur;
+                            badge.style.display = 'inline-flex';
+                            badge.style.setProperty('background', '#dc2626', 'important');
                         } else {
-                            badge.textContent = '0';
-                            badge.style.setProperty('background', '#64748b', 'important');
+                            badge.textContent = '';
+                            badge.style.display = 'none';
                         }
                     }
                 })();
@@ -6741,14 +6739,31 @@ require_once __DIR__ . '/rbac_menu.php';
             if (markAllBtn) {
                 markAllBtn.addEventListener('click', async function (e) {
                     e.stopPropagation();
+                    // 1. Optimistic UI: immediately clear bell badge and update dropdown header
+                    const badge = document.getElementById('notificationBadge');
+                    if (badge) {
+                        badge.textContent = '';
+                        badge.style.display = 'none';
+                    }
+                    const ddBadge = document.getElementById('notifDropdownBadge');
+                    if (ddBadge) {
+                        ddBadge.textContent = '0 New';
+                        ddBadge.style.background = '#002F6C';
+                    }
+                    // Immediately remove unread classes and indicator dots
+                    document.querySelectorAll('#notificationList .notif-item').forEach(function(el) {
+                        el.classList.remove('unread');
+                        el.style.backgroundColor = 'transparent';
+                        const dot = el.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
+                        if (dot) dot.remove();
+                    });
+
                     try {
                         const res = await fetch(API_LIST + '?action=mark_all_read', { method: 'POST', credentials: 'same-origin' });
                         const data = await res.json();
                         if (data && data.success) {
                             updateBadge(0, data.category_counts, data.total_count);
-                            const countText = (data.marked_count && data.marked_count > 0)
-                                ? `${data.marked_count} notification(s) marked as read`
-                                : 'All notifications marked as read';
+                            const countText = 'All notifications marked as read';
                             if (typeof window.showGlobalToast === 'function') {
                                 window.showGlobalToast(countText, 'success');
                             } else if (typeof window.showToast === 'function') {
@@ -6902,20 +6917,16 @@ require_once __DIR__ . '/rbac_menu.php';
 
             function updateBadge(count, categoryCounts, totalCount) {
                 const badge = document.getElementById('notificationBadge');
-                const tot = (typeof totalCount !== 'undefined') ? totalCount : document.querySelectorAll('#notificationList .notif-item').length;
                 if (badge) {
                     if (count > 0) {
                         badge.textContent = count > 99 ? '99+' : count;
                         badge.style.display = 'inline-flex';
                         badge.style.setProperty('background', '#dc2626', 'important');
                         badge.title = `${count} unread notification(s)`;
-                    } else if (tot > 0) {
-                        badge.textContent = '0';
-                        badge.style.display = 'inline-flex';
-                        badge.style.setProperty('background', '#64748b', 'important');
-                        badge.title = `0 unread (${tot} total notifications)`;
                     } else {
+                        badge.textContent = '';
                         badge.style.display = 'none';
+                        badge.title = 'No unread notifications';
                     }
                 }
                 const ddBadge = document.getElementById('notifDropdownBadge');
@@ -6924,7 +6935,7 @@ require_once __DIR__ . '/rbac_menu.php';
                         ddBadge.textContent = `${count} New`;
                         ddBadge.style.background = '#dc2626';
                     } else {
-                        ddBadge.textContent = tot > 0 ? `${tot} Total` : '0 Total';
+                        ddBadge.textContent = '0 New';
                         ddBadge.style.background = '#002F6C';
                     }
                 }
@@ -7025,9 +7036,11 @@ require_once __DIR__ . '/rbac_menu.php';
                             cur = Math.max(0, cur - 1);
                             if (cur > 0) {
                                 badge.textContent = cur > 99 ? '99+' : cur;
+                                badge.style.display = 'inline-flex';
+                                badge.style.setProperty('background', '#dc2626', 'important');
                             } else {
-                                badge.textContent = '0';
-                                badge.style.setProperty('background', '#64748b', 'important');
+                                badge.textContent = '';
+                                badge.style.display = 'none';
                             }
                         }
                         const item = document.querySelector('[onclick*="staffMarkRead(' + id + ')"]');
@@ -7119,14 +7132,31 @@ require_once __DIR__ . '/rbac_menu.php';
             if (markAllBtn) {
                 markAllBtn.addEventListener('click', async function (e) {
                     e.stopPropagation();
+                    // 1. Optimistic UI: immediately clear bell badge and update dropdown header
+                    const badge = document.getElementById('notificationBadge');
+                    if (badge) {
+                        badge.textContent = '';
+                        badge.style.display = 'none';
+                    }
+                    const ddBadge = document.getElementById('notifDropdownBadge');
+                    if (ddBadge) {
+                        ddBadge.textContent = '0 New';
+                        ddBadge.style.background = '#002F6C';
+                    }
+                    // Immediately remove unread classes and indicator dots
+                    document.querySelectorAll('#notificationList .notif-item').forEach(function(el) {
+                        el.classList.remove('unread');
+                        el.style.backgroundColor = 'transparent';
+                        const dot = el.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
+                        if (dot) dot.remove();
+                    });
+
                     try {
                         const res = await fetch(API_LIST + '?action=mark_all_read', { method: 'POST', credentials: 'same-origin' });
                         const data = await res.json();
                         if (data && data.success) {
                             updateBadge(0, data.category_counts, data.total_count);
-                            const countText = (data.marked_count && data.marked_count > 0)
-                                ? `${data.marked_count} notification(s) marked as read`
-                                : 'All notifications marked as read';
+                            const countText = 'All notifications marked as read';
                             if (typeof window.showGlobalToast === 'function') {
                                 window.showGlobalToast(countText, 'success');
                             } else if (typeof window.showToast === 'function') {
@@ -7353,6 +7383,7 @@ require_once __DIR__ . '/rbac_menu.php';
             }
         }, 4500);
     };
+    window.showToast = window.showGlobalToast;
 
     // ── SYSTEM-WIDE OVERRIDE OF NATIVE BROWSER ALERT & CONFIRM ─────────────────
     // Replaces browser "localhost says" dialogs with smooth top-right toast banners

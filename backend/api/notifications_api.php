@@ -415,6 +415,27 @@ try {
                 echo json_encode(['success' => true]);
                 exit;
 
+            case 'mark_all_read':
+                $stmt = $pdo->prepare("UPDATE notifications SET status = 'read', read_at = NOW() WHERE user_id = ? AND status = 'unread'");
+                $stmt->execute([$user_id]);
+                $marked_count = $stmt->rowCount();
+                unset($_SESSION['notif_bell_snoozed_' . $user_id]);
+                $tot_stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ?");
+                $tot_stmt->execute([$user_id]);
+                $total_count = (int)$tot_stmt->fetchColumn();
+                $myStationId = (int)($me['station_id'] ?? 0);
+                $cat_counts_mar = get_category_unread_counts($pdo, $user_id, $role, $myStationId);
+                $cat_counts_mar['notifications'] = 0;
+                echo json_encode([
+                    'success'           => true,
+                    'marked_count'      => $marked_count,
+                    'unread_count'      => 0,
+                    'bell_unread_count' => 0,
+                    'total_count'       => $total_count,
+                    'category_counts'   => $cat_counts_mar,
+                ]);
+                exit;
+
             case 'unread_count':
                 $myStationId  = (int)(user_station_id() ?? 0);
                 if (!in_array($role, ['superadmin', 'developer'])) {
@@ -644,6 +665,7 @@ try {
                 );
                 $stmt->execute([$user_id]);
                 $marked_count = $stmt->rowCount();
+                unset($_SESSION['notif_bell_snoozed_' . $user_id]);
 
                 $tot_stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ?");
                 $tot_stmt->execute([$user_id]);

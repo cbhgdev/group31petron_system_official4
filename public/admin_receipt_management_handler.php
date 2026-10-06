@@ -113,7 +113,7 @@ if ($action === 'save_template') {
 
         $cols_needed = [
             'branch_name' => "VARCHAR(150) DEFAULT ''",
-            'atp_no' => "VARCHAR(100) DEFAULT 'BIR-ATP-2026-00984712'",
+            'atp_no' => "VARCHAR(100) DEFAULT ''",
             'min_serial' => "VARCHAR(100) DEFAULT ''",
             'footer_title' => "VARCHAR(150) DEFAULT 'Official Sales Invoice / Receipt'",
             'show_jo_details' => "TINYINT(1) NOT NULL DEFAULT 1",

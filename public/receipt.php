@@ -327,8 +327,8 @@ if ($type === 'job_order') {
                    COALESCE(u.username, 'Staff') AS staff_username,
                    COALESCE(s.name, 'Petron Station') AS station_name,
                    COALESCE(s.location, '') AS station_location,
-                   COALESCE(s.address, 'Vamenta Blvd., Carmen, CDO') AS station_address,
-                   COALESCE(s.vat_tin, '248-719-305-00000') AS station_vat_tin
+                   COALESCE(s.address, '') AS station_address,
+                   COALESCE(s.vat_tin, '') AS station_vat_tin
             FROM merchandise_transactions mt
             LEFT JOIN users u ON mt.staff_id = u.id
             LEFT JOIN stations s ON mt.station_id = s.id
@@ -445,8 +445,8 @@ if (!$sale && !empty($id)) {
                    COALESCE(u.username, 'Staff') AS staff_username,
                    COALESCE(s.name, 'Petron Station') AS station_name,
                    COALESCE(s.location, '') AS station_location,
-                   COALESCE(s.address, 'Vamenta Blvd., Carmen, CDO') AS station_address,
-                   COALESCE(s.vat_tin, '248-719-305-00000') AS station_vat_tin
+                   COALESCE(s.address, '') AS station_address,
+                   COALESCE(s.vat_tin, '') AS station_vat_tin
             FROM merchandise_transactions mt
             LEFT JOIN users u ON mt.staff_id = u.id
             LEFT JOIN stations s ON mt.station_id = s.id
@@ -599,8 +599,8 @@ if (!$sale && !empty($id)) {
                        COALESCE(u.name, 'Staff') AS staff_name,
                        COALESCE(s.name, 'Petron Station') AS station_name,
                        COALESCE(s.location, '') AS station_location,
-                       COALESCE(s.address, 'Vamenta Blvd., Carmen, CDO') AS station_address,
-                       COALESCE(s.vat_tin, '236-002-207-0000') AS station_vat_tin
+                       COALESCE(s.address, '') AS station_address,
+                       COALESCE(s.vat_tin, '') AS station_vat_tin
                 FROM fuel_transactions ft
                 LEFT JOIN users u ON ft.staff_id = u.id
                 LEFT JOIN stations s ON ft.station_id = s.id
@@ -797,25 +797,46 @@ if (preg_match('/(station management|blvd|street|st\.|road|city|misamis)/i', $_r
     $_raw_sn = 'PETRON CORPORATION';
 }
 
-$station_name = !empty($receipt_cfg['station_header'])
-    ? $receipt_cfg['station_header']
+$cfg_header = trim($receipt_cfg['station_header'] ?? '');
+if (in_array($cfg_header, ['PETRON STATION MANAGEMENT SYSTEM', 'PETRON CORPORATION'], true)) {
+    $cfg_header = '';
+}
+$station_name = !empty($cfg_header)
+    ? $cfg_header
     : ($_raw_sn ?: 'PETRON CORPORATION');
 
 $branch_name  = !empty($receipt_cfg['branch_name']) ? $receipt_cfg['branch_name'] : '';
 
-$station_addr = !empty($receipt_cfg['station_address'])
-    ? $receipt_cfg['station_address']
+$cfg_address = trim($receipt_cfg['station_address'] ?? '');
+if (stripos($cfg_address, 'Vamenta Blvd') !== false) {
+    $cfg_address = '';
+}
+$station_addr = !empty($cfg_address)
+    ? $cfg_address
     : ($sale['station_address'] ?? '');
 
 $station_contact = !empty($receipt_cfg['station_contact']) ? $receipt_cfg['station_contact'] : '';
 
-$vat_tin      = !empty($receipt_cfg['station_vat_tin'])
-    ? $receipt_cfg['station_vat_tin']
+$cfg_vat_tin = trim($receipt_cfg['station_vat_tin'] ?? '');
+if ($cfg_vat_tin === '248-719-305-00000') {
+    $cfg_vat_tin = '';
+}
+$vat_tin      = !empty($cfg_vat_tin)
+    ? $cfg_vat_tin
     : ($sale['station_vat_tin'] ?? '');
 
 $vat_reg_no   = 'Registered';
-$atp_no       = !empty($receipt_cfg['atp_no']) ? $receipt_cfg['atp_no'] : '';
-$min_serial   = !empty($receipt_cfg['min_serial']) ? $receipt_cfg['min_serial'] : '';
+$cfg_atp      = trim($receipt_cfg['atp_no'] ?? '');
+if ($cfg_atp === 'BIR-ATP-2026-00984712') {
+    $cfg_atp = '';
+}
+$atp_no       = $cfg_atp;
+
+$cfg_min      = trim($receipt_cfg['min_serial'] ?? '');
+if ($cfg_min === 'MIN-2026-009812') {
+    $cfg_min = '';
+}
+$min_serial   = $cfg_min;
 
 $show_vat             = !isset($receipt_cfg['show_vat']) || (int)$receipt_cfg['show_vat'] === 1;
 $show_payment_details = !isset($receipt_cfg['show_payment_details']) || (int)$receipt_cfg['show_payment_details'] === 1;
@@ -882,8 +903,19 @@ $pm_lc     = strtolower($norm_pay_info['payment_type'] ?? $pay_method);
 $job_order = $sale['job_order'] ?? null;
 $has_jo    = !empty($job_order);
 
-// Logo path - try database first
-$logo = '/group31petron_system_official4/assets/img/Petron Logo.png';
+// Logo path - robust dynamic resolution for both local subdirectories and production domains
+$logo = '';
+$default_logo_relative = 'assets/img/Petron Logo.png';
+
+// Determine base web path (e.g. '/group31petron_system_official4/' or '/')
+$script_name = $_SERVER['SCRIPT_NAME'] ?? '';
+$app_web_root = '/';
+if (stripos($script_name, '/group31petron_system_official4/') !== false) {
+    $app_web_root = '/group31petron_system_official4/';
+}
+
+$project_root_dir = realpath(__DIR__ . '/..') ?: dirname(__DIR__);
+
 try {
     $myStationId = 0;
     if (isset($sale['station_id'])) {
@@ -894,22 +926,40 @@ try {
         $myStationId = (int)$txn['station_id'];
     }
     
-    $logo_stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'system_logo' AND station_id = ?");
-    $logo_stmt->execute([$myStationId]);
-    $db_logo = $logo_stmt->fetchColumn();
-    
-    if (!$db_logo && $myStationId > 0) {
-        $logo_stmt->execute([0]);
-        $db_logo = $logo_stmt->fetchColumn();
-    }
-    
-    if ($db_logo) {
-        $logo = '/group31petron_system_official4/' . $db_logo;
-    }
+    $candidate_logo = '';
     if (!empty($receipt_cfg['logo_path'])) {
-        $logo = '/group31petron_system_official4/' . ltrim($receipt_cfg['logo_path'], '/');
+        $candidate_logo = ltrim($receipt_cfg['logo_path'], '/');
+    }
+    
+    if (empty($candidate_logo)) {
+        $logo_stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'system_logo' AND station_id = ?");
+        $logo_stmt->execute([$myStationId]);
+        $db_logo = $logo_stmt->fetchColumn();
+        
+        if (!$db_logo && $myStationId > 0) {
+            $logo_stmt->execute([0]);
+            $db_logo = $logo_stmt->fetchColumn();
+        }
+        if ($db_logo) {
+            $candidate_logo = ltrim($db_logo, '/');
+        }
+    }
+    
+    // Check if custom candidate logo actually exists on disk
+    if ($candidate_logo) {
+        // Strip out redundant subfolder prefix if present in the database value
+        $clean_candidate = preg_replace('#^group31petron_system_official4/#i', '', $candidate_logo);
+        $candidate_file = $project_root_dir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $clean_candidate);
+        if (file_exists($candidate_file) && is_file($candidate_file)) {
+            $logo = rtrim($app_web_root, '/') . '/' . ltrim($clean_candidate, '/');
+        }
     }
 } catch (Exception $e) {}
+
+// Fallback to default Petron Logo if no valid custom logo exists
+if (empty($logo)) {
+    $logo = rtrim($app_web_root, '/') . '/' . $default_logo_relative;
+}
 
 // ── QR Code: encode verify URL ───────────────────────────────────────────────
 $qr_customer_disp = $customer !== 'Walk-in Customer' ? $customer : 'Walk-in';
@@ -1308,9 +1358,10 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
 
   <!-- ══ HEADER ══════════════════════════════════════════════════════════════ -->
   <div class="jo-r-head">
-    <img src="<?php echo $logo; ?>"
+    <img src="<?php echo htmlspecialchars($logo); ?>"
          alt="PETRON LOGO"
          class="jo-r-logo-img"
+         onerror="if(this.dataset.tried!=='1'){this.dataset.tried='1';this.src='../assets/img/Petron Logo.png';}else if(this.dataset.tried==='1'){this.dataset.tried='2';this.src='../assets/img/petron_logo.png';}else{this.style.display='none';}"
          style="width:105px;height:auto;display:block;margin:0 auto 6px;object-fit:contain;">
     <div class="jo-r-brand"><?php echo htmlspecialchars($station_name); ?></div>
     <div class="jo-r-branch"><?php echo htmlspecialchars($station_addr); ?></div>

@@ -22,15 +22,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt = $pdo->prepare("UPDATE notifications SET status = 'read', read_at = NOW() WHERE user_id = ? AND status = 'unread'");
         $stmt->execute([$me['id']]);
         unset($_SESSION['notif_bell_snoozed_' . (int)$me['id']]);
-        $notice = '<i class="fas fa-check-circle"></i> All notifications marked as read.';
+        $notice = 'All notifications marked as read.';
     } elseif ($action === 'mark_read' && $notif_id > 0) {
         $stmt = $pdo->prepare("UPDATE notifications SET status = 'read', read_at = NOW() WHERE id = ? AND user_id = ?");
         $stmt->execute([$notif_id, $me['id']]);
-        $notice = '<i class="fas fa-check-circle"></i> Notification marked as read.';
+        $notice = 'Notification marked as read.';
     } elseif ($action === 'archive' && $notif_id > 0) {
         $stmt = $pdo->prepare("UPDATE notifications SET status = 'archived' WHERE id = ? AND user_id = ?");
         $stmt->execute([$notif_id, $me['id']]);
-        $notice = '<i class="fas fa-box"></i> Notification moved to archive.';
+        $notice = 'Notification moved to archive.';
     }
 }
 
@@ -604,9 +604,20 @@ include __DIR__ . '/../partials/header.php';
     </div>
 
     <?php if ($notice): ?>
-        <div style="padding:12px 18px; background:#d1fae5; color:#065f46; border:1px solid #a7f3d0; border-radius:8px; margin-bottom:20px; font-weight:600; font-size:13.5px;">
-            <?= htmlspecialchars($notice) ?>
+        <div id="notifPageNotice" style="padding:12px 18px; background:#d1fae5; color:#065f46; border:1px solid #a7f3d0; border-radius:8px; margin-bottom:20px; font-weight:600; font-size:13.5px; display:flex; align-items:center; gap:8px;">
+            <i class="fas fa-check-circle" style="color:#059669; font-size:16px;"></i>
+            <span><?= htmlspecialchars($notice) ?></span>
         </div>
+        <script>
+            setTimeout(function() {
+                var el = document.getElementById('notifPageNotice');
+                if (el) {
+                    el.style.transition = 'opacity 0.4s ease';
+                    el.style.opacity = '0';
+                    setTimeout(function() { el.remove(); }, 400);
+                }
+            }, 4000);
+        </script>
     <?php endif; ?>
 
 

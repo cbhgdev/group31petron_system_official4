@@ -784,16 +784,22 @@ button.tbl-btn.wkld { color:#475569!important; }
     padding: 16px; 
     box-sizing: border-box !important;
     overflow-x: hidden !important;
+    overflow-y: auto !important;
 }
 .modal-content { 
     background: #fff; 
     border-radius: 14px; 
     width: 100% !important; 
     max-width: 580px !important; 
+    max-height: 90vh !important;
+    display: flex !important;
+    flex-direction: column !important;
     box-shadow: 0 25px 50px -12px rgba(0,0,0,.25); 
     overflow: hidden !important; 
     animation: modalSlideUp .2s ease-out; 
     box-sizing: border-box !important;
+    position: relative;
+    margin: auto !important;
 }
 .modal-content form {
     width: 100% !important;
@@ -801,6 +807,10 @@ button.tbl-btn.wkld { color:#475569!important; }
     margin: 0 !important;
     padding: 0 !important;
     box-sizing: border-box !important;
+    display: flex !important;
+    flex-direction: column !important;
+    max-height: 90vh !important;
+    overflow: hidden !important;
 }
 .modal-content.wide { max-width: 800px !important; }
 @keyframes modalSlideUp { from{transform:translateY(16px);opacity:0} to{transform:translateY(0);opacity:1} }
@@ -813,18 +823,20 @@ button.tbl-btn.wkld { color:#475569!important; }
     justify-content: space-between; 
     box-sizing: border-box !important;
     width: 100% !important;
+    flex-shrink: 0 !important;
 }
 .modal-title  { font-size: 15px; font-weight: 800; color: #002F70; display: flex; align-items: center; gap: 8px; }
 .modal-body   { 
-    padding: 18px 20px !important; 
+    padding: 16px 20px !important; 
     font-size: 14px; 
     color: #334155; 
-    max-height: calc(100vh - 180px) !important; 
+    flex: 1 1 auto !important;
     overflow-y: auto !important; 
     overflow-x: hidden !important; 
     box-sizing: border-box !important;
     width: 100% !important;
     max-width: 100% !important;
+    max-height: calc(90vh - 130px) !important;
 }
 .modal-footer { 
     padding: 12px 20px; 
@@ -835,6 +847,7 @@ button.tbl-btn.wkld { color:#475569!important; }
     gap: 8px; 
     box-sizing: border-box !important;
     width: 100% !important;
+    flex-shrink: 0 !important;
 }
 
 .form-section-title { 
@@ -1124,6 +1137,7 @@ button.tbl-btn.wkld { color:#475569!important; }
     <div class="modal-content wide">
         <div class="modal-header">
             <span class="modal-title"><i class="fas fa-clipboard-list"></i> <span id="wkldMechName">Mechanic</span> — Workload</span>
+            <button type="button" onclick="document.getElementById('workloadModal').style.display='none'" style="background:none;border:none;cursor:pointer;font-size:22px;color:#94a3b8;line-height:1;padding:0;margin:0;">&times;</button>
         </div>
         <div class="modal-body">
             <div id="wkldLoading" style="text-align:center;padding:30px;color:#64748b;"><i class="fas fa-spinner fa-spin" style="font-size:24px;"></i><br>Loading...</div>
@@ -1234,6 +1248,7 @@ button.tbl-btn.wkld { color:#475569!important; }
             <input type="hidden" name="id" id="formId" value="">
             <div class="modal-header">
                 <span class="modal-title" id="modalTitle"><i class="fas fa-plus-circle"></i> Add New Mechanic</span>
+                <button type="button" onclick="document.getElementById('addEditModal').style.display='none'" style="background:none;border:none;cursor:pointer;font-size:22px;color:#94a3b8;line-height:1;padding:0;margin:0;">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="form-section-title"><i class="fas fa-id-card"></i> Personal Information</div>
