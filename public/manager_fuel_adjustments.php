@@ -15,14 +15,15 @@ $station_id = (int) user_station_id();
 
 // Access control - Manager only
 if (!in_array($role, ['manager', 'supervisor', 'admin', 'superadmin'])) {
-    $_SESSION['error'] = 'Access denied. Manager access required.';
+    $_SESSION['error'] = 'Access denied. Manager or Admin access required.';
     header('Location: staff_dashboard.php'); 
     exit;
 }
 
 if ($station_id <= 0) {
     $_SESSION['error'] = 'No station assigned.';
-    header('Location: manager_dashboard.php'); 
+    $redirect_dash = in_array($role, ['admin', 'superadmin']) ? 'admin_dashboard.php' : 'manager_dashboard.php';
+    header('Location: ' . $redirect_dash); 
     exit;
 }
 
@@ -32,7 +33,8 @@ $active_tab = 'transactions';
 // â”€â”€ GET Filters â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $date_from          = trim($_GET['date_from'] ?? date('Y-m-d', strtotime('-30 days')));
 $date_to            = trim($_GET['date_to']   ?? date('Y-m-d'));
-$fuel_type_filter   = trim($_GET['fuel_type'] ?? 'all');
+$raw_ft_filter      = trim($_GET['fuel_type'] ?? 'all');
+$fuel_type_filter   = ($raw_ft_filter !== 'all' && $raw_ft_filter !== '') ? petron_canonical_fuel_type($raw_ft_filter) : 'all';
 $adjusted_by_filter = trim($_GET['adjusted_by'] ?? 'all');
 $export             = trim($_GET['export'] ?? '');
 
@@ -54,12 +56,17 @@ $params[] = $date_to;
 
 // Fuel Type Filter
 if ($fuel_type_filter !== 'all' && $fuel_type_filter !== '') {
-    $where[] = "fa.fuel_type = ?";
-    $params[] = $fuel_type_filter;
+    list($ft_sql, $ft_p) = petron_fuel_type_sql_condition('fa.fuel_type', $fuel_type_filter);
+    $where[] = $ft_sql;
+    $params = array_merge($params, $ft_p);
 }
 
-// Adjusted By Filter
-if ($adjusted_by_filter !== 'all' && $adjusted_by_filter !== '') {
+// Adjusted By Filter (All, By Role, or Specific User)
+if ($adjusted_by_filter === 'role_admin') {
+    $where[] = "LOWER(TRIM(COALESCE(u.role, ''))) IN ('admin', 'superadmin')";
+} elseif ($adjusted_by_filter === 'role_manager') {
+    $where[] = "LOWER(TRIM(COALESCE(u.role, ''))) IN ('manager', 'supervisor')";
+} elseif ($adjusted_by_filter !== 'all' && $adjusted_by_filter !== '' && is_numeric($adjusted_by_filter)) {
     $where[] = "fa.user_id = ?";
     $params[] = (int)$adjusted_by_filter;
 }
@@ -226,23 +233,37 @@ $managers = [];
 try {
     $mgr_stmt = $pdo->prepare("
         SELECT DISTINCT u.id, 
-               COALESCE(NULLIF(CONCAT(TRIM(u.first_name), ' ', TRIM(u.last_name)), ' '), u.username, 'Unknown') as name
+               COALESCE(NULLIF(CONCAT(TRIM(u.first_name), ' ', TRIM(u.last_name)), ' '), u.username, 'Unknown') as name,
+               u.role
         FROM users u 
-        JOIN fuel_adjustments fa ON fa.user_id = u.id 
-        WHERE fa.station_id = ?
+        WHERE (
+            u.id IN (SELECT DISTINCT user_id FROM fuel_adjustments WHERE station_id = ? AND user_id IS NOT NULL)
+            OR (u.station_id = ? AND LOWER(TRIM(COALESCE(u.role, ''))) IN ('manager', 'supervisor', 'admin', 'superadmin'))
+        )
         ORDER BY name
     ");
-    $mgr_stmt->execute([$station_id]);
+    $mgr_stmt->execute([$station_id, $station_id]);
     $managers = $mgr_stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+} catch (Exception $e) {
+    try {
+        $mgr_stmt = $pdo->prepare("
+            SELECT DISTINCT u.id, 
+                   COALESCE(NULLIF(CONCAT(TRIM(u.first_name), ' ', TRIM(u.last_name)), ' '), u.username, 'Unknown') as name,
+                   u.role
+            FROM users u 
+            JOIN fuel_adjustments fa ON fa.user_id = u.id 
+            WHERE fa.station_id = ?
+            ORDER BY name
+        ");
+        $mgr_stmt->execute([$station_id]);
+        $managers = $mgr_stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e2) {
+        $managers = [];
+    }
+}
 
-// Fuel Types List for filter
-$fuel_types = [];
-try {
-    $ft_stmt = $pdo->prepare("SELECT DISTINCT fuel_type FROM fuel_inventory WHERE station_id=? AND fuel_type IS NOT NULL AND fuel_type!='' ORDER BY fuel_type");
-    $ft_stmt->execute([$station_id]);
-    $fuel_types = $ft_stmt->fetchAll(PDO::FETCH_COLUMN);
-} catch (Exception $e) {}
+// Fuel Types List for filter (5 Standard Canonical Petron Types, No Numbers)
+$fuel_types = petron_standard_fuel_types();
 if (empty($shifts)) {
     $shifts = ['First Shift', 'Second Shift'];
 }
@@ -274,7 +295,7 @@ if (in_array($export, ['excel', 'pdf'])) {
                 'ADJ-' . $adj['id'],
                 $txn_no,
                 $fuel_line,
-                $adj['fuel_type'],
+                petron_canonical_fuel_type($adj['fuel_type']),
                 $shift_name,
                 $staff_name . (!empty($staff_role) ? ' (' . ucfirst($staff_role) . ')' : ''),
                 number_format($prev_cal, 2),
@@ -298,12 +319,12 @@ if (in_array($export, ['excel', 'pdf'])) {
                 'ADJ-' . $adj['id'],
                 'DEL-' . ($notes_data['delivery_id'] ?? '—'),
                 'Petron Corporation',
-                $adj['fuel_type'],
+                petron_canonical_fuel_type($adj['fuel_type']),
                 number_format($prev_lit, 2) . ' L',
                 number_format($new_lit, 2) . ' L',
                 ($diff >= 0 ? '+' : '') . number_format($diff, 2) . ' L',
                 $adj['reason'] ?? '—',
-                $adj['manager_name'],
+                $adj['manager_name'] . (!empty($adj['manager_role']) ? ' (' . ucfirst($adj['manager_role']) . ')' : ''),
                 date('M d, Y h:i A', strtotime($adj['created_at']))
             ];
         }
@@ -708,7 +729,7 @@ table.afto-tbl.report-table.no-min-width.print-table {
     <!-- Page Header -->
     <div class="int-head">
         <div>
-            <h1><i class="fas fa-check-double"></i> Fuel Transaction Validation</h1>
+            <h1><i class="fas fa-sliders-h"></i> Fuel Adjustments</h1>
         </div>
     </div>
 
@@ -780,13 +801,24 @@ table.afto-tbl.report-table.no-min-width.print-table {
             </div>
         <?php endif; ?>
 
-        <div class="afto-fg" style="width: 135px; flex-shrink: 0;">
+        <div class="afto-fg" style="min-width: 170px; width: 185px; flex-shrink: 0;">
             <label>Adjusted By</label>
             <select name="adjusted_by">
-                <option value="all">All Managers</option>
-                <?php foreach ($managers as $m): ?>
-                    <option value="<?= $m['id'] ?>" <?= $adjusted_by_filter == $m['id'] ? 'selected' : '' ?>><?= htmlspecialchars($m['name']) ?></option>
-                <?php endforeach; ?>
+                <option value="all" <?= ($adjusted_by_filter === 'all' || $adjusted_by_filter === '') ? 'selected' : '' ?>>All Managers & Admins</option>
+                <optgroup label="Filter by Role">
+                    <option value="role_admin" <?= $adjusted_by_filter === 'role_admin' ? 'selected' : '' ?>>All Admins</option>
+                    <option value="role_manager" <?= $adjusted_by_filter === 'role_manager' ? 'selected' : '' ?>>All Managers</option>
+                </optgroup>
+                <optgroup label="Specific Adjuster">
+                    <?php foreach ($managers as $m): 
+                        $m_role_clean = strtolower(trim($m['role'] ?? ''));
+                        $role_tag = in_array($m_role_clean, ['admin', 'superadmin']) ? 'Admin' : (in_array($m_role_clean, ['manager', 'supervisor']) ? 'Manager' : ucfirst($m_role_clean ?: 'Staff'));
+                    ?>
+                        <option value="<?= $m['id'] ?>" <?= (string)$adjusted_by_filter === (string)$m['id'] ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($m['name']) ?> (<?= htmlspecialchars($role_tag) ?>)
+                        </option>
+                    <?php endforeach; ?>
+                </optgroup>
             </select>
         </div>
 
@@ -869,7 +901,7 @@ table.afto-tbl.report-table.no-min-width.print-table {
                                     <td><strong>ADJ-<?= $adj['id'] ?></strong></td>
                                     <td><?= htmlspecialchars($txn_no) ?></td>
                                     <td><?= htmlspecialchars($fuel_line) ?></td>
-                                    <td><?= htmlspecialchars($adj['fuel_type']) ?></td>
+                                    <td><?= htmlspecialchars(petron_canonical_fuel_type($adj['fuel_type'])) ?></td>
                                     <td><?= htmlspecialchars($shift_name) ?></td>
                                     <td>
                                         <div style="font-weight: 600; color: #1e293b;"><?= htmlspecialchars($staff_name) ?></div>
@@ -891,7 +923,7 @@ table.afto-tbl.report-table.no-min-width.print-table {
                                             'adj_id' => 'ADJ-' . $adj['id'],
                                             'transaction_id' => $txn_no,
                                             'fuel_line' => $fuel_line,
-                                            'fuel_type' => $adj['fuel_type'],
+                                            'fuel_type' => petron_canonical_fuel_type($adj['fuel_type']),
                                             'prev_beginning' => number_format($notes_data['prev_beginning'] ?? $prev_cal, 2),
                                             'prev_ending' => number_format($notes_data['prev_ending'] ?? $prev_cal, 2),
                                             'prev_calibration' => number_format($prev_cal, 2),
@@ -954,14 +986,17 @@ table.afto-tbl.report-table.no-min-width.print-table {
                                     <td><strong>ADJ-<?= $adj['id'] ?></strong></td>
                                     <td><strong><?= !empty($notes_data['delivery_id']) ? ('DEL-' . htmlspecialchars($notes_data['delivery_id'])) : '—' ?></strong></td>
                                     <td><?= htmlspecialchars('Petron Corporation') ?></td>
-                                    <td><?= htmlspecialchars($adj['fuel_type']) ?></td>
+                                    <td><?= htmlspecialchars(petron_canonical_fuel_type($adj['fuel_type'])) ?></td>
                                     <td style="text-align:right; font-weight: 600;"><?= number_format($prev_lit, 2) ?> L</td>
                                     <td style="text-align:right; font-weight: 700; color: #002F70;"><?= number_format($new_lit, 2) ?> L</td>
                                     <td style="text-align:right;" class="badge-diff <?= $diff >= 0 ? 'plus' : 'minus' ?>">
                                         <?= ($diff >= 0 ? '+' : '') . number_format($diff, 2) ?> L
                                     </td>
                                     <td><?= htmlspecialchars($adj['reason'] ?: '—') ?></td>
-                                    <td><?= htmlspecialchars($adj['manager_name']) ?></td>
+                                    <td>
+                                        <div style="font-weight: 600; color: #1e293b;"><?= htmlspecialchars($adj['manager_name']) ?></div>
+                                        <?= render_user_role_badge($adj['manager_role'] ?? 'manager') ?>
+                                    </td>
                                     <td>
                                         <div style="font-weight: 600;"><?= date('M d, Y', strtotime($adj['created_at'])) ?></div>
                                         <div style="font-size: 11px; color: #64748b; font-weight: 600;"><?= date('h:i A', strtotime($adj['created_at'])) ?></div>
@@ -971,13 +1006,14 @@ table.afto-tbl.report-table.no-min-width.print-table {
                                             'adj_id' => 'ADJ-' . $adj['id'],
                                             'delivery_id' => 'DEL-' . ($notes_data['delivery_id'] ?? '—'),
                                             'supplier' => 'Petron Corporation',
-                                            'fuel_type' => $adj['fuel_type'],
+                                            'fuel_type' => petron_canonical_fuel_type($adj['fuel_type']),
                                             'invoice_no' => $notes_data['invoice_no'] ?? '—',
                                             'prev_liters' => number_format($prev_lit, 2) . ' L',
                                             'new_liters' => number_format($new_lit, 2) . ' L',
                                             'diff' => ($diff >= 0 ? '+' : '') . number_format($diff, 2) . ' L',
                                             'reason' => $adj['reason'] ?: '—',
                                             'manager_name' => $adj['manager_name'],
+                                            'manager_role' => $adj['manager_role'] ?? 'manager',
                                             'date_time' => date('M d, Y h:i A', strtotime($adj['created_at']))
                                         ])) ?>)"><i class="fas fa-eye"></i> View</button>
                                     </td>
@@ -1142,7 +1178,7 @@ table.afto-tbl.report-table.no-min-width.print-table {
                 </div>
                 
                 <div class="details-item full-width">
-                    <div class="details-lbl">Manager Remarks / Reason</div>
+                    <div class="details-lbl">Adjuster Remarks / Reason</div>
                     <div class="details-val" id="del_val_reason" style="white-space:pre-wrap;font-weight:normal;color:#475569;"></div>
                 </div>
                 <div class="details-item full-width">
@@ -1206,7 +1242,7 @@ function viewDelDetails(d) {
     diffEl.textContent = d.diff;
     diffEl.className = 'details-val badge-diff ' + (diffVal > 0 ? 'plus' : (diffVal < 0 ? 'minus' : 'zero'));
     
-    document.getElementById('del_val_manager').textContent = d.manager_name;
+    document.getElementById('del_val_manager').innerHTML = '<span>' + (d.manager_name || '—') + '</span>' + (d.manager_role ? getRoleBadgeJs(d.manager_role) : '');
     document.getElementById('del_val_reason').textContent = d.reason;
     document.getElementById('del_val_date').textContent = d.date_time;
     

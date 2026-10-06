@@ -149,7 +149,8 @@ function is_pending_validation_status($status_str) {
 $date_from          = trim($_GET['date_from']          ?? date('Y-m-d', strtotime('-30 days')));
 $date_to            = trim($_GET['date_to']            ?? date('Y-m-d'));
 $shift_filter       = trim($_GET['shift_filter']       ?? 'all');
-$fuel_type_filter   = trim($_GET['fuel_type']          ?? '');
+$raw_ft_filter      = trim($_GET['fuel_type']          ?? '');
+$fuel_type_filter   = ($raw_ft_filter !== '' && strtolower($raw_ft_filter) !== 'all') ? petron_canonical_fuel_type($raw_ft_filter) : '';
 $status_filter      = trim($_GET['status_filter']      ?? 'pending');
 $search_query       = trim($_GET['search_query']       ?? $_GET['search'] ?? $_GET['q'] ?? '');
 $export             = trim($_GET['export']             ?? '');
@@ -1278,13 +1279,8 @@ try {
     error_log("Summary cards fetch error: " . $e->getMessage());
 }
 
-// ── Fetch Dynamic Fuel Types ───────────────────────────────────────────
-$fuel_types = [];
-try {
-    $ft_stmt = $pdo->prepare("SELECT DISTINCT fuel_type FROM fuel_inventory WHERE station_id = ? ORDER BY fuel_type");
-    $ft_stmt->execute([$station_id]);
-    $fuel_types = $ft_stmt->fetchAll(PDO::FETCH_COLUMN);
-} catch (Exception $e) {}
+// ── Fetch Dynamic Fuel Types (5 Canonical Petron Types, No Numbers) ───
+$fuel_types = petron_standard_fuel_types();
 
 // ── Fetch Filtered Transactions ───────────────────────────────────────
 $where = ["ft.station_id = ?"];
@@ -1309,8 +1305,9 @@ if ($shift_filter !== 'all') {
 
 // Fuel Type filter
 if ($fuel_type_filter !== '') {
-    $where[] = "LOWER(ft.fuel_type) = ?";
-    $params[] = strtolower($fuel_type_filter);
+    list($ft_cond, $ft_params) = petron_fuel_type_sql_condition('ft.fuel_type', $fuel_type_filter);
+    $where[] = $ft_cond;
+    $params = array_merge($params, $ft_params);
 }
 
 // Status filter: if search query is provided without explicit status filter, show all so searched txn is found
@@ -2104,57 +2101,9 @@ body.sidebar-collapsed .modal,
                                 </td>
                             </tr>
                         <?php else: ?>
-                            <?php
-                            // Helper: map fuel type to its parent group for shared sequential numbering
-                            function mgr_fuel_group(string $ft): string {
-                                $f = strtoupper(trim($ft));
-                                if (str_contains($f,'TURBO') && str_contains($f,'DIESEL')) return 'TURBO DIESEL';
-                                if (str_contains($f,'DIESEL'))   return 'DIESEL';
-                                if (str_contains($f,'KEROSENE')) return 'KEROSENE';
-                                if (str_contains($f,'XCS') && str_contains($f,'PLUS')) return 'XCS PLUS';
-                                if (str_contains($f,'XTRA') && str_contains($f,'UNL')) return 'XTRA UNL';
-                                return $f;
-                            }
-                            // Helper: get the formatted fuel name incorporating pump groupings
-                            function get_mgr_formatted_fuel_name(string $fuel_type, int $seq): string {
-                                $f = strtoupper(trim($fuel_type));
-                                if (str_contains($f,'TURBO') && str_contains($f,'DIESEL')) {
-                                    return "TURBO DIESEL - {$seq}";
-                                }
-                                if (str_contains($f,'DIESEL')) {
-                                    if ($seq <= 4) {
-                                        return "DIESEL 1 - {$seq}";
-                                    } else {
-                                        return "DIESEL 2 - {$seq}";
-                                    }
-                                }
-                                if (str_contains($f,'KEROSENE')) {
-                                    return "KEROSENE - {$seq}";
-                                }
-                                if (str_contains($f,'XCS') && str_contains($f,'PLUS')) {
-                                    return "XCS PLUS - {$seq}";
-                                }
-                                if (str_contains($f,'XTRA') && str_contains($f,'UNL')) {
-                                    if ($seq <= 2) {
-                                        return "XTRA UNL 1 - {$seq}";
-                                    } else {
-                                        return "XTRA UNL 2 - {$seq}";
-                                    }
-                                }
-                                return "{$f} - {$seq}";
-                            }
-                            // Pre-compute group-level sequential labels
-                            $grp_counters = [];
-                            foreach ($transactions as &$_tx) {
-                                $grp    = mgr_fuel_group($_tx['fuel_type'] ?? '');
-                                if (!isset($grp_counters[$grp])) $grp_counters[$grp] = 0;
-                                $grp_counters[$grp]++;
-                                $_tx['_seq_label'] = get_mgr_formatted_fuel_name($_tx['fuel_type'] ?? '', $grp_counters[$grp]);
-                            }
-                            unset($_tx);
-                            ?>
                             <?php foreach ($transactions as $tx): 
                             $shift_display = !empty($tx['shift_name']) ? $tx['shift_name'] : (strtolower($tx['shift_period'] ?? '') === 'second' ? 'Shift 2' : 'Shift 1');
+                            $disp_fuel = petron_canonical_fuel_type($tx['fuel_type'] ?? '');
                         ?>
                             <tr id="tx_row_<?= $tx['id'] ?>" data-tx-id="<?= $tx['id'] ?>" data-tx-json='<?= htmlspecialchars(json_encode($tx), ENT_QUOTES, 'UTF-8') ?>'>
                                 <td>
@@ -2167,7 +2116,7 @@ body.sidebar-collapsed .modal,
                                 <td style="font-weight: 700; color: #00264D; font-size: 13px;"><?= htmlspecialchars($tx['transaction_id']) ?></td>
                                 <td style="font-size: 13px;"><?= date('M d, Y', strtotime($tx['transaction_date'])) ?></td>
                                 <td style="font-size: 13px;"><?= htmlspecialchars($shift_display) ?></td>
-                                <td style="font-size: 13px; font-weight:700; color:#0f172a; white-space:normal; word-break:break-word;" title="<?= htmlspecialchars($tx['_seq_label']) ?>"><?= htmlspecialchars($tx['_seq_label']) ?></td>
+                                <td style="font-size: 13px; font-weight:700; color:#0f172a; white-space:normal; word-break:break-word;" title="<?= htmlspecialchars($disp_fuel) ?>"><?= htmlspecialchars($disp_fuel) ?></td>
                                 <td style="text-align: right; font-size: 13px;"><?= number_format($tx['previous_reading'], 2) ?></td>
                                 <td style="text-align: right; font-weight: 700; font-size: 13px;"><?= number_format($tx['present_reading'], 2) ?></td>
                                 <td style="text-align: right; font-size: 13px;"><?= number_format($tx['calibration'], 2) ?></td>

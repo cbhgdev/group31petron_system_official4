@@ -937,7 +937,7 @@ define('MODULE_MENU_MAP', [
         'mgr_report_joborders', 'rpt_job_orders'
     ],
     'fuel_management'       => [
-        'fuel', 'admin_fuel_management', 'fuel_meter_encoding', 'admin_fuel_oversight',
+        'fuel', 'admin_fuel_management', 'fuel_sales', 'fuel_meter_encoding', 'admin_fuel_oversight',
         'staff_fuel_deliveries_sub', 'staff_fuel_del_history',
         'staff_fuel_transactions', 'admin_fuel_transactions_oversight',
         'admin_fuel_adjustments_oversight', 'admin_pump_master_oversight', 'fuel_transactions_validation',
@@ -1067,6 +1067,13 @@ function get_module_states(): array {
             }
         }
     } catch (Exception $e) { }
+
+    // Core operational modules must remain persistent and enabled at all times per permissions
+    // Never remove, hide, or disable core modules because the system detects they are unused
+    $protected_core_modules = ['fuel_management', 'transactions', 'inventory', 'reports', 'dashboard'];
+    foreach ($protected_core_modules as $core_mod) {
+        $cache[$core_mod] = true;
+    }
 
     return $cache;
 }
@@ -4619,5 +4626,83 @@ if (!function_exists('auto_load_pending_deliveries_from_approved_pos')) {
         return $inserted_count;
     }
 }
+
+// ── Petron Standard Canonical Fuel Types Helpers ─────────────────────────────
+if (!function_exists('petron_standard_fuel_types')) {
+    /**
+     * Returns the 5 canonical Petron fuel types:
+     * 1. Diesel
+     * 2. Kerosene
+     * 3. Turbo Diesel
+     * 4. XCS Plus
+     * 5. Xtra UNL
+     */
+    function petron_standard_fuel_types(): array {
+        return ['Diesel', 'Kerosene', 'Turbo Diesel', 'XCS Plus', 'Xtra UNL'];
+    }
+}
+
+if (!function_exists('petron_canonical_fuel_type')) {
+    /**
+     * Normalizes any fuel type string (including numbered tanks like 'Diesel 1',
+     * 'Diesel 2', 'Xtra UNL 1', 'Xtra UNL 2', pump labels, etc.) to one of the
+     * 5 canonical Petron fuel types.
+     */
+    function petron_canonical_fuel_type(?string $raw): string {
+        $f = strtoupper(trim((string)$raw));
+        if ($f === '') return '';
+        if (str_contains($f, 'TURBO') && str_contains($f, 'DIESEL')) return 'Turbo Diesel';
+        if (str_contains($f, 'DIESEL')) return 'Diesel';
+        if (str_contains($f, 'KEROSENE') || str_contains($f, 'KERO')) return 'Kerosene';
+        if (str_contains($f, 'XCS')) return 'XCS Plus';
+        if (str_contains($f, 'XTRA') || str_contains($f, 'UNL') || str_contains($f, 'ADVANCE') || str_contains($f, 'UNLEADED')) return 'Xtra UNL';
+        // Fallback: strip any trailing numbers
+        $cleaned = preg_replace('/\s+\d+$/', '', trim((string)$raw));
+        return $cleaned ?: trim((string)$raw);
+    }
+}
+
+if (!function_exists('petron_fuel_type_sql_condition')) {
+    /**
+     * Generates a SQL WHERE clause fragment and params to match all database variants
+     * of a canonical fuel type (e.g. matching 'Diesel', 'Diesel 1', 'Diesel 2' when 'Diesel' is selected).
+     */
+    function petron_fuel_type_sql_condition(string $column, string $fuel_type): array {
+        $canon = petron_canonical_fuel_type($fuel_type);
+        switch ($canon) {
+            case 'Diesel':
+                return [
+                    "({$column} IS NOT NULL AND LOWER({$column}) LIKE '%diesel%' AND LOWER({$column}) NOT LIKE '%turbo%')",
+                    []
+                ];
+            case 'Turbo Diesel':
+                return [
+                    "({$column} IS NOT NULL AND LOWER({$column}) LIKE '%turbo%')",
+                    []
+                ];
+            case 'Kerosene':
+                return [
+                    "({$column} IS NOT NULL AND (LOWER({$column}) LIKE '%kerosene%' OR LOWER({$column}) LIKE '%kero%'))",
+                    []
+                ];
+            case 'XCS Plus':
+                return [
+                    "({$column} IS NOT NULL AND LOWER({$column}) LIKE '%xcs%')",
+                    []
+                ];
+            case 'Xtra UNL':
+                return [
+                    "({$column} IS NOT NULL AND (LOWER({$column}) LIKE '%xtra%' OR LOWER({$column}) LIKE '%unl%' OR LOWER({$column}) LIKE '%advance%' OR LOWER({$column}) LIKE '%unleaded%'))",
+                    []
+                ];
+            default:
+                return [
+                    "LOWER({$column}) = ?",
+                    [strtolower($fuel_type)]
+                ];
+        }
+    }
+}
+
 
 

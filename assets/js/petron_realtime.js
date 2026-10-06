@@ -75,6 +75,22 @@
             // If user is focused on an editable input, do not disturb
             if (!active.readOnly && !active.disabled) return true;
         }
+
+        // If user is on an active encoding card (like Meter Readings Encode Card)
+        var encodeCard = document.getElementById('encodeCard');
+        if (encodeCard && window.getComputedStyle(encodeCard).display !== 'none') {
+            return true;
+        }
+
+        // Check if any non-readonly input on page has non-empty user data entered
+        var liveInputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([readonly]), textarea:not([readonly])');
+        for (var k = 0; k < liveInputs.length; k++) {
+            var v = (liveInputs[k].value || '').trim();
+            if (v !== '' && v !== '0' && v !== '0.00') {
+                return true;
+            }
+        }
+
         // Check if any modal is currently visible
         var openModals = document.querySelectorAll(
             '.modal-overlay[style*="flex"], .modal-overlay[style*="block"], ' +
@@ -164,8 +180,8 @@
     ══════════════════════════════════════════════════════════════════════════ */
     function refreshActiveView(options) {
         if (_paused || _isRefreshingView) return Promise.resolve(false);
-        var force = options && options.force;
-        if (!force && isUserEditing()) {
+        // Active data entry and active encode screens take absolute precedence — never disrupt or overwrite!
+        if (isUserEditing()) {
             return Promise.resolve(false);
         }
 
@@ -201,6 +217,10 @@
             ];
             kpiSelectors.forEach(function (sel) {
                 document.querySelectorAll(sel).forEach(function (currentEl) {
+                    // NEVER touch any element inside the active encode card
+                    if (currentEl.closest('#encodeCard') || currentEl.closest('.fet') || currentEl.closest('.fuel-encode-table')) {
+                        return;
+                    }
                     if (currentEl.id) {
                         var newEl = doc.getElementById(currentEl.id);
                         if (newEl && currentEl.innerHTML !== newEl.innerHTML) {
@@ -211,14 +231,22 @@
             });
 
             // 2. Update Table Bodies (Preserves table headers, colgroups, and scroll position)
+            // Never target data-entry tables (.fet, fuel-encode-table, or tables with input fields)
             var tableSelectors = [
                 '#joUnifiedTable', '#mhTable', '#jomTable', '#reportTable',
-                'table.txn-table', 'table.report-table', 'table.data-table',
-                'table.print-table', 'table.manager-table', 'table.admin-table',
+                'table.txn-table', 'table.data-table',
+                'table.manager-table', 'table.admin-table',
                 'table.afto-tbl', '.afto-tbl'
             ];
             tableSelectors.forEach(function (sel) {
                 document.querySelectorAll(sel).forEach(function (currentTbl) {
+                    // CRITICAL: NEVER overwrite any table inside encodeCard or any table containing active input fields!
+                    if (currentTbl.closest('#encodeCard') || currentTbl.classList.contains('fet') || currentTbl.classList.contains('fuel-encode-table')) {
+                        return;
+                    }
+                    if (currentTbl.querySelector('input:not([type="hidden"]), textarea, select')) {
+                        return; // Active data-entry form!
+                    }
                     var newTbl = currentTbl.id ? doc.getElementById(currentTbl.id) : doc.querySelector(sel);
                     if (newTbl) {
                         var curTbody = currentTbl.querySelector('tbody');
@@ -290,6 +318,18 @@
        GLOBAL MUTATION INTERCEPTOR (Fetch & XMLHttpRequest)
        Listens to EVERY business save / update across ALL system modules.
     ══════════════════════════════════════════════════════════════════════════ */
+    function _isInternalOrTrackingUrl(url) {
+        if (!url || typeof url !== 'string') return false;
+        return url.indexOf('api_refresh.php') !== -1 ||
+               url.indexOf('maintenance_status.php') !== -1 ||
+               url.indexOf('badge_seen.php') !== -1 ||
+               url.indexOf('notifications_api.php') !== -1 ||
+               url.indexOf('staff_fuel_sales_closing_handler.php') !== -1 ||
+               url.indexOf('check_closing_status') !== -1 ||
+               url.indexOf('keepalive') !== -1 ||
+               url.indexOf('ping') !== -1;
+    }
+
     function initGlobalMutationInterceptor() {
         // ── 1. Intercept window.fetch ──
         if (typeof window.fetch === 'function') {
@@ -303,17 +343,15 @@
                 return origFetch.apply(this, args).then(function (response) {
                     // Check if this was a mutation (POST, PUT, PATCH, DELETE) to an app backend
                     if (['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method) !== -1) {
-                        // Exclude internal polling heartbeats from triggering cascade
-                        var isInternal = url.indexOf('api_refresh.php') !== -1 ||
-                                         url.indexOf('maintenance_status.php') !== -1 ||
-                                         url.indexOf('ping') !== -1;
+                        // Exclude internal polling, tracking, and status checks from triggering cascade
+                        var isInternal = _isInternalOrTrackingUrl(url);
 
                         if (!isInternal && response && (response.status >= 200 && response.status < 300)) {
                             _lastMutationTime = Date.now();
-                            // Execute immediate cascade refresh
+                            // Execute cascade refresh only if user is not actively editing
                             setTimeout(function () {
                                 PetronRealtime.trigger(['notifications', 'badges', 'dashboard']);
-                                refreshActiveView({ force: true });
+                                refreshActiveView({ force: false });
 
                                 // Trigger page-specific refresh routines if declared
                                 if (typeof window.refreshManagerDashboard === 'function') {
@@ -357,14 +395,13 @@
 
                 if (['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method) !== -1) {
                     xhr.addEventListener('load', function () {
-                        var isInternal = url.indexOf('api_refresh.php') !== -1 ||
-                                         url.indexOf('maintenance_status.php') !== -1;
+                        var isInternal = _isInternalOrTrackingUrl(url);
 
                         if (!isInternal && xhr.status >= 200 && xhr.status < 300) {
                             _lastMutationTime = Date.now();
                             setTimeout(function () {
                                 PetronRealtime.trigger(['notifications', 'badges', 'dashboard']);
-                                refreshActiveView({ force: true });
+                                refreshActiveView({ force: false });
                             }, 350);
                         }
                     });

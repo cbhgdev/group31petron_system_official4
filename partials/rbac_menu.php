@@ -407,9 +407,13 @@ function filter_menu_by_permissions($menu_items, $user_role) {
                 continue;
             }
 
-            // Staff Fuel Management: already defined correctly in master menu, skip old override
+            // Staff Fuel Management: Provide Meter Reading & Fuel Transactions sub-items
             if ($user_role === 'staff' && ($item['id'] ?? '') === 'fuel') {
-                // Use master menu sub_items as-is (Fuel Deliveries + Fuel Transactions)
+                $filtered_item['href'] = 'staff_transactions_hub.php?section=fuel';
+                $filtered_item['sub_items'] = [
+                    ['id'=>'fuel_sales',              'label'=>'Meter Reading',     'href'=>'staff_transactions_hub.php?section=fuel',                      'ico'=>'fas fa-tachometer-alt', 'permissions'=>['encode_fuel','manage_fuel'], 'desc'=>'Record pump meter readings and shift sales.'],
+                    ['id'=>'staff_fuel_transactions', 'label'=>'Fuel Transactions', 'href'=>'staff_transactions_hub.php?section=fuel&fuel_tab=readings', 'ico'=>'fas fa-history',        'permissions'=>['encode_fuel','manage_fuel'], 'desc'=>'View today\'s encoded meter readings and history.'],
+                ];
                 $filtered_menu[] = $filtered_item;
                 continue;
             }
@@ -467,11 +471,12 @@ function filter_menu_by_permissions($menu_items, $user_role) {
             }
 
             if ($user_role === 'manager' && ($item['id'] ?? '') === 'fuel') {
-                $filtered_item['href'] = 'manager_fuel_transaction_validation.php';
+                $filtered_item['href'] = 'staff_transactions_hub.php?section=fuel';
                 $filtered_item['sub_items'] = [
-                    ['id'=>'fuel_transactions_validation', 'label'=>'Fuel Transaction Validation',  'href'=>'manager_fuel_transaction_validation.php',         'permissions'=>['manage_fuel'], 'desc'=>'Review and validate staff‑encoded fuel transactions.'],
-                    ['id'=>'fuel_adjustments',              'label'=>'Adjustments',                  'href'=>'manager_fuel_adjustments.php',                    'permissions'=>['manage_fuel'], 'desc'=>'Apply corrections for tank levels, stock, or price changes.'],
-                    ['id'=>'fuel_pump_master',              'label'=>'Calibration Review',           'href'=>'manager_fuel_pump_master.php',                    'permissions'=>['manage_fuel'], 'desc'=>'Manage calibration values for accurate pump readings.'],
+                    ['id'=>'fuel_sales',                   'label'=>'Meter Reading',                'href'=>'staff_transactions_hub.php?section=fuel',          'ico'=>'fas fa-tachometer-alt', 'permissions'=>['manage_fuel'], 'desc'=>'Record pump meter readings and shift sales.'],
+                    ['id'=>'fuel_transactions_validation', 'label'=>'Fuel Transaction Validation',  'href'=>'manager_fuel_transaction_validation.php',         'ico'=>'fas fa-check-double',   'permissions'=>['manage_fuel'], 'desc'=>'Review and validate staff‑encoded fuel transactions.'],
+                    ['id'=>'fuel_adjustments',              'label'=>'Adjustments',                  'href'=>'manager_fuel_adjustments.php',                    'ico'=>'fas fa-sliders-h',      'permissions'=>['manage_fuel'], 'desc'=>'Apply corrections for tank levels, stock, or price changes.'],
+                    ['id'=>'fuel_pump_master',              'label'=>'Calibration Review',           'href'=>'manager_fuel_pump_master.php',                    'ico'=>'fas fa-ruler',          'permissions'=>['manage_fuel'], 'desc'=>'Manage calibration values for accurate pump readings.'],
                 ];
                 // Add directly — skip the generic sub-item filter below
                 $filtered_menu[] = $filtered_item;
@@ -676,6 +681,13 @@ $items = filter_menu_by_permissions($master_menu, $role);
 if (!in_array($role, ['superadmin', 'developer'], true)) {
     $module_states   = get_module_states();
     $module_menu_map = defined('MODULE_MENU_MAP') ? MODULE_MENU_MAP : [];
+
+    // Core operational modules must remain persistent and clickable at all times per permissions
+    // Never remove or hide core modules just because the system detects that they have not been recently used
+    $protected_core_modules = ['fuel_management', 'transactions', 'inventory', 'reports', 'dashboard'];
+    foreach ($protected_core_modules as $core_mod) {
+        $module_states[$core_mod] = true;
+    }
 
     // Build a flat set of disabled item IDs
     $disabled_item_ids = [];

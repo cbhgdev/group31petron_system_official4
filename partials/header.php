@@ -4354,30 +4354,11 @@ require_once __DIR__ . '/rbac_menu.php';
               return false;
           }
 
-          // If item href has query parameters, verify they match $_GET
-          $hrefQuery = parse_url($rawHref, PHP_URL_QUERY);
-          if (!empty($hrefQuery)) {
-              parse_str($hrefQuery, $hrefParams);
-              foreach ($hrefParams as $pk => $pv) {
-                  $actualVal = $_GET[$pk] ?? null;
-                  if ($actualVal === null) {
-                      $c_file = basename($_SERVER['PHP_SELF'] ?? '');
-                      if ($c_file === 'staff_transactions_hub.php' && $pk === 'section') {
-                          $actualVal = 'merchandise';
-                      } elseif (($c_file === 'admin_reports.php' || $c_file === 'manager_reports.php') && $pk === 'cat') {
-                          $actualVal = 'sales';
-                      }
-                  }
-                  if ($actualVal === null || (string)$actualVal !== (string)$pv) {
-                      return false;
-                  }
-              }
-              return true;
-          }
-
           $itemId = $item['id'] ?? '';
-          if ($page_id !== '' && $itemId === $page_id) {
-              return true;
+          if ($page_id !== '') {
+              if ($itemId === $page_id) return true;
+              if ($page_id === 'fuel_sales' && in_array($itemId, ['fuel', 'fuel_sales', 'admin_fuel_management'], true)) return true;
+              if (in_array($page_id, ['fuel', 'admin_fuel_management'], true) && in_array($itemId, ['fuel', 'fuel_sales', 'admin_fuel_management'], true)) return true;
           }
 
           $hrefPath = parse_url($rawHref, PHP_URL_PATH);
@@ -4396,6 +4377,26 @@ require_once __DIR__ . '/rbac_menu.php';
 
           if (!$fileMatches) {
               return false;
+          }
+
+          // If item href has query parameters, verify they match $_GET
+          $hrefQuery = parse_url($rawHref, PHP_URL_QUERY);
+          if (!empty($hrefQuery)) {
+              parse_str($hrefQuery, $hrefParams);
+              foreach ($hrefParams as $pk => $pv) {
+                  $actualVal = $_GET[$pk] ?? null;
+                  if ($actualVal === null) {
+                      $c_file = basename($_SERVER['PHP_SELF'] ?? '');
+                      if ($c_file === 'staff_transactions_hub.php' && $pk === 'section') {
+                          $actualVal = 'merchandise';
+                      } elseif (($c_file === 'admin_reports.php' || $c_file === 'manager_reports.php') && $pk === 'cat') {
+                          $actualVal = 'sales';
+                      }
+                  }
+                  if ($actualVal === null || (string)$actualVal !== (string)$pv) {
+                      return false;
+                  }
+              }
           }
 
           return true;
@@ -4423,6 +4424,9 @@ require_once __DIR__ . '/rbac_menu.php';
       'manager_request_data_management' => 'manager_request_data_management',
       'manager_mechanics_management'  => 'manager_mechanics_management',
       // Fuel management
+      'fuel'                          => 'fuel_sales',
+      'fuel_management'               => 'fuel_sales',
+      'admin_fuel_management'         => 'fuel_sales',
       'fuel_sales'                    => 'fuel_sales',
       'fuel_transactions_validation'  => 'fuel_transactions_validation',
       'fuel_adjustments'              => 'fuel_adjustments',
@@ -4755,11 +4759,27 @@ require_once __DIR__ . '/rbac_menu.php';
     $matched_sub_idx = -1;
 
     if ($has_sub) {
+        $best_score = -1;
         foreach ($it['sub_items'] as $sidx => $sub) {
             if (petron_is_nav_item_active($sub, $effective_page_id)) {
-                $parent_active = true;
-                $matched_sub_idx = $sidx;
-                break;
+                $rawHref = $sub['href'] ?? '';
+                $hrefQuery = parse_url($rawHref, PHP_URL_QUERY);
+                $paramCount = 0;
+                if (!empty($hrefQuery)) {
+                    parse_str($hrefQuery, $p);
+                    $paramCount = count($p);
+                }
+                if ($paramCount > $best_score) {
+                    $best_score = $paramCount;
+                    $parent_active = true;
+                    $matched_sub_idx = $sidx;
+                }
+            }
+        }
+        if (!$parent_active && petron_is_nav_item_active($it, $effective_page_id)) {
+            $parent_active = true;
+            if (!empty($it['sub_items'][0]) && petron_is_nav_item_active($it['sub_items'][0], $effective_page_id)) {
+                $matched_sub_idx = 0;
             }
         }
     } else {
@@ -4776,7 +4796,7 @@ require_once __DIR__ . '/rbac_menu.php';
         echo '<a class="'.$parent_cls.'" href="'.htmlspecialchars($it['href']).'" data-tooltip="'.htmlspecialchars($it['label']).'" onclick="toggleSidebarSub(event,\'sub-'.htmlspecialchars($it['id']).'\')">';
         echo '<span class="ico" style="margin-right:10px;width:24px;text-align:center;flex-shrink:0;"><i class="'.htmlspecialchars($it['ico']).'"></i></span>';
         echo '<span class="nav-label" style="flex-grow:1;font-size:15px;font-weight:600;">'.htmlspecialchars($it['label']).'</span>';
-        echo '<i class="fas fa-chevron-down" style="font-size:11px;transition:transform .3s;'.($parent_active?'transform:rotate(180deg)':'').'"></i>';
+        echo '<i class="fas fa-chevron-down sub-toggle-chevron" style="font-size:11px;transition:transform .3s;padding:6px;margin:-6px;'.($parent_active?'transform:rotate(180deg)':'').'"></i>';
         echo '</a>';
 
         $display = $parent_active ? 'block' : 'none';
@@ -6246,10 +6266,10 @@ require_once __DIR__ . '/rbac_menu.php';
         document.addEventListener('click', function(e) {
             var link = e.target.closest('a.nav-item, a.sidebar-sub-item');
             if (!link) return;
-            // Skip sub-menu toggles (has-submenu items don't navigate the page)
-            if (link.classList.contains('has-submenu')) return;
+            // Skip chevron toggles (chevron only expands/collapses accordion)
+            if (e.target && (e.target.classList.contains('fa-chevron-down') || e.target.classList.contains('sub-toggle-chevron') || e.target.closest('.sub-toggle-chevron'))) return;
             var href = link.getAttribute('href');
-            if (!href || href === '#' || href === '') return;
+            if (!href || href === '#' || href === '' || href.startsWith('javascript:')) return;
 
             // Remove active and is-nav-clicking from ALL sidebar items so ONLY the clicked item is highlighted red
             document.querySelectorAll('.sidebar .nav-item, .sidebar .sidebar-sub-item').forEach(function(el) {
@@ -7244,9 +7264,8 @@ require_once __DIR__ . '/rbac_menu.php';
     </script>
 
     <script>
-    /* â”€â”€ GLOBAL: Sidebar Sub-menu Toggle â”€â”€ */
+    /* ── GLOBAL: Sidebar Sub-menu Toggle & Persistence Engine ── */
     function toggleSidebarSub(e, subId) {
-        e.preventDefault();
         e.stopPropagation();
         
         // If sidebar is collapsed, expand it first
@@ -7257,7 +7276,7 @@ require_once __DIR__ . '/rbac_menu.php';
         if (mainSidebar && mainSidebar.classList.contains('collapsed')) {
             mainSidebar.classList.remove('collapsed');
             if (sidebarToggleIcon) sidebarToggleIcon.className = 'fas fa-bars';
-            localStorage.setItem('sidebarState', 'expanded');
+            try { localStorage.setItem('sidebarState', 'expanded'); } catch(err){}
             
             if (mainContent) {
                 mainContent.style.left = '250px';
@@ -7269,42 +7288,65 @@ require_once __DIR__ . '/rbac_menu.php';
         }
 
         const sub = document.getElementById(subId);
-        if (!sub) return;
+        const link = e.currentTarget;
+        const isChevronClick = e.target && (e.target.classList.contains('fa-chevron-down') || e.target.classList.contains('sub-toggle-chevron') || e.target.closest('.sub-toggle-chevron'));
+        const href = link ? link.getAttribute('href') : '';
+        const hasRealHref = href && href !== '#' && href !== 'javascript:void(0)' && !href.startsWith('#');
 
-        const isOpen = sub.style.display !== 'none';
+        // If clicked specifically on the chevron, OR parent has no real URL destination:
+        // Toggle the sub-menu accordion without navigating
+        if (isChevronClick || !hasRealHref) {
+            e.preventDefault();
+            if (!sub) return;
+            const isOpen = sub.style.display !== 'none';
+            sub.style.display = isOpen ? 'none' : 'block';
 
-        // Close all other open sub-menus (accordion — no overlap)
-        document.querySelectorAll('[id^="sub-"]').forEach(function(other) {
-            if (other.id !== subId) {
-                other.style.display = 'none';
-                // Reset chevron for closed menus
-                const otherLink = document.querySelector('a[onclick*="' + other.id + '"]');
-                if (otherLink) {
-                    const otherChevron = otherLink.querySelector('.fa-chevron-down');
-                    if (otherChevron) otherChevron.style.transform = 'rotate(0deg)';
-                    otherLink.classList.remove('sub-open');
-                }
+            const chevron = link.querySelector('.fa-chevron-down');
+            if (chevron) {
+                chevron.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
+                chevron.style.transition = 'transform 0.3s ease';
             }
-        });
+            link.classList.toggle('sub-open', !isOpen);
 
-        // Toggle the clicked sub-menu
-        sub.style.display = isOpen ? 'none' : 'block';
-
-        // Rotate chevron
-        const chevron = e.currentTarget.querySelector('.fa-chevron-down');
-        if (chevron) {
-            chevron.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(180deg)';
-            chevron.style.transition = 'transform 0.3s ease';
+            // Persist open/closed preference
+            try {
+                if (!isOpen) {
+                    localStorage.setItem('petron_sub_open_' + subId, '1');
+                } else {
+                    localStorage.removeItem('petron_sub_open_' + subId);
+                }
+            } catch(err){}
+            return;
         }
 
-        // Active state on parent
-        e.currentTarget.classList.toggle('sub-open', !isOpen);
+        // Parent module link clicked directly with a valid href:
+        // Remember that this sub-menu should be open and available on the target page
+        try {
+            localStorage.setItem('petron_sub_open_' + subId, '1');
+        } catch(err){}
+
+        // Allow immediate browser navigation to href (no preventDefault)!
     }
 
-    // On page load: clear old localStorage submenu states so nothing auto-opens
+    // On page load: Restore remembered submenu states so loaded modules remain open & available
     document.addEventListener('DOMContentLoaded', function() {
         document.querySelectorAll('[id^="sub-"]').forEach(function(sub) {
-            localStorage.removeItem('submenu_' + sub.id);
+            const subId = sub.id;
+            const link = document.querySelector('a[onclick*="' + subId + '"]');
+            const isRememberedOpen = localStorage.getItem('petron_sub_open_' + subId) === '1';
+            const hasActiveChild = sub.querySelector('.active') !== null;
+
+            if (isRememberedOpen || hasActiveChild) {
+                sub.style.display = 'block';
+                if (link) {
+                    link.classList.add('sub-open');
+                    const chevron = link.querySelector('.fa-chevron-down');
+                    if (chevron) {
+                        chevron.style.transform = 'rotate(180deg)';
+                        chevron.style.transition = 'transform 0.3s ease';
+                    }
+                }
+            }
         });
     });
     </script>

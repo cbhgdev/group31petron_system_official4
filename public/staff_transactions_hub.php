@@ -3982,6 +3982,48 @@ setTimeout(function() {
         ?>
 
         <script>
+        // ── In-progress readings session persistence ──
+        function persistFuelInputCache() {
+            try {
+                var data = {};
+                var hasAny = false;
+                document.querySelectorAll('#encodeCard input[id^="beginning_"], #encodeCard input[id^="ending_"], #encodeCard input[id^="cal_"], input[id^="beginning_fuel_"], input[id^="ending_fuel_"], input[id^="cal_fuel_"]').forEach(function(inp) {
+                    if (inp.id && inp.value !== undefined) {
+                        data[inp.id] = inp.value;
+                        if (inp.value.trim() !== '' && inp.value.trim() !== '0.00' && inp.value.trim() !== '0') {
+                            hasAny = true;
+                        }
+                    }
+                });
+                if (hasAny) {
+                    sessionStorage.setItem('petron_fuel_reading_cache', JSON.stringify(data));
+                } else {
+                    sessionStorage.removeItem('petron_fuel_reading_cache');
+                }
+            } catch(e) {}
+        }
+        window.persistFuelInputCache = persistFuelInputCache;
+
+        function restoreFuelInputCache() {
+            try {
+                var raw = sessionStorage.getItem('petron_fuel_reading_cache');
+                if (!raw) return;
+                var data = JSON.parse(raw);
+                if (!data || typeof data !== 'object') return;
+                Object.keys(data).forEach(function(id) {
+                    var inp = document.getElementById(id);
+                    if (inp && !inp.readOnly && !inp.disabled && data[id] !== undefined) {
+                        inp.value = data[id];
+                        var m = id.match(/^(?:beginning|ending|cal)_(.+)$/);
+                        if (m && typeof window.updateFuelCalc === 'function') {
+                            window.updateFuelCalc(m[1]);
+                        }
+                    }
+                });
+            } catch(e) {}
+        }
+        window.restoreFuelInputCache = restoreFuelInputCache;
+
         // Clean and reliable input formatting - allows free numeric/decimal entry without cursor jumping
         window.formatOnInput = function(input) {
             if (!input) return;
@@ -4000,8 +4042,13 @@ setTimeout(function() {
                 clean = parts[0] + '.' + parts[1].substring(0, 3);
             }
             if (input.value !== clean) {
+                var oldStart = input.selectionStart;
                 input.value = clean;
+                try {
+                    input.setSelectionRange(oldStart, oldStart);
+                } catch(e) {}
             }
+            persistFuelInputCache();
         };
 
         window.formatOnBlur = function(input) {
@@ -4011,9 +4058,11 @@ setTimeout(function() {
                 if (input.id && input.id.indexOf('cal_') === 0) {
                     input.value = '0.00';
                 }
+                persistFuelInputCache();
                 return;
             }
-            if (raw.startsWith('.')) raw = '0' + raw;
+            if (raw === '.') raw = '0.00';
+            else if (raw.startsWith('.')) raw = '0' + raw;
             var num = parseFloat(raw);
             if (!isNaN(num) && num >= 0) {
                 var dec = 2;
@@ -4025,10 +4074,10 @@ setTimeout(function() {
             } else {
                 if (input.id && input.id.indexOf('cal_') === 0) {
                     input.value = '0.00';
-                } else {
-                    input.value = '';
                 }
+                // Do NOT wipe out non-calibration inputs if user typed something!
             }
+            persistFuelInputCache();
         };
 
         window.handleMeterKeydown = function(e, input) {
@@ -4575,7 +4624,7 @@ setTimeout(function() {
             <?php endforeach; ?>
 
             <div class="fet-wrap" style="overflow-x:auto; width:100%; -webkit-overflow-scrolling:touch;">
-                <table class="fet report-table no-min-width print-table" style="width:100%; min-width:900px; table-layout:fixed; border-collapse:collapse;">
+                <table class="fet fuel-encode-table no-min-width" style="width:100%; min-width:900px; table-layout:fixed; border-collapse:collapse;">
                     <colgroup>
                         <col style="width:17%;"><!-- NAME -->
                         <col style="width:14%;"><!-- BEGINNING -->
@@ -4773,11 +4822,11 @@ setTimeout(function() {
             (function() {
                 'use strict';
 
-                // Immediately purge any stale/corrupted drafts from localStorage for fuel meter readings & transaction hub
+                // Only purge stale/corrupted draft form entries; NEVER remove navigation or sidebar state
                 try {
                     for (var i = localStorage.length - 1; i >= 0; i--) {
                         var lk = localStorage.key(i);
-                        if (lk && (lk.indexOf('fuel') !== -1 || lk.indexOf('meter') !== -1 || lk.indexOf('reading') !== -1 || lk.indexOf('transactions_hub') !== -1 || (localStorage.getItem(lk) && localStorage.getItem(lk).indexOf('Γé') !== -1))) {
+                        if (lk && lk.indexOf('petron_draft_') === 0 && (lk.indexOf('fuel') !== -1 || lk.indexOf('meter') !== -1 || lk.indexOf('reading') !== -1 || lk.indexOf('transactions_hub') !== -1 || (localStorage.getItem(lk) && localStorage.getItem(lk).indexOf('Γé') !== -1))) {
                             localStorage.removeItem(lk);
                         }
                     }
@@ -4887,6 +4936,10 @@ setTimeout(function() {
                             if (m) calcRow(m[1]);
                         });
                     }
+                    /* Restore any in-progress input values from current session */
+                    if (typeof window.restoreFuelInputCache === 'function') {
+                        window.restoreFuelInputCache();
+                    }
                 }
 
                 /* ── Expose globally so inline oninput handlers can call it ── */
@@ -4894,11 +4947,21 @@ setTimeout(function() {
 
                 /* ── Boot ── */
                 if (document.readyState === 'loading') {
-                    document.addEventListener('DOMContentLoaded', attachAll);
+                    document.addEventListener('DOMContentLoaded', function() {
+                        attachAll();
+                        if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
+                    });
                 } else {
                     attachAll();
+                    if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
                 }
-                window.addEventListener('load', attachAll);
+                window.addEventListener('load', function() {
+                    attachAll();
+                    if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
+                });
+                window.addEventListener('pageshow', function() {
+                    if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
+                });
 
             })();
             </script>
@@ -5072,11 +5135,15 @@ setTimeout(function() {
             encodeBtn.className  = 'txn-subtab-btn blue ' + (isReadings ? 'inactive' : 'active');
             readingsBtn.className = 'txn-subtab-btn blue ' + (isReadings ? 'active'   : 'inactive');
 
-            // Load history when switching to readings tab
+            // Load history when switching to readings tab, or restore in-progress inputs when switching to encode
             if (isReadings) {
                 refreshTodayEntries();
                 if (typeof window.setupPetronDownwardDropdowns === 'function') {
                     window.setupPetronDownwardDropdowns(['#subtab_shift']);
+                }
+            } else {
+                if (typeof window.restoreFuelInputCache === 'function') {
+                    window.restoreFuelInputCache();
                 }
             }
 
@@ -5353,6 +5420,7 @@ setTimeout(function() {
                     if (volumeValEl) volumeValEl.value = '0.00';
                     if (amountEl)    amountEl.value    = '0.00';
                     if (amountValEl) amountValEl.value = '0.00';
+                    try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
 
                     // Switch to Meter Reading History tab so the new record is immediately visible
                     if (typeof switchFuelSubTab === 'function') switchFuelSubTab('readings');
@@ -5454,6 +5522,7 @@ setTimeout(function() {
                 window.PetronDraft.clear('fuel_meter_readings');
                 window.PetronDraft.clear('fuel_meter_readings_fuel');
             }
+            try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
 
             showToast('All fuel readings have been reset.', 'info');
         }
@@ -5665,6 +5734,7 @@ setTimeout(function() {
                     window.PetronDraft.clear('fuel_meter_readings');
                     window.PetronDraft.clear('fuel_meter_readings_fuel');
                 }
+                try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
 
                 // Mark sessionStorage so if user navigates back the button re-appears
                 try {

@@ -66,6 +66,10 @@
         )) {
             return true;
         }
+        const encodeCard = document.getElementById('encodeCard');
+        if (encodeCard && window.getComputedStyle(encodeCard).display !== 'none') {
+            return true;
+        }
         if (document.querySelector(
             '.modal.show, .modal[style*="display: block"], .modal[style*="display: flex"], ' +
             '.swal2-container, .popover.show, .dropdown-menu.show'
@@ -78,17 +82,21 @@
     // ── Helper: Check if a specific container contains active editing elements ─
     function isContainerBeingEdited(container) {
         if (!container) return false;
+        // Never touch the fuel encode card or table
+        if (container.closest('#encodeCard') || container.id === 'encodeCard' || container.classList.contains('fet') || container.classList.contains('fuel-encode-table')) {
+            return true;
+        }
         const active = document.activeElement;
         if (active && container.contains(active)) {
             if (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT') {
                 return true;
             }
         }
-        // If container has draft attribute and has populated input fields that are not submitted
+        // If container has populated input fields that are not submitted, it is being edited!
         const inputs = container.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([readonly]), textarea:not([readonly])');
         for (let i = 0; i < inputs.length; i++) {
             if (inputs[i].value && String(inputs[i].value).trim() !== '' && inputs[i].value !== '0' && inputs[i].value !== '0.00') {
-                if (document.activeElement === inputs[i]) return true;
+                return true;
             }
         }
         return false;
@@ -173,7 +181,7 @@
 
     // ── Dynamic DOM Fragment Refreshing (No Page Reload) ───────────
     async function refreshDynamicPageFragments() {
-        if (isSyncingData || document.hidden) return;
+        if (isSyncingData || document.hidden || isUserBusy()) return;
 
         // Never interrupt user while focused or typing in any form input
         const active = document.activeElement;
@@ -183,7 +191,7 @@
 
         // Never perform background DOM fragment replacement while staff is on fuel encode screen
         const encodeCard = document.getElementById('encodeCard');
-        if (encodeCard && encodeCard.style.display !== 'none') {
+        if (encodeCard && window.getComputedStyle(encodeCard).display !== 'none') {
             return;
         }
 
