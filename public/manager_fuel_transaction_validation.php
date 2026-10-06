@@ -370,6 +370,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (in_array($_POST['action'] ?? '', [
             $pdo->prepare("UPDATE fuel_transactions SET inventory_deducted = 1 WHERE id = ?")->execute([$tx['id']]);
 
             log_activity($pdo, $me['id'], 'Fuel Reading Approved', "TXN {$tx['transaction_id']} | {$tx['fuel_type']} | {$liters_sold} L");
+
+            // Notify staff member who encoded this meter reading
+            $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
+            if ($encoding_staff_id > 0 && function_exists('notify_staff_action_result')) {
+                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                $val_details = "Validated in Fuel Sales Closing ({$shift}, {$rep_date}) for " . number_format($liters_sold, 2) . " Liters (₱" . number_format($total_amount, 2) . ")." . (!empty($manager_remarks) ? " Remarks: {$manager_remarks}" : "");
+                notify_staff_action_result(
+                    $pdo,
+                    $encoding_staff_id,
+                    'Fuel Meter Reading',
+                    'Validated',
+                    "TXN {$tx['transaction_id']} ({$tx['fuel_type']})",
+                    $mgr_name,
+                    $mgr_role,
+                    $val_details,
+                    'fuel_reading',
+                    (int)$tx['id'],
+                    'staff_fuel_sales_closing.php',
+                    $shift
+                );
+            }
+
             $validated_count++;
         }
 
@@ -450,6 +473,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Log activity
             log_activity($pdo, $me['id'], 'Fuel Reading Approved', "TXN {$tx['transaction_id']} | {$tx['fuel_type']} | {$liters_sold} L");
 
+            // Notify staff member who encoded the reading
+            $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
+            if ($encoding_staff_id > 0 && function_exists('notify_staff_action_result')) {
+                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                $shift_lbl = $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift');
+                $val_details = "Reading validated for " . number_format($liters_sold, 2) . " Liters (₱" . number_format($total_amount, 2) . ") in {$shift_lbl}." . (!empty($remarks) ? " Remarks: {$remarks}" : "");
+                notify_staff_action_result(
+                    $pdo,
+                    $encoding_staff_id,
+                    'Fuel Meter Reading',
+                    'Validated',
+                    "TXN {$tx['transaction_id']} ({$tx['fuel_type']})",
+                    $mgr_name,
+                    $mgr_role,
+                    $val_details,
+                    'fuel_reading',
+                    (int)$tx_id,
+                    'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
+                    $shift_lbl
+                );
+            }
+
             // Check if all transactions for this shift/date are now verified, and if so, mark fuel_sales_closing as VERIFIED
             try {
                 $tx_date = date('Y-m-d', strtotime($tx['transaction_date'] ?: $tx['created_at']));
@@ -492,6 +538,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             // Log activity
             log_activity($pdo, $me['id'], 'Fuel Reading Rejected', "TXN {$tx['transaction_id']} | Reason: {$remarks}");
+
+            // Notify staff member who encoded the reading
+            $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
+            if ($encoding_staff_id > 0 && function_exists('notify_staff_action_result')) {
+                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                $shift_lbl = $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift');
+                $rej_details = "Reason: {$remarks}. Returned to staff for re-checking.";
+                notify_staff_action_result(
+                    $pdo,
+                    $encoding_staff_id,
+                    'Fuel Meter Reading',
+                    'Rejected',
+                    "TXN {$tx['transaction_id']} ({$tx['fuel_type']})",
+                    $mgr_name,
+                    $mgr_role,
+                    $rej_details,
+                    'fuel_reading',
+                    (int)$tx_id,
+                    'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
+                    $shift_lbl
+                );
+            }
 
             $_SESSION['success'] = "Transaction <strong>{$tx['transaction_id']}</strong> rejected and returned to staff.";
         }
@@ -624,6 +693,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 log_activity($pdo, $me['id'], 'Fuel Reading Adjusted and Approved', "TXN {$tx['transaction_id']} | {$tx['fuel_type']} | Old: {$tx['liters_sold']} L -> New: {$liters_sold} L | Reason: {$remarks}");
+
+                // Notify encoding staff
+                $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
+                if ($encoding_staff_id > 0 && function_exists('notify_staff_action_result')) {
+                    $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                    $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                    $shift_lbl = $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift');
+                    $adj_details = "Readings adjusted: " . number_format((float)$tx['liters_sold'], 2) . " L → " . number_format($liters_sold, 2) . " L (₱" . number_format($total_amount, 2) . "). Reason: {$remarks}.";
+                    notify_staff_action_result(
+                        $pdo,
+                        $encoding_staff_id,
+                        'Fuel Meter Reading',
+                        'Adjusted',
+                        "TXN {$tx['transaction_id']} ({$tx['fuel_type']})",
+                        $mgr_name,
+                        $mgr_role,
+                        $adj_details,
+                        'fuel_reading',
+                        (int)$tx_id,
+                        'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
+                        $shift_lbl
+                    );
+                }
+
                 $_SESSION['success'] = "Transaction <strong>{$tx['transaction_id']}</strong> adjusted and validated successfully.";
             } else {
                 // Legacy / bulk adjust: just change status to Adjusted
@@ -664,6 +757,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 } catch (Exception $e) {}
 
                 log_activity($pdo, $me['id'], 'Fuel Reading Marked for Adjustment', "TXN {$tx['transaction_id']} | Reason: {$remarks}");
+
+                // Notify encoding staff
+                $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
+                if ($encoding_staff_id > 0 && function_exists('notify_staff_action_result')) {
+                    $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                    $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                    $shift_lbl = $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift');
+                    $adj_details = "Marked for adjustment. Reason: {$remarks}.";
+                    notify_staff_action_result(
+                        $pdo,
+                        $encoding_staff_id,
+                        'Fuel Meter Reading',
+                        'Adjusted',
+                        "TXN {$tx['transaction_id']} ({$tx['fuel_type']})",
+                        $mgr_name,
+                        $mgr_role,
+                        $adj_details,
+                        'fuel_reading',
+                        (int)$tx_id,
+                        'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
+                        $shift_lbl
+                    );
+                }
+
                 $_SESSION['success'] = "Transaction <strong>{$tx['transaction_id']}</strong> marked for adjustment.";
             }
         }

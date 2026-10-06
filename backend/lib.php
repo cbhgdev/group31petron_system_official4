@@ -3807,6 +3807,123 @@ function notify(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// notify_staff_action_result() — targeted notification to a specific staff
+// member answering 5 essential questions:
+// 1. What action was performed (Stock Request, Fuel Reading, Stock-In, etc.)
+// 2. Who performed it (Manager/Admin Name & Role)
+// 3. What reference record (SR #, PO #, TXN #, Batch #)
+// 4. What was the result/decision (Approved, Validated, Rejected, Returned)
+// 5. When it was performed (Formatted date and time)
+// ─────────────────────────────────────────────────────────────────────────
+if (!function_exists('notify_staff_action_result')) {
+function notify_staff_action_result(
+    PDO    $pdo,
+    int    $staff_id,
+    string $action_type,
+    string $result_status,
+    string $reference_code,
+    ?string $actor_name = null,
+    ?string $actor_role = null,
+    string $details = '',
+    string $ref_type = '',
+    int    $ref_id = 0,
+    string $redirect_url = '',
+    string $shift_period = ''
+): bool {
+    if ($staff_id <= 0) {
+        return false;
+    }
+
+    // Resolve actor name & role if not provided
+    if (empty($actor_name) || empty($actor_role)) {
+        if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['user'])) {
+            $u = $_SESSION['user'];
+            $actor_name = $actor_name ?: (trim(($u['first_name'] ?? '') . ' ' . ($u['last_name'] ?? '')) ?: ($u['username'] ?? 'Station Management'));
+            $actor_role = $actor_role ?: normalize_role($u['role'] ?? 'Manager');
+        } else {
+            $actor_name = $actor_name ?: 'Station Management';
+            $actor_role = $actor_role ?: 'Manager';
+        }
+    }
+
+    $when = date('M d, Y h:i A');
+
+    // Categorize severity and notification type based on outcome
+    $normStatus = strtolower(trim($result_status));
+    if (in_array($normStatus, ['approved', 'validated', 'confirmed', 'completed'])) {
+        $type = 'success';
+        $severity = 'medium';
+    } elseif (in_array($normStatus, ['rejected', 'declined', 'denied', 'cancelled'])) {
+        $type = 'error';
+        $severity = 'high';
+    } elseif (in_array($normStatus, ['returned', 'adjusted', 'for correction', 'modified'])) {
+        $type = 'warning';
+        $severity = 'high';
+    } else {
+        $type = 'info';
+        $severity = 'medium';
+    }
+
+    // Build Title: e.g. "Stock Request Approved: PR-2026-0012"
+    $title = "{$action_type} {$result_status}: {$reference_code}";
+
+    // Grammatical action phrasing
+    if ($normStatus === 'approved') {
+        $action_phrase = "approved your {$action_type}";
+    } elseif ($normStatus === 'validated') {
+        $action_phrase = "validated your {$action_type}";
+    } elseif ($normStatus === 'rejected') {
+        $action_phrase = "rejected your {$action_type}";
+    } elseif ($normStatus === 'returned') {
+        $action_phrase = "returned your {$action_type} for correction";
+    } elseif ($normStatus === 'adjusted') {
+        $action_phrase = "adjusted your {$action_type}";
+    } elseif ($normStatus === 'completed') {
+        $action_phrase = "completed and approved your {$action_type}";
+    } else {
+        $action_phrase = "updated your {$action_type} to {$result_status}";
+    }
+
+    // Construct high-clarity notification message containing all 5 mandatory elements:
+    // [Actor Role] [Actor Name] [Action Phrase] ([Reference Code]) on [Date/Time]. Result: [Details]
+    $message = "{$actor_role} {$actor_name} {$action_phrase} ({$reference_code}) on {$when}.";
+    if (!empty(trim($details))) {
+        $message .= " Result: " . trim($details);
+    }
+
+    // Determine target URL for staff
+    if (empty($redirect_url) && !empty($ref_type)) {
+        $redirect_url = notification_redirect_url($ref_type, $ref_id, 'staff');
+    }
+
+    // Event type for category grouping in notifications hub
+    $event_type = $ref_type ?: 'general';
+
+    // Unique source key with timestamp to avoid collision while preserving uniqueness per action
+    $uniq = substr(md5($reference_code . microtime(true)), 0, 8);
+    $source_key = "staff_act_{$ref_type}_{$ref_id}_{$normStatus}_{$uniq}";
+
+    notify(
+        $pdo,
+        $staff_id,
+        'staff',
+        $type,
+        $event_type,
+        $severity,
+        $title,
+        $message,
+        $source_key,
+        $redirect_url,
+        $ref_type,
+        $ref_id,
+        $shift_period
+    );
+
+    return true;
+}
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // notify_manager() — find station's manager user(s) and notify them all
 // ─────────────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────
@@ -4026,6 +4143,21 @@ function notification_redirect_url(string $ref_type, int $ref_id, string $role):
             'manager'    => "manager_customers.php?tab=pending" . ($ref_id > 0 ? "&id={$ref_id}" : ""),
             'admin'      => "manager_customers.php?tab=pending" . ($ref_id > 0 ? "&id={$ref_id}" : ""),
             'superadmin' => "manager_customers.php?tab=pending" . ($ref_id > 0 ? "&id={$ref_id}" : ""),
+        ],
+        'stock_in' => [
+            'staff'    => "staff_record_delivery.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'admin'    => "admin_stock_confirmation.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+        ],
+        'merchandise_stock_in' => [
+            'staff'    => "staff_record_delivery.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'admin'    => "admin_stock_confirmation.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+        ],
+        'fuel_stock_in' => [
+            'staff'    => "staff_record_delivery.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'admin'    => "admin_stock_confirmation.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
         ],
     ];
     return $map[$ref_type][$role] ?? $map[$ref_type]['staff'] ?? 'notifications.php';

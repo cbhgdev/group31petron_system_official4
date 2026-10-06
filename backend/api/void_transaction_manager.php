@@ -383,12 +383,21 @@ try {
         $staff_target_id = (int)($txn['staff_id'] ?? ($txn['created_by'] ?? ($txn['user_id'] ?? 0)));
         if ($staff_target_id > 0) {
             $txnRef = $txn['transaction_id'] ?? ('JO-' . $row_id);
-            notify($pdo, $staff_target_id, 'staff', 'success', 'void_request', 'medium',
-                "Void Request Approved: {$txnRef}",
-                "Void request for {$txnRef} was approved by Manager. Reason: {$void_reason}",
-                "void_approved_{$row_id}",
-                'voided_transactions.php?id=' . $row_id,
-                'void_request', $row_id
+            $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+            $mgr_role = normalize_role($me['role'] ?? 'Manager');
+            $void_details = "Void request approved. Reason: {$void_reason} (Remarks: {$manager_remarks}). Sale reversed and inventory restored.";
+            notify_staff_action_result(
+                $pdo,
+                $staff_target_id,
+                'Void Request',
+                'Approved',
+                $txnRef,
+                $mgr_name,
+                $mgr_role,
+                $void_details,
+                'void_request',
+                $row_id,
+                'voided_transactions.php?id=' . $row_id
             );
         }
     } catch (Throwable $notifErr) {}

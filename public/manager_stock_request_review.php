@@ -378,13 +378,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
             }
 
-            manager_notify_users(
-                $pdo,
-                array_column($items_to_insert, 'staff_id'),
-                'Purchase Order Generated',
-                "Purchase Order {$po_number} has been generated for Purchase Request {$pr_number}.",
-                'staff_record_delivery.php'
-            );
+            // Targeted informative notification to requesting staff
+            $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+            $mgr_role = normalize_role($me['role'] ?? 'Manager');
+            $distinct_staff = array_unique(array_filter(array_column($items_to_insert, 'staff_id')));
+            foreach ($distinct_staff as $st_id) {
+                $st_items = array_filter($items_to_insert, fn($it) => (int)$it['staff_id'] === (int)$st_id);
+                $st_qty = array_sum(array_column($st_items, 'quantity'));
+                $item_summary = count($st_items) . " item(s), " . number_format($st_qty) . " units";
+                notify_staff_action_result(
+                    $pdo,
+                    (int)$st_id,
+                    'Merchandise Stock Request',
+                    'Approved',
+                    "PR {$pr_number} (PO: {$po_number})",
+                    $mgr_name,
+                    $mgr_role,
+                    "Purchase Order {$po_number} generated for {$item_summary}. Ready for delivery tracking.",
+                    'stock_request',
+                    $first_request_id,
+                    'staff_record_delivery.php'
+                );
+            }
 
             log_activity($pdo, $me['id'], 'Generate Merchandise Purchase Order', "Generated PO {$po_number} from PR {$pr_number}.");
             $pdo->commit();
@@ -513,13 +528,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $line_index++;
             }
 
-            manager_notify_users(
-                $pdo,
-                array_column($items_to_insert, 'staff_id'),
-                'Purchase Order Generated',
-                "Purchase Order {$po_number} has been generated for Fuel Purchase Request {$pr_number}.",
-                'staff_record_delivery.php'
-            );
+            // Targeted informative notification to requesting staff
+            $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+            $mgr_role = normalize_role($me['role'] ?? 'Manager');
+            $distinct_staff = array_unique(array_filter(array_column($items_to_insert, 'staff_id')));
+            foreach ($distinct_staff as $st_id) {
+                $st_items = array_filter($items_to_insert, fn($it) => (int)$it['staff_id'] === (int)$st_id);
+                $st_liters = array_sum(array_column($st_items, 'quantity'));
+                notify_staff_action_result(
+                    $pdo,
+                    (int)$st_id,
+                    'Fuel Stock Request',
+                    'Approved',
+                    "PR {$pr_number} (PO: {$po_number})",
+                    $mgr_name,
+                    $mgr_role,
+                    "Fuel Purchase Order {$po_number} generated for " . number_format($st_liters, 2) . " Liters. Ready for delivery tracking.",
+                    'stock_request',
+                    (int)($items_to_insert[0]['request_id'] ?? 0),
+                    'staff_record_delivery.php'
+                );
+            }
 
             log_activity($pdo, $me['id'], 'Generate Fuel Purchase Order', "Generated fuel PO {$po_number} from PR {$pr_number}.");
             $pdo->commit();
@@ -594,15 +623,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $display_pr_name = $pr_num ?: 'Request Batch';
-                manager_notify_users(
-                    $pdo,
-                    $staff_ids,
-                    'PR Returned',
-                    "Purchase Request {$display_pr_name} was returned by the manager. Reason: {$reason}.",
-                    'staff_inventory_merchandise.php',
-                    'warning',
-                    'warning'
-                );
+                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                $action_label = ($pr_type === 'fuel') ? 'Fuel Stock Request' : 'Merchandise Stock Request';
+                $staff_redirect = ($pr_type === 'fuel') ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+
+                foreach (array_unique(array_filter($staff_ids)) as $st_id) {
+                    notify_staff_action_result(
+                        $pdo,
+                        (int)$st_id,
+                        $action_label,
+                        'Returned',
+                        $display_pr_name,
+                        $mgr_name,
+                        $mgr_role,
+                        "Returned for correction. Reason: " . ($reason ?: 'Please review and adjust requested quantities.'),
+                        'stock_request',
+                        0,
+                        $staff_redirect
+                    );
+                }
                 log_activity($pdo, $me['id'], 'Return Purchase Request', "Returned PR {$display_pr_name} to staff. Reason: {$reason}");
                 $_SESSION['success'] = "Purchase Request <strong>{$display_pr_name}</strong> returned to staff for correction.";
             } catch (Exception $e) {

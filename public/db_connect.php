@@ -463,4 +463,28 @@ try {
     error_log("Payment taxonomy self-healing error: " . $e->getMessage());
 }
 
+// ── Self-healing Database schema for users role & columns ────────────────────
+try {
+    static $users_schema_healed = false;
+    if (!$users_schema_healed) {
+        $users_schema_healed = true;
+        // Ensure role column is VARCHAR(50) so all roles ('staff', 'manager', 'admin', 'superadmin') are supported
+        try {
+            $pdo->exec("ALTER TABLE users MODIFY COLUMN role VARCHAR(50) NOT NULL DEFAULT 'staff'");
+        } catch (Throwable $e) {}
+
+        // Ensure employee_id is nullable so inserts never fail due to strict mode missing defaults
+        try {
+            $pdo->exec("ALTER TABLE users MODIFY COLUMN employee_id VARCHAR(50) NULL DEFAULT NULL");
+        } catch (Throwable $e) {}
+
+        // Ensure phone_number is nullable
+        try {
+            $pdo->exec("ALTER TABLE users MODIFY COLUMN phone_number VARCHAR(50) NULL DEFAULT NULL");
+        } catch (Throwable $e) {}
+    }
+} catch (Throwable $e) {
+    error_log("Users table self-healing error: " . $e->getMessage());
+}
+
 

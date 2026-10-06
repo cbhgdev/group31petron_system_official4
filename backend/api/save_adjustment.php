@@ -160,12 +160,23 @@ try {
             // Notify staff
             $staff_target_id = (int)($jo['created_by'] ?: ($jo['user_id'] ?: 0));
             if ($staff_target_id > 0) {
-                notify($pdo, $staff_target_id, 'staff', 'success', 'transaction_adjustment', 'medium',
-                    "Adjustment Approved: {$jo_code}",
-                    "Your adjustment request for {$jo_code} was approved by Manager. (₱" . number_format($old_total, 2) . " → ₱" . number_format($new_total, 2) . ")",
-                    "adj_approved_jo_{$row_id}",
-                    'staff_fuel_sales_report.php?id=' . $row_id,
-                    'transaction_adjustment', $row_id
+                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                $diff = round($new_total - $old_total, 2);
+                $diff_str = ($diff >= 0 ? "+₱" : "-₱") . number_format(abs($diff), 2);
+                $details = "Adjusted total: ₱" . number_format($old_total, 2) . " → ₱" . number_format($new_total, 2) . " ({$diff_str}). Reason: {$adjustment_reason}. Remarks: {$manager_remarks}";
+                notify_staff_action_result(
+                    $pdo,
+                    $staff_target_id,
+                    'Job Order Adjustment',
+                    'Approved',
+                    $jo_code,
+                    $mgr_name,
+                    $mgr_role,
+                    $details,
+                    'transaction_adjustment',
+                    $row_id,
+                    'job_order_detail.php?job_id=' . $row_id
                 );
             }
 
@@ -456,12 +467,23 @@ try {
         $staff_target_id = (int)($txn['staff_id'] ?? 0);
         if ($staff_target_id > 0) {
             $txnRef = $txn['transaction_id'] ?? ('TXN-' . $row_id);
-            notify($pdo, $staff_target_id, 'staff', 'success', 'transaction_adjustment', 'medium',
-                "Adjustment Approved: {$txnRef}",
-                "Your adjustment request for {$txnRef} was approved by Manager. (₱" . number_format($old_total, 2) . " → ₱" . number_format($new_total, 2) . ")",
-                "adj_approved_merch_{$row_id}",
-                'staff_fuel_sales_report.php?id=' . $row_id,
-                'transaction_adjustment', $row_id
+            $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+            $mgr_role = normalize_role($me['role'] ?? 'Manager');
+            $diff = round($new_total - $old_total, 2);
+            $diff_str = ($diff >= 0 ? "+₱" : "-₱") . number_format(abs($diff), 2);
+            $details = "Adjusted total: ₱" . number_format($old_total, 2) . " → ₱" . number_format($new_total, 2) . " ({$diff_str}). Reason: {$adjustment_reason}. Remarks: {$manager_remarks}";
+            notify_staff_action_result(
+                $pdo,
+                $staff_target_id,
+                'Transaction Adjustment',
+                'Approved',
+                $txnRef,
+                $mgr_name,
+                $mgr_role,
+                $details,
+                'transaction_adjustment',
+                $row_id,
+                'staff_transactions_hub.php'
             );
         }
     } catch (Throwable $ne) {}

@@ -7,14 +7,29 @@ require_once __DIR__ . '/../backend/ui_config.php';
 require_once __DIR__ . '/../config/email_config.php';
 require_login();
 
-// Dynamic Column Detection
+// Dynamic Column Detection & Self-Healing
 $user_cols = [];
 try {
+    // 1. Ensure role column is VARCHAR(50) so all roles ('staff', 'manager', 'admin', 'superadmin') are supported
+    try {
+        $pdo->exec("ALTER TABLE users MODIFY COLUMN role VARCHAR(50) NOT NULL DEFAULT 'staff'");
+    } catch (Throwable $e) {}
+
+    // 2. Ensure employee_id is nullable so strict mode never fails missing defaults
+    try {
+        $pdo->exec("ALTER TABLE users MODIFY COLUMN employee_id VARCHAR(50) NULL DEFAULT NULL");
+    } catch (Throwable $e) {}
+
+    // 3. Ensure phone_number is nullable
+    try {
+        $pdo->exec("ALTER TABLE users MODIFY COLUMN phone_number VARCHAR(50) NULL DEFAULT NULL");
+    } catch (Throwable $e) {}
+
     $col_query = $pdo->query("SHOW COLUMNS FROM users");
     while ($col = $col_query->fetch(PDO::FETCH_ASSOC)) {
         $user_cols[] = $col['Field'];
     }
-} catch (Exception $e) { /* ignore */ }
+} catch (Throwable $e) { /* ignore */ }
 
 $me = current_user();
 $my_role = role_key($me['role'] ?? 'staff');
@@ -54,24 +69,42 @@ if (!function_exists('is_user_archived_status')) {
 }
 
 function generateEmployeeID($pdo, $role) {
-    $role = strtolower(trim($role));
+    $role = strtolower(trim((string)$role));
     $prefix = 'STF';
     if ($role === 'superadmin') $prefix = 'SA';
     elseif ($role === 'admin') $prefix = 'ADM';
     elseif ($role === 'manager') $prefix = 'MGR';
     
-    $stmt = $pdo->prepare("SELECT employee_id FROM users WHERE employee_id LIKE ? ORDER BY employee_id DESC LIMIT 1");
+    // Find all existing employee IDs with this prefix to get the true maximum
+    $stmt = $pdo->prepare("SELECT employee_id FROM users WHERE employee_id LIKE ?");
     $stmt->execute([$prefix . '-%']);
-    $last_id = $stmt->fetchColumn();
+    $existing = $stmt->fetchAll(PDO::FETCH_COLUMN);
     
-    $num = 1;
-    if ($last_id) {
-        $parts = explode('-', $last_id);
-        $last_num = (int)end($parts);
-        $num = $last_num + 1;
+    $max_num = 0;
+    foreach ($existing as $eid) {
+        if (preg_match('/' . preg_quote($prefix, '/') . '\-(\d+)/i', (string)$eid, $m)) {
+            $n = (int)$m[1];
+            if ($n > $max_num) {
+                $max_num = $n;
+            }
+        }
     }
     
-    return $prefix . '-' . str_pad($num, 3, '0', STR_PAD_LEFT);
+    $candidate_num = $max_num + 1;
+    $new_id = $prefix . '-' . str_pad($candidate_num, 3, '0', STR_PAD_LEFT);
+    
+    // Guarantee absolute uniqueness against existing records
+    while (true) {
+        $chk = $pdo->prepare("SELECT id FROM users WHERE employee_id = ? LIMIT 1");
+        $chk->execute([$new_id]);
+        if (!$chk->fetch()) {
+            break;
+        }
+        $candidate_num++;
+        $new_id = $prefix . '-' . str_pad($candidate_num, 3, '0', STR_PAD_LEFT);
+    }
+    
+    return $new_id;
 }
 
 // ── Load dynamic security policy from system_settings (never hardcoded) ──
@@ -239,9 +272,22 @@ $is_error = false;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
+    $is_ajax = (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
+        || (isset($_POST['ajax']) && $_POST['ajax'] === '1')
+        || (isset($_GET['ajax']) && $_GET['ajax'] === '1')
+        || (isset($_GET['ajax_action']) && $_GET['ajax_action'] === 'add_user')
+        || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)
+        || ($action === 'add_user');
+
     if ($my_role === 'manager') {
         $msg = "Managers have read-only access to user lists and cannot perform modifications.";
         $is_error = true;
+        if ($is_ajax) {
+            if (ob_get_length()) ob_clean();
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['success' => false, 'error' => $msg]);
+            exit;
+        }
     } else {
         try {
             // 1. Add User & Automatically Send Email Credentials
@@ -380,7 +426,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!empty($employee_id_input) && in_array('employee_id', $user_cols)) {
                     $chk_emp = $pdo->prepare("SELECT id FROM users WHERE employee_id = ?");
                     $chk_emp->execute([$employee_id_input]);
-                    if ($chk_emp->fetch()) throw new Exception('Employee ID is already assigned to another account.');
+                    if ($chk_emp->fetch()) {
+                        $employee_id_input = generateEmployeeID($pdo, $role);
+                    }
                 }
 
                 // Station assignment
@@ -415,19 +463,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $hashed = password_hash($password, PASSWORD_DEFAULT);
 
-                $stmt = $pdo->prepare("INSERT INTO users
-                    (first_name, last_name, username, role, email, password_hash, station_id, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-                $stmt->execute([$first_name_input, $last_name_input, $username, $role, $email, $hashed, $station_target, $status_input]);
-                $new_user_id = (int)$pdo->lastInsertId();
+                $insert_fields = ['first_name', 'last_name', 'username', 'role', 'email', 'password_hash', 'station_id', 'status', 'created_at'];
+                $insert_placeholders = ['?', '?', '?', '?', '?', '?', '?', '?', 'NOW()'];
+                $insert_params = [$first_name_input, $last_name_input, $username, $role, $email, $hashed, $station_target, $status_input];
 
-                $extra_sets = []; $extra_vals = [];
-                if (!empty($employee_id_input) && in_array('employee_id', $user_cols)) { $extra_sets[] = 'employee_id = ?'; $extra_vals[] = $employee_id_input; }
-                if (in_array('phone_number', $user_cols)) { $extra_sets[] = 'phone_number = ?'; $extra_vals[] = $contact_input; }
-                if ($extra_sets) {
-                    $extra_vals[] = $new_user_id;
-                    $pdo->prepare("UPDATE users SET " . implode(', ', $extra_sets) . " WHERE id = ?")->execute($extra_vals);
+                if (in_array('employee_id', $user_cols) && !empty($employee_id_input)) {
+                    $insert_fields[] = 'employee_id';
+                    $insert_placeholders[] = '?';
+                    $insert_params[] = $employee_id_input;
                 }
+                if (in_array('phone_number', $user_cols)) {
+                    $insert_fields[] = 'phone_number';
+                    $insert_placeholders[] = '?';
+                    $insert_params[] = $contact_input;
+                }
+
+                $stmt = $pdo->prepare("INSERT INTO users (" . implode(', ', $insert_fields) . ") VALUES (" . implode(', ', $insert_placeholders) . ")");
+                $stmt->execute($insert_params);
+                $new_user_id = (int)$pdo->lastInsertId();
 
                 // Station name for email
                 $station_name_for_email = 'Petron Service Station';
@@ -466,7 +519,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 // AJAX: return JSON response and exit
-                if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+                if ($is_ajax) {
+                    if (ob_get_length()) ob_clean();
                     header('Content-Type: application/json; charset=utf-8');
                     echo json_encode(['success' => true, 'message' => $msg]);
                     exit;
@@ -703,11 +757,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new Exception('User deletion is permanently disabled. Inactive accounts are archived to preserve data integrity.');
             }
             
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             $msg = $e->getMessage();
             $is_error = true;
             // AJAX: return JSON error and exit
-            if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+            if ($is_ajax) {
+                if (ob_get_length()) ob_clean();
                 header('Content-Type: application/json; charset=utf-8');
                 echo json_encode(['success' => false, 'error' => $msg]);
                 exit;
@@ -2412,14 +2467,34 @@ async function handleAddUserSubmit(e) {
     try {
         const form = document.getElementById('addUserForm');
         const formData = new FormData(form);
+        formData.append('ajax', '1');
 
-        const res  = await fetch(window.location.pathname + window.location.search, {
+        const postUrl = window.location.pathname + (window.location.search ? window.location.search + '&' : '?') + 'ajax_action=add_user';
+        const res  = await fetch(postUrl, {
             method: 'POST',
-            headers: { 'X-Requested-With': 'XMLHttpRequest' },
+            headers: { 
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json'
+            },
             credentials: 'same-origin',
             body: formData
         });
-        const data = await res.json();
+        const resText = await res.text();
+        let data;
+        try {
+            data = JSON.parse(resText);
+        } catch (jsonErr) {
+            console.error('Non-JSON server response:', resText);
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(resText, 'text/html');
+            const alertText = doc.querySelector('#floatingToastMsg div:last-child, .alert, #addUserErrorText')?.textContent?.trim() || '';
+            if (alertText && alertText.length < 250) {
+                showAddUserError(alertText);
+            } else {
+                showAddUserError('Server returned an unexpected response. Please verify the information and try again.');
+            }
+            return;
+        }
 
         if (data.success) {
             closeModal('addModal');

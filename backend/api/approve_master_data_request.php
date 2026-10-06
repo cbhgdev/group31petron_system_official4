@@ -209,23 +209,38 @@ try {
     try {
         $requestedBy = (int)$req['requested_by'];
         $requestNo   = $req['request_no'] ?? "#$id";
-        $category    = $req['category'];
+        $category    = ucfirst($req['category'] ?? 'Item');
+        $mgr_name    = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+        $mgr_role    = normalize_role($me['role'] ?? 'Manager');
 
         if ($action === 'approve') {
-            notify($pdo, $requestedBy, 'staff', 'success', 'master_data_request', 'medium',
-                "Master Data Request Approved: {$requestNo}",
-                "Your {$category} request ({$requestNo}) has been Approved.",
-                "mdr_approved_{$id}",
-                "staff_transactions_hub.php?section=merchandise&apply_mdr={$id}",
-                'master_data_request', $id
+            notify_staff_action_result(
+                $pdo,
+                $requestedBy,
+                "Master Data Request ({$category})",
+                'Approved',
+                $requestNo,
+                $mgr_name,
+                $mgr_role,
+                "Approved and added to station master catalog. Ready for operational use.",
+                'master_data_request',
+                $id,
+                "staff_transactions_hub.php?section=merchandise&apply_mdr={$id}"
             );
         } else {
-            notify($pdo, $requestedBy, 'staff', 'error', 'master_data_request', 'medium',
-                "Master Data Request Rejected: {$requestNo}",
-                "Your {$category} request ({$requestNo}) was Rejected." . (!empty($rejectionReason) ? " Reason: {$rejectionReason}" : ''),
-                "mdr_rejected_{$id}",
-                'staff_requests.php?id=' . $id,
-                'master_data_request', $id
+            $rejDetail = !empty($rejectionReason) ? "Reason: {$rejectionReason}" : 'Reason: Master data entry rejected by management.';
+            notify_staff_action_result(
+                $pdo,
+                $requestedBy,
+                "Master Data Request ({$category})",
+                'Rejected',
+                $requestNo,
+                $mgr_name,
+                $mgr_role,
+                $rejDetail,
+                'master_data_request',
+                $id,
+                "staff_transactions_hub.php?section=merchandise"
             );
         }
     } catch (Exception $notifErr) {

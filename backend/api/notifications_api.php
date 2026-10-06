@@ -271,13 +271,13 @@ try {
                 // Category filter mapping
                 if ($category !== 'all' && $category !== '') {
                     if ($category === 'fuel') {
-                        $where .= " AND (n.event_type IN ('fuel_transaction','fuel_sales_closing','fuel_reading','fuel') OR n.title LIKE '%Fuel%')";
+                        $where .= " AND (n.event_type IN ('fuel_transaction','fuel_sales_closing','fuel_reading','fuel','fuel_stock_in') OR n.title LIKE '%Fuel%')";
                     } elseif ($category === 'inventory') {
-                        $where .= " AND (n.event_type IN ('stock_request','purchase_order','inventory','delivery') OR n.title LIKE '%Stock%' OR n.title LIKE '%Inventory%')";
+                        $where .= " AND (n.event_type IN ('stock_request','purchase_order','inventory','delivery','stock_in','merchandise_stock_in','fuel_stock_in') OR n.title LIKE '%Stock%' OR n.title LIKE '%Inventory%')";
                     } elseif ($category === 'transactions') {
-                        $where .= " AND (n.event_type IN ('void_request','transaction_adjustment','transaction','job_order') OR n.title LIKE '%Void%' OR n.title LIKE '%Adjustment%' OR n.title LIKE '%Transaction%')";
+                        $where .= " AND (n.event_type IN ('void_request','transaction_adjustment','transaction','merchandise_transaction','job_order') OR n.title LIKE '%Void%' OR n.title LIKE '%Adjustment%' OR n.title LIKE '%Transaction%')";
                     } elseif ($category === 'approvals') {
-                        $where .= " AND (n.event_type IN ('stock_request','void_request','master_data_request','fuel_transaction') OR n.title LIKE '%Approved%' OR n.title LIKE '%Pending%' OR n.title LIKE '%Review%')";
+                        $where .= " AND (n.event_type IN ('stock_request','void_request','master_data_request','fuel_transaction','fuel_reading','stock_in','merchandise_stock_in','fuel_stock_in','transaction_adjustment') OR n.title LIKE '%Approved%' OR n.title LIKE '%Validated%' OR n.title LIKE '%Pending%' OR n.title LIKE '%Review%' OR n.title LIKE '%Returned%' OR n.title LIKE '%Adjusted%' OR n.title LIKE '%Rejected%')";
                     } elseif ($category === 'master_data') {
                         $where .= " AND (n.event_type IN ('master_data_request','customer_request') OR n.title LIKE '%Master Data%')";
                     } elseif ($category === 'system') {
