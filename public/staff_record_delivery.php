@@ -2028,7 +2028,7 @@ body[data-page="staff_record_delivery"] .main {
                 <div style="font-size:24px; font-weight:800; color:#1e293b; margin-top:2px;"><?= $count_pending_stock_in ?></div>
             </div>
         </div>
-        <div onclick="switchMainDeliveryTab('history')" style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:16px; display:flex; align-items:center; gap:16px; box-shadow:0 2px 4px rgba(0,0,0,0.02); cursor:pointer; transition:transform .15s, box-shadow .15s;" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 10px rgba(0,0,0,0.08)';" onmouseout="this.style.transform='';this.style.boxShadow='0 2px 4px rgba(0,0,0,0.02)';" title="Click to view Delivery History">
+        <div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:16px; display:flex; align-items:center; gap:16px; box-shadow:0 2px 4px rgba(0,0,0,0.02);">
             <div style="width:48px; height:48px; border-radius:8px; background:#f5f3ff; display:flex; align-items:center; justify-content:center; color:#8b5cf6; font-size:20px;">
                 <i class="fas fa-check-circle"></i>
             </div>
@@ -2377,14 +2377,12 @@ body[data-page="staff_record_delivery"] .main {
                 <div style="font-size:24px; font-weight:800; color:#1e293b; margin-top:2px;"><?= $count_fuel_pending_stock_in ?></div>
             </div>
         </div>
-        <div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:16px; display:flex; align-items:center; gap:16px; box-shadow:0 2px 4px rgba(0,0,0,0.02); cursor:pointer; transition:transform 0.15s, box-shadow 0.15s;" onclick="switchMainDeliveryTab('history')" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)';this.style.transform='translateY(-1px)';" onmouseout="this.style.boxShadow='0 2px 4px rgba(0,0,0,0.02)';this.style.transform='none';" title="Click to view Delivery History">
+        <div style="background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:16px; display:flex; align-items:center; gap:16px; box-shadow:0 2px 4px rgba(0,0,0,0.02);">
             <div style="width:48px; height:48px; border-radius:8px; background:#f5f3ff; display:flex; align-items:center; justify-content:center; color:#8b5cf6; font-size:20px;">
                 <i class="fas fa-check-circle"></i>
             </div>
             <div>
-                <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:0.3px; display:flex; align-items:center; gap:4px;">
-                    Completed Deliveries <i class="fas fa-external-link-alt" style="font-size:9px; color:#8b5cf6;"></i>
-                </div>
+                <div style="font-size:11px; color:#64748b; font-weight:700; text-transform:uppercase; letter-spacing:0.3px;">Completed Deliveries</div>
                 <div style="font-size:24px; font-weight:800; color:#1e293b; margin-top:2px;"><?= $count_fuel_completed_deliveries ?></div>
             </div>
         </div>

@@ -2373,7 +2373,7 @@ function updateAdjActionDetection() {
             detectedAction = 'Pending Input';
             badgeHtml = '<div style="display:inline-flex; align-items:center; gap:8px; padding:6px 14px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:6px; color:#64748b; font-weight:600; font-size:13px;">Enter actual physical count to calculate direction</div>';
         }
-    } else if (type === 'Encoding Error' || type === 'System Correction' || type === 'Others') {
+    } else if (type === 'Encoding Error' || type === 'Others') {
         if (manualWrap) manualWrap.style.display = 'block';
         var optSelect = document.getElementById('adj_manual_direction');
         var manualDir = optSelect ? optSelect.value : 'Decrease';
@@ -2517,7 +2517,6 @@ function submitAdjustmentForm(e) {
                         <option value="Missing Item">Missing Item</option>
                         <option value="Returned Item">Returned Item</option>
                         <option value="Encoding Error">Encoding Error</option>
-                        <option value="System Correction">System Correction</option>
                         <option value="Others">Others</option>
                     </select>
                 </div>

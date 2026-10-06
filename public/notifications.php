@@ -21,6 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'mark_all_read') {
         $stmt = $pdo->prepare("UPDATE notifications SET status = 'read', read_at = NOW() WHERE user_id = ? AND status = 'unread'");
         $stmt->execute([$me['id']]);
+        unset($_SESSION['notif_bell_snoozed_' . (int)$me['id']]);
         $notice = '<i class="fas fa-check-circle"></i> All notifications marked as read.';
     } elseif ($action === 'mark_read' && $notif_id > 0) {
         $stmt = $pdo->prepare("UPDATE notifications SET status = 'read', read_at = NOW() WHERE id = ? AND user_id = ?");
@@ -612,7 +613,48 @@ include __DIR__ . '/../partials/header.php';
 
 
 
-    <!-- Filters Bar -->
+    <!-- Summary Count Banners -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 22px;">
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <div>
+                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Total Notifications</div>
+                <div style="font-size: 22px; font-weight: 800; color: #002F6C; margin-top: 2px;"><?= number_format($counts['total']) ?></div>
+            </div>
+            <div style="width: 40px; height: 40px; border-radius: 8px; background: rgba(0,47,108,0.08); display: flex; align-items: center; justify-content: center; color: #002F6C; font-size: 18px;">
+                <i class="fas fa-bell"></i>
+            </div>
+        </div>
+
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <div>
+                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Unread</div>
+                <div style="font-size: 22px; font-weight: 800; color: #dc2626; margin-top: 2px;"><?= number_format($counts['unread']) ?></div>
+            </div>
+            <div style="width: 40px; height: 40px; border-radius: 8px; background: rgba(220,38,38,0.08); display: flex; align-items: center; justify-content: center; color: #dc2626; font-size: 18px;">
+                <i class="fas fa-envelope"></i>
+            </div>
+        </div>
+
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <div>
+                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Read</div>
+                <div style="font-size: 22px; font-weight: 800; color: #16a34a; margin-top: 2px;"><?= number_format($counts['read']) ?></div>
+            </div>
+            <div style="width: 40px; height: 40px; border-radius: 8px; background: rgba(22,163,74,0.08); display: flex; align-items: center; justify-content: center; color: #16a34a; font-size: 18px;">
+                <i class="fas fa-check-circle"></i>
+            </div>
+        </div>
+
+        <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <div>
+                <div style="font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Archived</div>
+                <div style="font-size: 22px; font-weight: 800; color: #64748b; margin-top: 2px;"><?= number_format($counts['archived']) ?></div>
+            </div>
+            <div style="width: 40px; height: 40px; border-radius: 8px; background: rgba(100,116,139,0.08); display: flex; align-items: center; justify-content: center; color: #64748b; font-size: 18px;">
+                <i class="fas fa-archive"></i>
+            </div>
+        </div>
+    </div>
     <div class="notif-filter-box">
         <form method="GET" class="notif-filter-form">
             <?php if ($category !== 'all'): ?>

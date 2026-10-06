@@ -3247,7 +3247,6 @@ $total_alerts_count = count($alert_rows);
                         <option value="Missing Item">Missing Item</option>
                         <option value="Returned Item">Returned Item</option>
                         <option value="Encoding Error">Encoding Error</option>
-                        <option value="System Correction">System Correction</option>
                         <option value="Stock Correction">Stock Correction</option>
                         <option value="Others">Others</option>
                     </select>
@@ -3460,7 +3459,7 @@ function handleAdminAdjTypeChange() {
 
     var decreaseTypes = ['Damaged Product', 'Expired Product', 'Missing Item'];
     var increaseTypes = ['Returned Item'];
-    var manualTypes = ['Encoding Error', 'System Correction', 'Stock Correction', 'Others'];
+    var manualTypes = ['Encoding Error', 'Stock Correction', 'Others'];
 
     if (decreaseTypes.includes(type)) {
         if (actEl) actEl.value = 'Decrease';

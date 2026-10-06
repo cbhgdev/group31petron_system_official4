@@ -541,10 +541,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // end if ($tx['pump_id'] > 0)
 
                 // Perform calculations
-                $liters_sold = $ending - $beginning - $calibration;
-                if ($liters_sold < 0) {
-                    throw new Exception("Ending reading cannot be less than beginning reading and calibration combined.");
+                // Only throw an error if ending is strictly less than beginning (meter went backwards).
+                // If ending == beginning (zero-sales shift), calibration may make the math negative —
+                // this is valid and should simply result in 0 liters sold.
+                if ($ending < $beginning) {
+                    throw new Exception("Ending reading ({$ending}) cannot be less than beginning reading ({$beginning}). Please check the meter readings.");
                 }
+                $liters_sold = max(0.00, $ending - $beginning - $calibration);
                 $price_per_liter = (float)$tx['price_per_liter'];
                 $total_amount    = $liters_sold * $price_per_liter;
 

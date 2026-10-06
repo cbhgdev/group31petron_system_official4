@@ -62,16 +62,8 @@ try {
  * The snooze expires automatically — no DB writes needed.
  */
 function get_bell_count(PDO $pdo, int $user_id): int {
-    // Check session snooze: if user clicked mark_all_read within last 5 min, return 0
-    $snooze_key = 'notif_bell_snoozed_' . $user_id;
-    if (!empty($_SESSION[$snooze_key])) {
-        $snoozed_at = (int)$_SESSION[$snooze_key];
-        if (time() - $snoozed_at < 300) { // 5 minutes snooze
-            return 0;
-        } else {
-            unset($_SESSION[$snooze_key]); // snooze expired
-        }
-    }
+    // No snooze: always return the real unread count so new notifications
+    // are immediately visible after "Mark All Read".
     try {
         $s = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND status = 'unread'");
         $s->execute([$user_id]);
@@ -558,14 +550,22 @@ try {
                     );
                     $bell_stmt->execute([$user_id]);
                     $bell_unread_count = (int)$bell_stmt->fetchColumn();
+
+                    $tot_stmt = $pdo->prepare(
+                        "SELECT COUNT(*) FROM notifications WHERE user_id = ?"
+                    );
+                    $tot_stmt->execute([$user_id]);
+                    $total_count = (int)$tot_stmt->fetchColumn();
                 } catch (Throwable $_e) {
                     $bell_unread_count = 0;
+                    $total_count = 0;
                 }
 
                 echo json_encode([
                     'success'           => true,
                     'unread_count'      => $bell_unread_count,  // actual notification rows unread
                     'bell_unread_count' => $bell_unread_count,  // header bell = dropdown count
+                    'total_count'       => $total_count,        // total notifications count
                     'category_counts'   => $cat_counts,         // per-section sidebar badges
                 ]);
                 break;
@@ -593,10 +593,15 @@ try {
                 $cat_counts = get_category_unread_counts($pdo, $user_id, $role, $myStationId);
                 $bell_unread_count = get_bell_count($pdo, $user_id);
 
+                $tot_stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ?");
+                $tot_stmt->execute([$user_id]);
+                $total_count = (int)$tot_stmt->fetchColumn();
+
                 echo json_encode([
                     'success'           => true,
                     'unread_count'      => $bell_unread_count,
                     'bell_unread_count' => $bell_unread_count,
+                    'total_count'       => $total_count,
                     'category_counts'   => $cat_counts,
                 ]);
                 break;
@@ -616,10 +621,15 @@ try {
                 $cat_counts = get_category_unread_counts($pdo, $user_id, $role, $myStationId);
                 $bell_unread_count = get_bell_count($pdo, $user_id);
 
+                $tot_stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ?");
+                $tot_stmt->execute([$user_id]);
+                $total_count = (int)$tot_stmt->fetchColumn();
+
                 echo json_encode([
                     'success'           => true,
                     'unread_count'      => $bell_unread_count,
                     'bell_unread_count' => $bell_unread_count,
+                    'total_count'       => $total_count,
                     'category_counts'   => $cat_counts,
                 ]);
                 break;
@@ -633,10 +643,11 @@ try {
                      WHERE user_id = ? AND status = 'unread'"
                 );
                 $stmt->execute([$user_id]);
+                $marked_count = $stmt->rowCount();
 
-                // Set a 5-minute session snooze so the bell stays at 0
-                // even if the generator re-creates notifications on next poll
-                $_SESSION['notif_bell_snoozed_' . $user_id] = time();
+                $tot_stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ?");
+                $tot_stmt->execute([$user_id]);
+                $total_count = (int)$tot_stmt->fetchColumn();
 
                 $myStationId = (int)($me['station_id'] ?? 0);
                 $cat_counts_mar = get_category_unread_counts($pdo, $user_id, $role, $myStationId);
@@ -644,8 +655,10 @@ try {
 
                 echo json_encode([
                     'success'           => true,
+                    'marked_count'      => $marked_count,
                     'unread_count'      => 0,
                     'bell_unread_count' => 0,
+                    'total_count'       => $total_count,
                     'category_counts'   => $cat_counts_mar,
                 ]);
                 break;

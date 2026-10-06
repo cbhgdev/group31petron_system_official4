@@ -100,21 +100,12 @@ if (in_array($role, ['staff','admin','manager','superadmin','developer'])) {
         $hc_stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND status = 'unread'");
         $hc_stmt->execute([(int)($user['id'] ?? 0)]);
         $header_unread_count = (int)$hc_stmt->fetchColumn();
-        
-        // Respect session snooze so badge does not flicker on refresh after mark_all_read
-        $sn_key = 'notif_bell_snoozed_' . (int)($user['id'] ?? 0);
-        if (!empty($_SESSION[$sn_key])) {
-            if (time() - (int)$_SESSION[$sn_key] < 300) {
-                $header_unread_count = 0;
-            } else {
-                unset($_SESSION[$sn_key]);
-            }
-        }
     } catch (Exception $e) {
         $header_notifications = [];
         $header_unread_count = 0;
     }
 }
+
 
 // --- FETCH ALERTS FOR DROPDOWN ---
 $header_alerts = [];
@@ -360,16 +351,6 @@ if (in_array($role, ['staff','admin','manager','superadmin','developer'])) {
         $hc_stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND status = 'unread'");
         $hc_stmt->execute([(int)($user['id'] ?? 0)]);
         $header_unread_count = (int)$hc_stmt->fetchColumn();
-        
-        // Respect session snooze so badge does not flicker on refresh after mark_all_read
-        $sn_key = 'notif_bell_snoozed_' . (int)($user['id'] ?? 0);
-        if (!empty($_SESSION[$sn_key])) {
-            if (time() - (int)$_SESSION[$sn_key] < 300) {
-                $header_unread_count = 0;
-            } else {
-                unset($_SESSION[$sn_key]);
-            }
-        }
     } catch (Exception $e) {
         $header_notifications = [];
         $header_unread_count = 0;
@@ -5098,11 +5079,16 @@ require_once __DIR__ . '/rbac_menu.php';
             <?php if(in_array($role, ['staff','admin','manager','superadmin','developer']) && $show_notifications_widget): ?>
             <div class="notification-bell" id="notificationBell" onclick="petronToggleNotif(event)" style="z-index: 2147483645 !important; pointer-events: auto !important; position: relative !important; cursor: pointer !important;">
                 <i class="fas fa-bell" style="pointer-events: none !important;"></i>
-                <span class="badge" id="notificationBadge" data-server-count="<?php echo (int)$header_unread_count; ?>" style="display: <?php echo $header_unread_count > 0 ? 'inline-flex' : 'none'; ?>; pointer-events: none !important;"><?php echo $header_unread_count > 99 ? '99+' : (int)$header_unread_count; ?></span>
+                <span class="badge" id="notificationBadge" data-server-count="<?php echo (int)$header_unread_count; ?>" style="display: <?php echo ($header_unread_count > 0 || !empty($header_notifications)) ? 'inline-flex' : 'none'; ?>; background: <?php echo $header_unread_count > 0 ? '#dc2626' : '#64748b'; ?> !important; pointer-events: none !important;"><?php echo $header_unread_count > 0 ? ($header_unread_count > 99 ? '99+' : (int)$header_unread_count) : '0'; ?></span>
 
                 <div class="notif-dropdown" id="notificationDropdown">
                     <div class="notif-dropdown-header">
-                        <span>Notifications</span>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span>Notifications</span>
+                            <span class="notif-count-pill" id="notifDropdownBadge" style="display:inline-flex; align-items:center; justify-content:center; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; background:<?php echo $header_unread_count > 0 ? '#dc2626' : '#002F6C'; ?>; color:#ffffff; letter-spacing:0.3px;">
+                                <?php echo $header_unread_count > 0 ? ($header_unread_count . ' New') : (count($header_notifications) . ' Total'); ?>
+                            </span>
+                        </div>
                         <div class="notif-header-actions">
                             <button id="markAllReadBtn">Mark All Read</button>
                             <button id="refreshNotificationsBtn"><i class="fas fa-sync"></i></button>
@@ -6644,8 +6630,9 @@ require_once __DIR__ . '/rbac_menu.php';
                 return;
             }
 
-            function updateBadge(count, categoryCounts) {
+            function updateBadge(count, categoryCounts, totalCount) {
                 const badge = document.getElementById('notificationBadge');
+                const tot = (typeof totalCount !== 'undefined') ? totalCount : document.querySelectorAll('#notificationList .notif-item').length;
                 if (badge) {
                     if (window.petronSystemSettings && window.petronSystemSettings.enableSystemNotifications === false) {
                         badge.style.display = 'none';
@@ -6654,9 +6641,25 @@ require_once __DIR__ . '/rbac_menu.php';
                     if (count > 0) {
                         badge.textContent = count > 99 ? '99+' : count;
                         badge.style.display = 'inline-flex';
-                        badge.style.background = '#dc2626';
+                        badge.style.setProperty('background', '#dc2626', 'important');
+                        badge.title = `${count} unread notification(s)`;
+                    } else if (tot > 0) {
+                        badge.textContent = '0';
+                        badge.style.display = 'inline-flex';
+                        badge.style.setProperty('background', '#64748b', 'important');
+                        badge.title = `0 unread (${tot} total notifications)`;
                     } else {
                         badge.style.display = 'none';
+                    }
+                }
+                const ddBadge = document.getElementById('notifDropdownBadge');
+                if (ddBadge) {
+                    if (count > 0) {
+                        ddBadge.textContent = `${count} New`;
+                        ddBadge.style.background = '#dc2626';
+                    } else {
+                        ddBadge.textContent = tot > 0 ? `${tot} Total` : '0 Total';
+                        ddBadge.style.background = '#002F6C';
                     }
                 }
                 if (categoryCounts) updateSidebarBadges(categoryCounts);
@@ -6675,7 +6678,7 @@ require_once __DIR__ . '/rbac_menu.php';
                     const data = await res.json();
                     if (data.success) {
                         renderNotifications(data.notifications || []);
-                        updateBadge(data.bell_unread_count ?? data.unread_count ?? 0, data.category_counts);
+                        updateBadge(data.bell_unread_count ?? data.unread_count ?? 0, data.category_counts, data.total || (data.notifications ? data.notifications.length : 0));
                     } else {
                         if (el) el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;display:block;margin-bottom:8px;"></i>No notifications.</div>';
                     }
@@ -6689,7 +6692,7 @@ require_once __DIR__ . '/rbac_menu.php';
                     const res  = await fetch(API_LIST + '?action=unread_count', { credentials: 'same-origin', cache: 'no-store' });
                     const data = await res.json();
                     if (data.success) {
-                        updateBadge(data.bell_unread_count ?? data.unread_count ?? 0, data.category_counts);
+                        updateBadge(data.bell_unread_count ?? data.unread_count ?? 0, data.category_counts, data.total_count);
                     }
                 } catch (e) {}
             }
@@ -6713,7 +6716,8 @@ require_once __DIR__ . '/rbac_menu.php';
                         if (cur > 0) {
                             badge.textContent = cur > 99 ? '99+' : cur;
                         } else {
-                            badge.style.display = 'none';
+                            badge.textContent = '0';
+                            badge.style.setProperty('background', '#64748b', 'important');
                         }
                     }
                 })();
@@ -6724,7 +6728,7 @@ require_once __DIR__ . '/rbac_menu.php';
                         .then(r => r.ok ? r.json() : null)
                         .then(data => {
                             if (data && data.success) {
-                                updateBadge(data.bell_unread_count ?? 0, data.category_counts);
+                                updateBadge(data.bell_unread_count ?? 0, data.category_counts, data.total_count);
                             }
                         })
                         .catch(() => {});
@@ -6741,7 +6745,15 @@ require_once __DIR__ . '/rbac_menu.php';
                         const res = await fetch(API_LIST + '?action=mark_all_read', { method: 'POST', credentials: 'same-origin' });
                         const data = await res.json();
                         if (data && data.success) {
-                            updateBadge(0, data.category_counts); // zero bell immediately
+                            updateBadge(0, data.category_counts, data.total_count);
+                            const countText = (data.marked_count && data.marked_count > 0)
+                                ? `${data.marked_count} notification(s) marked as read`
+                                : 'All notifications marked as read';
+                            if (typeof window.showGlobalToast === 'function') {
+                                window.showGlobalToast(countText, 'success');
+                            } else if (typeof window.showToast === 'function') {
+                                window.showToast(countText, 'success');
+                            }
                         }
                     } catch (e) {}
                     loadNotifications();
@@ -6888,14 +6900,32 @@ require_once __DIR__ . '/rbac_menu.php';
                 return Math.floor(diff / 86400) + 'd ago';
             }
 
-            function updateBadge(count, categoryCounts) {
+            function updateBadge(count, categoryCounts, totalCount) {
                 const badge = document.getElementById('notificationBadge');
+                const tot = (typeof totalCount !== 'undefined') ? totalCount : document.querySelectorAll('#notificationList .notif-item').length;
                 if (badge) {
                     if (count > 0) {
                         badge.textContent = count > 99 ? '99+' : count;
                         badge.style.display = 'inline-flex';
+                        badge.style.setProperty('background', '#dc2626', 'important');
+                        badge.title = `${count} unread notification(s)`;
+                    } else if (tot > 0) {
+                        badge.textContent = '0';
+                        badge.style.display = 'inline-flex';
+                        badge.style.setProperty('background', '#64748b', 'important');
+                        badge.title = `0 unread (${tot} total notifications)`;
                     } else {
                         badge.style.display = 'none';
+                    }
+                }
+                const ddBadge = document.getElementById('notifDropdownBadge');
+                if (ddBadge) {
+                    if (count > 0) {
+                        ddBadge.textContent = `${count} New`;
+                        ddBadge.style.background = '#dc2626';
+                    } else {
+                        ddBadge.textContent = tot > 0 ? `${tot} Total` : '0 Total';
+                        ddBadge.style.background = '#002F6C';
                     }
                 }
                 if (categoryCounts) {
@@ -6971,10 +7001,10 @@ require_once __DIR__ . '/rbac_menu.php';
                                     </a>`;
                         });
                         el.innerHTML = html;
-                        updateBadge(data.unread_count || 0, data.category_counts);
+                        updateBadge(data.unread_count || 0, data.category_counts, data.total || (data.notifications ? data.notifications.length : 0));
                     } else if (data.success) {
                         el.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;margin-bottom:8px;display:block;"></i>No notifications yet.</div>';
-                        updateBadge(0, data.category_counts);
+                        updateBadge(0, data.category_counts, 0);
                     } else {
                         el.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;margin-bottom:8px;display:block;"></i>No notifications yet.</div>';
                     }
@@ -6996,7 +7026,8 @@ require_once __DIR__ . '/rbac_menu.php';
                             if (cur > 0) {
                                 badge.textContent = cur > 99 ? '99+' : cur;
                             } else {
-                                badge.style.display = 'none';
+                                badge.textContent = '0';
+                                badge.style.setProperty('background', '#64748b', 'important');
                             }
                         }
                         const item = document.querySelector('[onclick*="staffMarkRead(' + id + ')"]');
@@ -7015,7 +7046,7 @@ require_once __DIR__ . '/rbac_menu.php';
                             .then(data => {
                                 if (data && data.success) {
                                     // Sync both header bell + sidebar badges with server truth
-                                    updateBadge(data.bell_unread_count ?? 0, data.category_counts);
+                                    updateBadge(data.bell_unread_count ?? 0, data.category_counts, data.total_count);
                                 }
                             })
                             .catch(() => {});
@@ -7040,7 +7071,7 @@ require_once __DIR__ . '/rbac_menu.php';
                         const bellCount = (typeof data.bell_unread_count !== 'undefined')
                             ? data.bell_unread_count
                             : (data.unread_count || 0);
-                        updateBadge(bellCount, data.category_counts);
+                        updateBadge(bellCount, data.category_counts, data.total_count);
                     }
                 } catch (e) {}
             }
@@ -7092,14 +7123,22 @@ require_once __DIR__ . '/rbac_menu.php';
                         const res = await fetch(API_LIST + '?action=mark_all_read', { method: 'POST', credentials: 'same-origin' });
                         const data = await res.json();
                         if (data && data.success) {
-                            updateBadge(0, data.category_counts);
+                            updateBadge(0, data.category_counts, data.total_count);
+                            const countText = (data.marked_count && data.marked_count > 0)
+                                ? `${data.marked_count} notification(s) marked as read`
+                                : 'All notifications marked as read';
+                            if (typeof window.showGlobalToast === 'function') {
+                                window.showGlobalToast(countText, 'success');
+                            } else if (typeof window.showToast === 'function') {
+                                window.showToast(countText, 'success');
+                            }
                         }
                     } catch (e) {}
                     loadNotifications();
                 });
             }
 
-            // â”€â”€ Refresh button â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ── Refresh button ──────────────────────────────────────────────────
             const refreshBtn = document.getElementById('refreshNotificationsBtn');
             if (refreshBtn) {
                 refreshBtn.addEventListener('click', async function (e) {
@@ -7118,10 +7157,10 @@ require_once __DIR__ . '/rbac_menu.php';
 
             // ── Direct notifications (run generator on page load) ──
             runGeneratorBackground();
-            // In the background, ONLY poll the unread badge count periodically — do NOT reload the notification list
+            // Poll unread badge count every 10s for real-time live banner count updates
             setInterval(function() {
                 fetchUnreadCount();
-            }, 20000);
+            }, 10000);
         })();
         <?php endif; ?>
     </script>
