@@ -395,8 +395,7 @@ body,html{overflow-x:hidden;max-width:100%;}
 .inv-stat-card{background:#ffffff;border:1px solid #cbd5e1;border-radius:10px;padding:16px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 1px 3px rgba(0,0,0,.05);position:relative;overflow:hidden;transition:all .18s ease;}
 .inv-stat-card[data-filter]{cursor:pointer;user-select:none;}
 .inv-stat-card[data-filter]:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.12);border-color:#94a3b8;}
-.inv-stat-card.card-active{border-width:2px!important;box-shadow:0 4px 14px rgba(0,0,0,.15)!important;}
-.inv-stat-card.card-active .inv-stat-label::after{content:' <i class="fas fa-times"></i> (click to reset)';font-size:9px;opacity:.75;}
+.inv-stat-card.card-active{border-width:2px!important;border-color:#002F70!important;box-shadow:0 4px 14px rgba(0,47,112,.15)!important;}
 .inv-stat-info{display:flex;flex-direction:column;}
 .inv-stat-label{font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;}
 .inv-stat-val{font-size:20px;font-weight:700;color:#1e293b;}
