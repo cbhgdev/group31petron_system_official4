@@ -340,6 +340,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (in_array($_POST['action'] ?? '', [
         $transactions_to_validate = $tx_stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $validated_count = 0;
+        $notifications_to_send = [];
+
         foreach ($transactions_to_validate as $tx) {
             $prev_reading    = (float)$tx['previous_reading'];
             $present_reading = (float)$tx['present_reading'];
@@ -369,34 +371,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (in_array($_POST['action'] ?? '', [
             }
             $pdo->prepare("UPDATE fuel_transactions SET inventory_deducted = 1 WHERE id = ?")->execute([$tx['id']]);
 
-            log_activity($pdo, $me['id'], 'Fuel Reading Approved', "TXN {$tx['transaction_id']} | {$tx['fuel_type']} | {$liters_sold} L");
-
-            // Notify staff member who encoded this meter reading
-            $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
-            if ($encoding_staff_id > 0 && function_exists('notify_staff_action_result')) {
-                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
-                $mgr_role = normalize_role($me['role'] ?? 'Manager');
-                $val_details = "Validated in Fuel Sales Closing ({$shift}, {$rep_date}) for " . number_format($liters_sold, 2) . " Liters (₱" . number_format($total_amount, 2) . ")." . (!empty($manager_remarks) ? " Remarks: {$manager_remarks}" : "");
-                notify_staff_action_result(
-                    $pdo,
-                    $encoding_staff_id,
-                    'Fuel Meter Reading',
-                    'Validated',
-                    "TXN {$tx['transaction_id']} ({$tx['fuel_type']})",
-                    $mgr_name,
-                    $mgr_role,
-                    $val_details,
-                    'fuel_reading',
-                    (int)$tx['id'],
-                    'staff_fuel_sales_closing.php',
-                    $shift
-                );
-            }
-
             $validated_count++;
+
+            // Collect notifications to dispatch AFTER transaction commit
+            $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
+            if ($encoding_staff_id > 0) {
+                $notifications_to_send[] = [
+                    'staff_id'    => $encoding_staff_id,
+                    'tx_id'       => (int)$tx['id'],
+                    'txn_id'      => $tx['transaction_id'],
+                    'fuel_type'   => $tx['fuel_type'],
+                    'liters_sold' => $liters_sold,
+                    'total_amount'=> $total_amount,
+                ];
+            }
         }
 
-        $pdo->commit();
+        // Commit database transaction first before external logging or notifications
+        if ($pdo->inTransaction()) {
+            $pdo->commit();
+        }
+
+        // Post-commit notifications and activity logs (never disrupts transaction commit)
+        foreach ($notifications_to_send as $notifItem) {
+            try {
+                log_activity($pdo, $me['id'], 'Fuel Reading Approved', "TXN {$notifItem['txn_id']} | {$notifItem['fuel_type']} | {$notifItem['liters_sold']} L");
+
+                if (function_exists('notify_staff_action_result')) {
+                    $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                    $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                    $val_details = "Validated in Fuel Sales Closing ({$shift}, {$rep_date}) for " . number_format($notifItem['liters_sold'], 2) . " Liters (₱" . number_format($notifItem['total_amount'], 2) . ")." . (!empty($manager_remarks) ? " Remarks: {$manager_remarks}" : "");
+                    notify_staff_action_result(
+                        $pdo,
+                        $notifItem['staff_id'],
+                        'Fuel Meter Reading',
+                        'Validated',
+                        "TXN {$notifItem['txn_id']} ({$notifItem['fuel_type']})",
+                        $mgr_name,
+                        $mgr_role,
+                        $val_details,
+                        'fuel_reading',
+                        $notifItem['tx_id'],
+                        'staff_fuel_sales_closing.php',
+                        $shift
+                    );
+                }
+            } catch (Throwable $ne) {
+                error_log("Post-commit notification error: " . $ne->getMessage());
+            }
+        }
 
         echo json_encode([
             'success' => true,
@@ -404,19 +427,370 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (in_array($_POST['action'] ?? '', [
         ]);
         exit;
     } catch (Exception $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ($pdo->inTransaction()) {
+            try { $pdo->rollBack(); } catch (Throwable $re) {}
+        }
         echo json_encode(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
         exit;
     }
 }
 
-// ─── POST Actions (Validate / Reject) ──────────────────────────
+// ─── POST Actions (Validate / Reject / Adjust / Batch Adjust / Batch Reject) ──
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $is_ajax = !empty($_POST['ajax']) || (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest');
     $action  = trim($_POST['action'] ?? '');
     $raw_id  = trim($_POST['id'] ?? '');
     $remarks = trim($_POST['remarks'] ?? '');
 
+    // ── NATIVE BATCH ADJUST ACTION ──────────────────────────────────
+    if ($action === 'batch_adjust') {
+        if ($is_ajax) {
+            header('Content-Type: application/json');
+        }
+        if (empty($remarks)) {
+            if ($is_ajax) {
+                echo json_encode(['success' => false, 'message' => 'Adjustment remarks/reason is required.']);
+                exit;
+            }
+            $_SESSION['error'] = 'Adjustment remarks/reason is required.';
+            header('Location: manager_fuel_transaction_validation.php'); exit;
+        }
+
+        $adjustments_raw = $_POST['adjustments'] ?? [];
+        if (is_string($adjustments_raw)) {
+            $adjustments = json_decode($adjustments_raw, true) ?: [];
+        } else {
+            $adjustments = (array)$adjustments_raw;
+        }
+
+        if (empty($adjustments)) {
+            if ($is_ajax) {
+                echo json_encode(['success' => false, 'message' => 'No transactions provided for adjustment.']);
+                exit;
+            }
+            $_SESSION['error'] = 'No transactions provided for adjustment.';
+            header('Location: manager_fuel_transaction_validation.php'); exit;
+        }
+
+        try {
+            $pdo->beginTransaction();
+
+            $adjusted_count = 0;
+            $notifications_to_send = [];
+            $logs_to_send = [];
+
+            foreach ($adjustments as $adj) {
+                $curr_id = (int)($adj['id'] ?? 0);
+                if ($curr_id <= 0) continue;
+
+                $stmt = $pdo->prepare("SELECT * FROM fuel_transactions WHERE id = ? AND station_id = ? LIMIT 1 FOR UPDATE");
+                $stmt->execute([$curr_id, $station_id]);
+                $tx = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$tx) continue;
+
+                if (!is_pending_validation_status($tx['status'])) {
+                    continue;
+                }
+
+                $beginning   = isset($adj['beginning'])   ? (float)$adj['beginning']   : (float)$tx['previous_reading'];
+                $ending      = isset($adj['ending'])      ? (float)$adj['ending']      : (float)$tx['present_reading'];
+                $calibration = isset($adj['calibration']) ? (float)$adj['calibration'] : (float)$tx['calibration'];
+
+                if ($ending < $beginning) {
+                    throw new Exception("Ending reading ({$ending}) cannot be less than beginning reading ({$beginning}) for {$tx['transaction_id']}.");
+                }
+
+                $liters_sold     = max(0.00, $ending - $beginning - $calibration);
+                $price_per_liter = (float)$tx['price_per_liter'];
+                $total_amount    = round($liters_sold * $price_per_liter, 2);
+
+                $up = $pdo->prepare("
+                    UPDATE fuel_transactions 
+                    SET previous_reading = ?, 
+                        present_reading = ?, 
+                        calibration = ?, 
+                        liters_sold = ?, 
+                        total_amount = ?, 
+                        status = 'Adjusted', 
+                        validated_by = ?, 
+                        validated_at = NOW(), 
+                        reject_reason = ? 
+                    WHERE id = ?
+                ");
+                $up->execute([$beginning, $ending, $calibration, $liters_sold, $total_amount, $me['id'], $remarks, $curr_id]);
+
+                // Inventory delta
+                $was_deducted = !empty($tx['inventory_deducted']) || in_array(strtolower(trim($tx['status'] ?? '')), ['verified', 'approved', 'adjusted']);
+                $old_liters = (float)($tx['liters_sold'] ?? 0);
+                $liters_diff = $was_deducted ? ($liters_sold - $old_liters) : $liters_sold;
+
+                if (abs($liters_diff) > 0.0001) {
+                    deduct_fuel_inventory_stock($pdo, (int)$station_id, $tx['fuel_type'], $tx['fuel_type'], $liters_diff, (int)$me['id']);
+                }
+                $pdo->prepare("UPDATE fuel_transactions SET inventory_deducted = 1 WHERE id = ?")->execute([$curr_id]);
+
+                // Fuel type ID lookup
+                $fuel_type_id = null;
+                try {
+                    $ft_stmt = $pdo->prepare("SELECT fuel_type_id FROM fuel_inventory WHERE station_id = ? AND LOWER(TRIM(fuel_type)) = LOWER(TRIM(?)) LIMIT 1");
+                    $ft_stmt->execute([$station_id, $tx['fuel_type']]);
+                    $fuel_type_id = $ft_stmt->fetchColumn() ?: null;
+                } catch (Exception $e) {}
+
+                // Insert into fuel_adjustments
+                try {
+                    $meta_notes = json_encode([
+                        'transaction_id'  => $tx['transaction_id'],
+                        'fuel_line'       => 'Pump #' . ($tx['pump_id'] ?? '—'),
+                        'fuel_type'       => $tx['fuel_type'],
+                        'shift'           => $tx['shift_name'] ?: ($tx['shift_period'] ?: '—'),
+                        'staff_name'      => $tx['staff_name'] ?? '—',
+                        'prev_beginning'  => (float)$tx['previous_reading'],
+                        'prev_ending'     => (float)$tx['present_reading'],
+                        'prev_calibration'=> (float)$tx['calibration'],
+                        'new_beginning'   => $beginning,
+                        'new_ending'      => $ending,
+                        'new_calibration' => $calibration,
+                    ]);
+
+                    $ins_adj = $pdo->prepare("
+                        INSERT INTO fuel_adjustments 
+                        (station_id, adjustment_date, fuel_type, fuel_type_id, adjustment_type, liters, previous_value, new_value, reason, user_id, notes, status, approved_by, approved_at, created_at)
+                        VALUES (?, CURDATE(), ?, ?, 'transaction_adjustment', ?, ?, ?, ?, ?, ?, 'Approved', ?, NOW(), NOW())
+                    ");
+                    $adj_liters_diff = $liters_sold - (float)$tx['liters_sold'];
+                    $ins_adj->execute([
+                        $station_id,
+                        $tx['fuel_type'],
+                        $fuel_type_id,
+                        $adj_liters_diff,
+                        $tx['liters_sold'],
+                        $liters_sold,
+                        $remarks,
+                        $me['id'],
+                        $meta_notes,
+                        $me['id']
+                    ]);
+                } catch (Exception $e) {
+                    error_log("Failed to insert fuel_adjustments: " . $e->getMessage());
+                }
+
+                $logs_to_send[] = [
+                    'action'  => 'Fuel Reading Adjusted and Approved',
+                    'details' => "TXN {$tx['transaction_id']} | {$tx['fuel_type']} | Old: {$tx['liters_sold']} L -> New: {$liters_sold} L | Reason: {$remarks}"
+                ];
+
+                $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
+                if ($encoding_staff_id > 0) {
+                    $notifications_to_send[] = [
+                        'staff_id'    => $encoding_staff_id,
+                        'tx_id'       => $curr_id,
+                        'txn_id'      => $tx['transaction_id'],
+                        'fuel_type'   => $tx['fuel_type'],
+                        'shift_lbl'   => $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift'),
+                        'adj_details' => "Readings adjusted: " . number_format((float)$tx['liters_sold'], 2) . " L → " . number_format($liters_sold, 2) . " L (₱" . number_format($total_amount, 2) . "). Reason: {$remarks}."
+                    ];
+                }
+
+                $adjusted_count++;
+            }
+
+            // Commit database transaction first before logging and notifications
+            if ($pdo->inTransaction()) {
+                try {
+                    $pdo->commit();
+                } catch (Throwable $ce) {
+                    error_log("batch_adjust commit notice: " . $ce->getMessage());
+                }
+            }
+
+            // Post-commit logs & notifications (completely outside active transaction)
+            foreach ($logs_to_send as $l) {
+                try { log_activity($pdo, $me['id'], $l['action'], $l['details']); } catch (Throwable $t) {}
+            }
+            if (function_exists('notify_staff_action_result')) {
+                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                foreach ($notifications_to_send as $n) {
+                    try {
+                        notify_staff_action_result(
+                            $pdo,
+                            $n['staff_id'],
+                            'Fuel Meter Reading',
+                            'Adjusted',
+                            "TXN {$n['txn_id']} ({$n['fuel_type']})",
+                            $mgr_name,
+                            $mgr_role,
+                            $n['adj_details'],
+                            'fuel_reading',
+                            $n['tx_id'],
+                            'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
+                            $n['shift_lbl']
+                        );
+                    } catch (Throwable $t) {}
+                }
+            }
+
+            if ($is_ajax) {
+                unset($_SESSION['success'], $_SESSION['error']);
+                echo json_encode([
+                    'success' => true,
+                    'count'   => $adjusted_count,
+                    'message' => "Successfully adjusted {$adjusted_count} transaction(s)."
+                ]);
+                exit;
+            }
+
+            $_SESSION['success'] = "Successfully adjusted {$adjusted_count} transaction(s).";
+            header('Location: manager_fuel_transaction_validation.php'); exit;
+
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                try { $pdo->rollBack(); } catch (Throwable $re) {}
+            }
+            if ($is_ajax) {
+                echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+                exit;
+            }
+            $_SESSION['error'] = "Error: " . $e->getMessage();
+            header('Location: manager_fuel_transaction_validation.php'); exit;
+        }
+    }
+
+    // ── NATIVE BATCH REJECT ACTION ──────────────────────────────────
+    if ($action === 'batch_reject') {
+        if ($is_ajax) {
+            header('Content-Type: application/json');
+        }
+        if (empty($remarks)) {
+            if ($is_ajax) {
+                echo json_encode(['success' => false, 'message' => 'Rejection remarks/reason is required.']);
+                exit;
+            }
+            $_SESSION['error'] = 'Rejection remarks/reason is required.';
+            header('Location: manager_fuel_transaction_validation.php'); exit;
+        }
+
+        $tx_ids_raw = $_POST['tx_ids'] ?? [];
+        if (is_string($tx_ids_raw)) {
+            $tx_ids = json_decode($tx_ids_raw, true) ?: explode(',', $tx_ids_raw);
+        } else {
+            $tx_ids = (array)$tx_ids_raw;
+        }
+        $tx_ids = array_filter(array_map('intval', $tx_ids));
+
+        if (empty($tx_ids)) {
+            if ($is_ajax) {
+                echo json_encode(['success' => false, 'message' => 'No transactions selected for rejection.']);
+                exit;
+            }
+            $_SESSION['error'] = 'No transactions selected for rejection.';
+            header('Location: manager_fuel_transaction_validation.php'); exit;
+        }
+
+        try {
+            $pdo->beginTransaction();
+
+            $rejected_count = 0;
+            $notifications_to_send = [];
+            $logs_to_send = [];
+
+            foreach ($tx_ids as $curr_id) {
+                $stmt = $pdo->prepare("SELECT * FROM fuel_transactions WHERE id = ? AND station_id = ? LIMIT 1 FOR UPDATE");
+                $stmt->execute([$curr_id, $station_id]);
+                $tx = $stmt->fetch(PDO::FETCH_ASSOC);
+                if (!$tx) continue;
+
+                $was_deducted = !empty($tx['inventory_deducted']) || in_array(strtolower(trim($tx['status'] ?? '')), ['verified', 'approved', 'adjusted']);
+
+                $up = $pdo->prepare("UPDATE fuel_transactions SET status = 'Rejected', validated_by = ?, validated_at = NOW(), reject_reason = ?, inventory_deducted = 0 WHERE id = ?");
+                $up->execute([$me['id'], $remarks, $curr_id]);
+
+                if ($was_deducted && (float)$tx['liters_sold'] > 0) {
+                    refund_fuel_inventory_stock($pdo, (int)$station_id, $tx['fuel_type'], $tx['fuel_type'], (float)$tx['liters_sold'], (int)$me['id']);
+                }
+
+                $logs_to_send[] = [
+                    'action'  => 'Fuel Reading Rejected',
+                    'details' => "TXN {$tx['transaction_id']} | Reason: {$remarks}"
+                ];
+
+                $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
+                if ($encoding_staff_id > 0) {
+                    $notifications_to_send[] = [
+                        'staff_id'   => $encoding_staff_id,
+                        'tx_id'      => $curr_id,
+                        'txn_id'     => $tx['transaction_id'],
+                        'fuel_type'  => $tx['fuel_type'],
+                        'shift_lbl'  => $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift'),
+                        'rej_details'=> "Reason: {$remarks}. Returned to staff for re-checking."
+                    ];
+                }
+
+                $rejected_count++;
+            }
+
+            if ($pdo->inTransaction()) {
+                try {
+                    $pdo->commit();
+                } catch (Throwable $ce) {
+                    error_log("batch_reject commit notice: " . $ce->getMessage());
+                }
+            }
+
+            foreach ($logs_to_send as $l) {
+                try { log_activity($pdo, $me['id'], $l['action'], $l['details']); } catch (Throwable $t) {}
+            }
+            if (function_exists('notify_staff_action_result')) {
+                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                foreach ($notifications_to_send as $n) {
+                    try {
+                        notify_staff_action_result(
+                            $pdo,
+                            $n['staff_id'],
+                            'Fuel Meter Reading',
+                            'Rejected',
+                            "TXN {$n['txn_id']} ({$n['fuel_type']})",
+                            $mgr_name,
+                            $mgr_role,
+                            $n['rej_details'],
+                            'fuel_reading',
+                            $n['tx_id'],
+                            'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
+                            $n['shift_lbl']
+                        );
+                    } catch (Throwable $t) {}
+                }
+            }
+
+            if ($is_ajax) {
+                unset($_SESSION['success'], $_SESSION['error']);
+                echo json_encode([
+                    'success' => true,
+                    'count'   => $rejected_count,
+                    'message' => "Successfully rejected {$rejected_count} transaction(s)."
+                ]);
+                exit;
+            }
+
+            $_SESSION['success'] = "Successfully rejected {$rejected_count} transaction(s).";
+            header('Location: manager_fuel_transaction_validation.php'); exit;
+
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) {
+                try { $pdo->rollBack(); } catch (Throwable $re) {}
+            }
+            if ($is_ajax) {
+                echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+                exit;
+            }
+            $_SESSION['error'] = "Error: " . $e->getMessage();
+            header('Location: manager_fuel_transaction_validation.php'); exit;
+        }
+    }
+
+    // ── SINGLE TRANSACTION ACTIONS (VALIDATE, REJECT, ADJUST) ───────
     if (empty($raw_id)) {
         if ($is_ajax) {
             header('Content-Type: application/json');
@@ -427,11 +801,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: manager_fuel_transaction_validation.php'); exit;
     }
 
+    $success_msg = '';
+    $logs_to_send = [];
+    $notifications_to_send = [];
+
     try {
         $pdo->beginTransaction();
 
         // Fetch transaction details (supports both integer id and transaction_id string)
-        $stmt = $pdo->prepare("SELECT * FROM fuel_transactions WHERE (id = ? OR transaction_id = ?) AND station_id = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM fuel_transactions WHERE (id = ? OR transaction_id = ?) AND station_id = ? LIMIT 1 FOR UPDATE");
         $stmt->execute([$raw_id, $raw_id, $station_id]);
         $tx = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -470,30 +848,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $pdo->prepare("UPDATE fuel_transactions SET inventory_deducted = 1 WHERE id = ?")->execute([$tx_id]);
 
-            // Log activity
-            log_activity($pdo, $me['id'], 'Fuel Reading Approved', "TXN {$tx['transaction_id']} | {$tx['fuel_type']} | {$liters_sold} L");
+            // Queue activity log
+            $logs_to_send[] = [
+                'action'  => 'Fuel Reading Approved',
+                'details' => "TXN {$tx['transaction_id']} | {$tx['fuel_type']} | {$liters_sold} L"
+            ];
 
-            // Notify staff member who encoded the reading
+            // Queue notification to staff member who encoded the reading
             $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
-            if ($encoding_staff_id > 0 && function_exists('notify_staff_action_result')) {
-                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
-                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+            if ($encoding_staff_id > 0) {
                 $shift_lbl = $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift');
                 $val_details = "Reading validated for " . number_format($liters_sold, 2) . " Liters (₱" . number_format($total_amount, 2) . ") in {$shift_lbl}." . (!empty($remarks) ? " Remarks: {$remarks}" : "");
-                notify_staff_action_result(
-                    $pdo,
-                    $encoding_staff_id,
-                    'Fuel Meter Reading',
-                    'Validated',
-                    "TXN {$tx['transaction_id']} ({$tx['fuel_type']})",
-                    $mgr_name,
-                    $mgr_role,
-                    $val_details,
-                    'fuel_reading',
-                    (int)$tx_id,
-                    'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
-                    $shift_lbl
-                );
+                $notifications_to_send[] = [
+                    'staff_id'  => $encoding_staff_id,
+                    'type'      => 'Fuel Meter Reading',
+                    'status'    => 'Validated',
+                    'txn_id'    => $tx['transaction_id'],
+                    'fuel_type' => $tx['fuel_type'],
+                    'details'   => $val_details,
+                    'tx_id'     => $tx_id,
+                    'shift_lbl' => $shift_lbl
+                ];
             }
 
             // Check if all transactions for this shift/date are now verified, and if so, mark fuel_sales_closing as VERIFIED
@@ -517,7 +892,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             } catch (Exception $e) {}
 
-            $_SESSION['success'] = "Transaction <strong>{$tx['transaction_id']}</strong> validated successfully.";
+            $success_msg = "Transaction <strong>{$tx['transaction_id']}</strong> validated successfully.";
         }
         
         elseif ($action === 'reject') {
@@ -536,33 +911,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 refund_fuel_inventory_stock($pdo, (int)$station_id, $tx['fuel_type'], $tx['fuel_type'], (float)$tx['liters_sold'], (int)$me['id']);
             }
 
-            // Log activity
-            log_activity($pdo, $me['id'], 'Fuel Reading Rejected', "TXN {$tx['transaction_id']} | Reason: {$remarks}");
+            // Queue activity log
+            $logs_to_send[] = [
+                'action'  => 'Fuel Reading Rejected',
+                'details' => "TXN {$tx['transaction_id']} | Reason: {$remarks}"
+            ];
 
-            // Notify staff member who encoded the reading
+            // Queue notification to staff member who encoded the reading
             $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
-            if ($encoding_staff_id > 0 && function_exists('notify_staff_action_result')) {
-                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
-                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+            if ($encoding_staff_id > 0) {
                 $shift_lbl = $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift');
                 $rej_details = "Reason: {$remarks}. Returned to staff for re-checking.";
-                notify_staff_action_result(
-                    $pdo,
-                    $encoding_staff_id,
-                    'Fuel Meter Reading',
-                    'Rejected',
-                    "TXN {$tx['transaction_id']} ({$tx['fuel_type']})",
-                    $mgr_name,
-                    $mgr_role,
-                    $rej_details,
-                    'fuel_reading',
-                    (int)$tx_id,
-                    'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
-                    $shift_lbl
-                );
+                $notifications_to_send[] = [
+                    'staff_id'  => $encoding_staff_id,
+                    'type'      => 'Fuel Meter Reading',
+                    'status'    => 'Rejected',
+                    'txn_id'    => $tx['transaction_id'],
+                    'fuel_type' => $tx['fuel_type'],
+                    'details'   => $rej_details,
+                    'tx_id'     => $tx_id,
+                    'shift_lbl' => $shift_lbl
+                ];
             }
 
-            $_SESSION['success'] = "Transaction <strong>{$tx['transaction_id']}</strong> rejected and returned to staff.";
+            $success_msg = "Transaction <strong>{$tx['transaction_id']}</strong> rejected and returned to staff.";
         }
 
         elseif ($action === 'adjust') {
@@ -585,7 +957,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $preceding = get_preceding_shift_and_date($pdo, $tx['shift_period'], $tx_date_str);
                     
                     if ($preceding) {
-                        // Check if there is any unverified/unadjusted transaction for the preceding shift
                         $stmt_check = $pdo->prepare("
                             SELECT COUNT(*) 
                             FROM fuel_transactions 
@@ -602,23 +973,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             throw new Exception("Cannot adjust this transaction. The transaction for the preceding shift (" . ucfirst($preceding['shift_key']) . " on " . $preceding['date'] . ") for this fuel line must be verified or adjusted first.");
                         }
                     }
-                    
-                    // Note: Beginning reading mismatch is allowed for manager adjustments.
-                    // Managers may intentionally adjust beginning readings to correct errors
-                    // (e.g., forgotten calibration, wrong carry-over, etc.)
                 }
-                // end if ($tx['pump_id'] > 0)
 
-                // Perform calculations
-                // Only throw an error if ending is strictly less than beginning (meter went backwards).
-                // If ending == beginning (zero-sales shift), calibration may make the math negative —
-                // this is valid and should simply result in 0 liters sold.
                 if ($ending < $beginning) {
                     throw new Exception("Ending reading ({$ending}) cannot be less than beginning reading ({$beginning}). Please check the meter readings.");
                 }
                 $liters_sold = max(0.00, $ending - $beginning - $calibration);
                 $price_per_liter = (float)$tx['price_per_liter'];
-                $total_amount    = $liters_sold * $price_per_liter;
+                $total_amount    = round($liters_sold * $price_per_liter, 2);
 
                 // Update all fields including adjusted readings
                 $up = $pdo->prepare("
@@ -692,32 +1054,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     error_log("Failed to insert transaction adjustment log: " . $e->getMessage());
                 }
 
-                log_activity($pdo, $me['id'], 'Fuel Reading Adjusted and Approved', "TXN {$tx['transaction_id']} | {$tx['fuel_type']} | Old: {$tx['liters_sold']} L -> New: {$liters_sold} L | Reason: {$remarks}");
+                $logs_to_send[] = [
+                    'action'  => 'Fuel Reading Adjusted and Approved',
+                    'details' => "TXN {$tx['transaction_id']} | {$tx['fuel_type']} | Old: {$tx['liters_sold']} L -> New: {$liters_sold} L | Reason: {$remarks}"
+                ];
 
-                // Notify encoding staff
+                // Queue notification to encoding staff
                 $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
-                if ($encoding_staff_id > 0 && function_exists('notify_staff_action_result')) {
-                    $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
-                    $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                if ($encoding_staff_id > 0) {
                     $shift_lbl = $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift');
                     $adj_details = "Readings adjusted: " . number_format((float)$tx['liters_sold'], 2) . " L → " . number_format($liters_sold, 2) . " L (₱" . number_format($total_amount, 2) . "). Reason: {$remarks}.";
-                    notify_staff_action_result(
-                        $pdo,
-                        $encoding_staff_id,
-                        'Fuel Meter Reading',
-                        'Adjusted',
-                        "TXN {$tx['transaction_id']} ({$tx['fuel_type']})",
-                        $mgr_name,
-                        $mgr_role,
-                        $adj_details,
-                        'fuel_reading',
-                        (int)$tx_id,
-                        'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
-                        $shift_lbl
-                    );
+                    $notifications_to_send[] = [
+                        'staff_id'  => $encoding_staff_id,
+                        'type'      => 'Fuel Meter Reading',
+                        'status'    => 'Adjusted',
+                        'txn_id'    => $tx['transaction_id'],
+                        'fuel_type' => $tx['fuel_type'],
+                        'details'   => $adj_details,
+                        'tx_id'     => $tx_id,
+                        'shift_lbl' => $shift_lbl
+                    ];
                 }
 
-                $_SESSION['success'] = "Transaction <strong>{$tx['transaction_id']}</strong> adjusted and validated successfully.";
+                $success_msg = "Transaction <strong>{$tx['transaction_id']}</strong> adjusted and validated successfully.";
             } else {
                 // Legacy / bulk adjust: just change status to Adjusted
                 $up = $pdo->prepare("UPDATE fuel_transactions SET status = 'Adjusted', validated_by = ?, validated_at = NOW(), reject_reason = ? WHERE id = ?");
@@ -756,45 +1115,97 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ]);
                 } catch (Exception $e) {}
 
-                log_activity($pdo, $me['id'], 'Fuel Reading Marked for Adjustment', "TXN {$tx['transaction_id']} | Reason: {$remarks}");
+                $logs_to_send[] = [
+                    'action'  => 'Fuel Reading Marked for Adjustment',
+                    'details' => "TXN {$tx['transaction_id']} | Reason: {$remarks}"
+                ];
 
-                // Notify encoding staff
+                // Queue notification to encoding staff
                 $encoding_staff_id = (int)($tx['staff_id'] ?? ($tx['user_id'] ?? 0));
-                if ($encoding_staff_id > 0 && function_exists('notify_staff_action_result')) {
-                    $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
-                    $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                if ($encoding_staff_id > 0) {
                     $shift_lbl = $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift');
                     $adj_details = "Marked for adjustment. Reason: {$remarks}.";
-                    notify_staff_action_result(
-                        $pdo,
-                        $encoding_staff_id,
-                        'Fuel Meter Reading',
-                        'Adjusted',
-                        "TXN {$tx['transaction_id']} ({$tx['fuel_type']})",
-                        $mgr_name,
-                        $mgr_role,
-                        $adj_details,
-                        'fuel_reading',
-                        (int)$tx_id,
-                        'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
-                        $shift_lbl
-                    );
+                    $notifications_to_send[] = [
+                        'staff_id'  => $encoding_staff_id,
+                        'type'      => 'Fuel Meter Reading',
+                        'status'    => 'Adjusted',
+                        'txn_id'    => $tx['transaction_id'],
+                        'fuel_type' => $tx['fuel_type'],
+                        'details'   => $adj_details,
+                        'tx_id'     => $tx_id,
+                        'shift_lbl' => $shift_lbl
+                    ];
                 }
 
-                $_SESSION['success'] = "Transaction <strong>{$tx['transaction_id']}</strong> marked for adjustment.";
+                $success_msg = "Transaction <strong>{$tx['transaction_id']}</strong> marked for adjustment.";
             }
         }
 
+        // Commit database transaction first before logging and notifications
+        if ($pdo->inTransaction()) {
+            try {
+                $pdo->commit();
+            } catch (Throwable $ce) {
+                error_log("Single commit notice: " . $ce->getMessage());
+            }
+        }
 
-        $pdo->commit();
+        // Post-commit logs & notifications (completely outside active transaction)
+        foreach ($logs_to_send as $l) {
+            try { log_activity($pdo, $me['id'], $l['action'], $l['details']); } catch (Throwable $t) {}
+        }
+        if (function_exists('notify_staff_action_result')) {
+            $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+            $mgr_role = normalize_role($me['role'] ?? 'Manager');
+            foreach ($notifications_to_send as $n) {
+                try {
+                    notify_staff_action_result(
+                        $pdo,
+                        $n['staff_id'],
+                        $n['type'],
+                        $n['status'],
+                        "TXN {$n['txn_id']} ({$n['fuel_type']})",
+                        $mgr_name,
+                        $mgr_role,
+                        $n['details'],
+                        'fuel_reading',
+                        $n['tx_id'],
+                        'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
+                        $n['shift_lbl']
+                    );
+                } catch (Throwable $t) {}
+            }
+        }
 
         if ($is_ajax) {
+            unset($_SESSION['success'], $_SESSION['error']);
             header('Content-Type: application/json');
-            echo json_encode(['success' => true, 'message' => strip_tags($_SESSION['success'] ?? 'Action completed successfully.')]);
+            echo json_encode(['success' => true, 'message' => strip_tags($success_msg ?: 'Action completed successfully.')]);
             exit;
         }
+
+        $_SESSION['success'] = $success_msg;
     } catch (Exception $e) {
-        if ($pdo->inTransaction()) $pdo->rollBack();
+        if ($pdo->inTransaction()) {
+            try { $pdo->rollBack(); } catch (Throwable $re) {}
+        }
+
+        // If the error was just "There is no active transaction", but the update already committed
+        if (strpos($e->getMessage(), 'There is no active transaction') !== false) {
+            if ($is_ajax) {
+                unset($_SESSION['success'], $_SESSION['error']);
+                header('Content-Type: application/json');
+                echo json_encode(['success' => true, 'message' => strip_tags($success_msg ?: 'Action completed successfully.')]);
+                exit;
+            }
+            $_SESSION['success'] = $success_msg ?: 'Action completed successfully.';
+            $redirect_url = 'manager_fuel_transaction_validation.php';
+            if (!empty($_SERVER['QUERY_STRING'])) {
+                $redirect_url .= '?' . $_SERVER['QUERY_STRING'];
+            }
+            header('Location: ' . $redirect_url); exit;
+        }
+
         if ($is_ajax) {
             header('Content-Type: application/json');
             echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -853,14 +1264,14 @@ try {
     $sr->execute([$station_id, $date_from, $date_to]);
     $rejected_count = (int)$sr->fetchColumn();
 
-    // 4. Total Liters Sold Today (Verified/approved today)
-    $slt = $pdo->prepare("SELECT COALESCE(SUM(liters_sold), 0) FROM fuel_transactions WHERE station_id = ? AND LOWER(status) IN ('verified', 'approved', 'adjusted') AND DATE(transaction_date) = CURDATE()");
-    $slt->execute([$station_id]);
+    // 4. Total Liters Sold (Filtered by date range)
+    $slt = $pdo->prepare("SELECT COALESCE(SUM(liters_sold), 0) FROM fuel_transactions WHERE station_id = ? AND LOWER(status) IN ('verified', 'approved', 'adjusted') AND DATE(transaction_date) BETWEEN ? AND ?");
+    $slt->execute([$station_id, $date_from, $date_to]);
     $total_liters_today = (float)$slt->fetchColumn();
 
-    // 5. Total Sales Amount Today (Verified/approved today)
-    $sat = $pdo->prepare("SELECT COALESCE(SUM(total_amount), 0) FROM fuel_transactions WHERE station_id = ? AND LOWER(status) IN ('verified', 'approved', 'adjusted') AND DATE(transaction_date) = CURDATE()");
-    $sat->execute([$station_id]);
+    // 5. Total Sales Amount (Filtered by date range)
+    $sat = $pdo->prepare("SELECT COALESCE(SUM(total_amount), 0) FROM fuel_transactions WHERE station_id = ? AND LOWER(status) IN ('verified', 'approved', 'adjusted') AND DATE(transaction_date) BETWEEN ? AND ?");
+    $sat->execute([$station_id, $date_from, $date_to]);
     $total_sales_today = (float)$sat->fetchColumn();
 
 } catch (Exception $e) {
@@ -1248,22 +1659,6 @@ if (isset($_GET['ajax_ftv']) && $_GET['ajax_ftv'] == '1') {
     exit;
 }
 
-// ── AJAX JSON POLLING ENDPOINT FOR FUEL TRANSACTION VALIDATION ─────────────────
-if (isset($_GET['ajax_ftv']) && $_GET['ajax_ftv'] == '1') {
-    header('Content-Type: application/json');
-    echo json_encode([
-        'success' => true,
-        'kpis' => [
-            'pending'   => number_format($pending_count),
-            'validated' => number_format($validated_count),
-            'rejected'  => number_format($rejected_count),
-            'liters'    => number_format((float)$total_liters_today, 2) . ' L',
-            'sales'     => '₱' . number_format((float)$total_sales_today, 2)
-        ],
-        'transactions_count' => count($transactions)
-    ]);
-    exit;
-}
 
 require_once __DIR__ . '/../partials/header.php'; require_once __DIR__ . '/../partials/flash_toast.php';
 ?>
@@ -1578,35 +1973,35 @@ body.sidebar-collapsed .modal,
         <div class="afto-card blue">
             <div class="afto-card-info">
                 <span class="afto-card-lbl">Pending Transactions</span>
-                <span class="afto-card-val"><?= number_format($pending_count) ?></span>
+                <span class="afto-card-val" id="kpi_pending_txs"><?= number_format($pending_count) ?></span>
             </div>
             <div class="afto-card-icon"><i class="fas fa-clock"></i></div>
         </div>
         <div class="afto-card green">
             <div class="afto-card-info">
                 <span class="afto-card-lbl">Validated</span>
-                <span class="afto-card-val"><?= number_format($validated_count) ?></span>
+                <span class="afto-card-val" id="kpi_validated_txs"><?= number_format($validated_count) ?></span>
             </div>
             <div class="afto-card-icon"><i class="fas fa-check-circle"></i></div>
         </div>
         <div class="afto-card red">
             <div class="afto-card-info">
                 <span class="afto-card-lbl">Rejected</span>
-                <span class="afto-card-val"><?= number_format($rejected_count) ?></span>
+                <span class="afto-card-val" id="kpi_rejected_txs"><?= number_format($rejected_count) ?></span>
             </div>
             <div class="afto-card-icon"><i class="fas fa-times-circle"></i></div>
         </div>
         <div class="afto-card yellow">
             <div class="afto-card-info">
                 <span class="afto-card-lbl">Total Liters Sold</span>
-                <span class="afto-card-val"><?= number_format($total_liters_today, 2) ?> L</span>
+                <span class="afto-card-val" id="kpi_liters_sold"><?= number_format($total_liters_today, 2) ?> L</span>
             </div>
             <div class="afto-card-icon"><i class="fas fa-tint"></i></div>
         </div>
         <div class="afto-card purple">
             <div class="afto-card-info">
                 <span class="afto-card-lbl">Total Fuel Sales</span>
-                <span class="afto-card-val">₱<?= number_format($total_sales_today, 2) ?></span>
+                <span class="afto-card-val" id="kpi_fuel_sales">₱<?= number_format($total_sales_today, 2) ?></span>
             </div>
             <div class="afto-card-icon"><i class="fas fa-peso-sign"></i></div>
         </div>
@@ -1678,7 +2073,7 @@ body.sidebar-collapsed .modal,
         </div>
 
         <div class="afto-tbl-wrap">
-            <table class="afto-tbl">
+            <table class="afto-tbl" id="fuelValidationTable">
                     <thead>
                         <tr>
                             <th style="width: 3%;">
@@ -3038,21 +3433,40 @@ async function approveFscClosing() {
         const jsonRes = await response.json();
         if (jsonRes && jsonRes.success) {
             closeModal('fuelClosingApprovalModal');
+            sessionStorage.setItem('petron_post_reload_toast_msg', jsonRes.message);
+            sessionStorage.setItem('petron_post_reload_toast_type', 'success');
             if (window.showPetronFlash) {
                 window.showPetronFlash(jsonRes.message, 'success');
-            } else {
-                alert(jsonRes.message);
             }
-            setTimeout(() => location.reload(), 1000);
+            // Seamlessly navigate to the Validated tab so the manager immediately sees the validated transactions
+            const urlParams = new URLSearchParams(window.location.search);
+            urlParams.set('status_filter', 'validated');
+            if (currentFscReportDate) {
+                const curFrom = urlParams.get('date_from');
+                if (!curFrom || curFrom > currentFscReportDate) {
+                    urlParams.set('date_from', currentFscReportDate);
+                }
+            }
+            const targetUrl = 'manager_fuel_transaction_validation.php?' + urlParams.toString();
+            setTimeout(() => { window.location.href = targetUrl; }, 800);
         } else {
-            alert('Error: ' + (jsonRes?.message || 'Approval failed.'));
+            const errMsg = jsonRes?.message || 'Approval failed.';
+            if (window.showPetronFlash) {
+                window.showPetronFlash(errMsg, 'error');
+            } else {
+                alert('Error: ' + errMsg);
+            }
             if (btn) {
                 btn.disabled = false;
                 btn.innerHTML = originalText;
             }
         }
     } catch (err) {
-        alert('Error: ' + err.message);
+        if (window.showPetronFlash) {
+            window.showPetronFlash(err.message, 'error');
+        } else {
+            alert('Error: ' + err.message);
+        }
         if (btn) {
             btn.disabled = false;
             btn.innerHTML = originalText;
@@ -3099,43 +3513,39 @@ async function confirmBatchReject() {
     
     closeModal('batchRejectModal');
     
-    let successCount = 0;
-    let errorCount = 0;
-    const errors = [];
+    const txIds = selected.map(tx => tx.id || tx.transaction_id);
     
-    for (const tx of selected) {
-        try {
-            const formData = new FormData();
-            formData.append('ajax', '1');
-            formData.append('action', 'reject');
-            formData.append('id', tx.id || tx.transaction_id);
-            formData.append('remarks', reason);
-            
-            const response = await fetch('', {
-                method: 'POST',
-                body: formData,
-                headers: { 'X-Requested-With': 'XMLHttpRequest' }
-            });
-            
-            const jsonRes = await response.json().catch(() => null);
-            if (jsonRes && jsonRes.success) {
-                successCount++;
-            } else {
-                errorCount++;
-                errors.push(`${tx.transaction_id}: ${jsonRes?.message || 'Server error'}`);
-            }
-        } catch (error) {
-            errorCount++;
-            errors.push(`${tx.transaction_id}: ${error.message}`);
+    try {
+        const formData = new FormData();
+        formData.append('ajax', '1');
+        formData.append('action', 'batch_reject');
+        formData.append('remarks', reason);
+        formData.append('tx_ids', JSON.stringify(txIds));
+        
+        const response = await fetch('', {
+            method: 'POST',
+            body: formData,
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        
+        const jsonRes = await response.json().catch(() => null);
+        if (jsonRes && jsonRes.success) {
+            sessionStorage.removeItem('petron_post_reload_toast_msg');
+            sessionStorage.removeItem('petron_post_reload_toast_type');
+            sessionStorage.setItem('petron_post_reload_toast_msg', jsonRes.message || `${txIds.length} transaction(s) rejected successfully.`);
+            sessionStorage.setItem('petron_post_reload_toast_type', 'warning');
+            location.reload();
+        } else {
+            sessionStorage.removeItem('petron_post_reload_toast_msg');
+            sessionStorage.removeItem('petron_post_reload_toast_type');
+            sessionStorage.setItem('petron_post_reload_toast_msg', 'Rejection failed: ' + (jsonRes?.message || 'Server error'));
+            sessionStorage.setItem('petron_post_reload_toast_type', 'error');
+            location.reload();
         }
-    }
-    
-    if (errorCount === 0) {
-        sessionStorage.setItem('petron_post_reload_toast_msg', `${successCount} transaction(s) rejected successfully.`);
-        sessionStorage.setItem('petron_post_reload_toast_type', 'warning');
-        location.reload();
-    } else {
-        sessionStorage.setItem('petron_post_reload_toast_msg', `Rejected with ${errorCount} error(s): ` + errors.join(', '));
+    } catch (error) {
+        sessionStorage.removeItem('petron_post_reload_toast_msg');
+        sessionStorage.removeItem('petron_post_reload_toast_type');
+        sessionStorage.setItem('petron_post_reload_toast_msg', 'Network error: ' + error.message);
         sessionStorage.setItem('petron_post_reload_toast_type', 'error');
         location.reload();
     }
@@ -3489,57 +3899,120 @@ async function confirmBatchAdjust() {
         return;
     }
     
-    const selected = getSelectedTransactions();
-    if (selected.length === 0) return;
+    const selected = window.currentAdjustTxs || getSelectedTransactions();
+    if (!selected || selected.length === 0) return;
     
     closeModal('batchAdjustModal');
     
-    let successCount = 0;
-    let errorCount = 0;
-    const errors = [];
+    const adjustments = selected.map(tx => ({
+        id: tx.id,
+        beginning:   getRawNumber(`adj_beg_${tx.id}`),
+        ending:      getRawNumber(`adj_end_${tx.id}`),
+        calibration: getRawNumber(`adj_cal_${tx.id}`)
+    }));
     
-    for (const tx of selected) {
-        try {
-            const formData = new FormData();
-            formData.append('ajax', '1');
-            formData.append('action', 'adjust');
-            formData.append('id', tx.id);
-            formData.append('remarks', reason);
-            
-            formData.append('beginning',   getRawNumber(`adj_beg_${tx.id}`));
-            formData.append('ending',       getRawNumber(`adj_end_${tx.id}`));
-            formData.append('calibration',  getRawNumber(`adj_cal_${tx.id}`));
-            
-            const response = await fetch('', {
-                method: 'POST',
-                body: formData,
-                headers: { 'X-Requested-With': 'XMLHttpRequest' }
-            });
-            
-            const jsonRes = await response.json().catch(() => null);
-            if (jsonRes && jsonRes.success) {
-                successCount++;
-            } else {
-                errorCount++;
-                errors.push(`${tx.transaction_id}: ${jsonRes?.message || 'Server error'}`);
-            }
-        } catch (error) {
-            errorCount++;
-            errors.push(`${tx.transaction_id}: ${error.message}`);
+    try {
+        const formData = new FormData();
+        formData.append('ajax', '1');
+        formData.append('action', 'batch_adjust');
+        formData.append('remarks', reason);
+        formData.append('adjustments', JSON.stringify(adjustments));
+        
+        const response = await fetch('', {
+            method: 'POST',
+            body: formData,
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        
+        const jsonRes = await response.json().catch(() => null);
+        if (jsonRes && jsonRes.success) {
+            sessionStorage.removeItem('petron_post_reload_toast_msg');
+            sessionStorage.removeItem('petron_post_reload_toast_type');
+            sessionStorage.setItem('petron_post_reload_toast_msg', jsonRes.message || `${adjustments.length} transaction(s) adjusted and validated successfully.`);
+            sessionStorage.setItem('petron_post_reload_toast_type', 'success');
+            location.reload();
+        } else {
+            sessionStorage.removeItem('petron_post_reload_toast_msg');
+            sessionStorage.removeItem('petron_post_reload_toast_type');
+            sessionStorage.setItem('petron_post_reload_toast_msg', 'Adjustment failed: ' + (jsonRes?.message || 'Server error'));
+            sessionStorage.setItem('petron_post_reload_toast_type', 'error');
+            location.reload();
         }
-    }
-    
-    if (errorCount === 0) {
-        sessionStorage.setItem('petron_post_reload_toast_msg', `${successCount} transaction(s) adjusted successfully.`);
-        sessionStorage.setItem('petron_post_reload_toast_type', 'info');
-        location.reload();
-    } else {
-        sessionStorage.setItem('petron_post_reload_toast_msg', `Adjusted with ${errorCount} error(s): ` + errors.join(', '));
+    } catch (error) {
+        sessionStorage.removeItem('petron_post_reload_toast_msg');
+        sessionStorage.removeItem('petron_post_reload_toast_type');
+        sessionStorage.setItem('petron_post_reload_toast_msg', 'Network error: ' + error.message);
         sessionStorage.setItem('petron_post_reload_toast_type', 'error');
         location.reload();
     }
 }
 
+// ── Built-in Auto-Refresh Engine for Manager Fuel Transaction Validation ──────
+async function autoRefreshFuelValidationPage() {
+    if (document.hidden) return;
+    // Do not auto-refresh if user has open modals
+    const openModals = document.querySelectorAll(
+        '.modal[style*="flex"], .modal[style*="block"], .modal.show, ' +
+        '#fuelClosingApprovalModal[style*="flex"], #fuelClosingApprovalModal[style*="block"], ' +
+        '#batchAdjustModal[style*="flex"], #batchAdjustModal[style*="block"], ' +
+        '#batchRejectModal[style*="flex"], #batchRejectModal[style*="block"], ' +
+        '#viewModal[style*="flex"], #viewModal[style*="block"]'
+    );
+    for (let i = 0; i < openModals.length; i++) {
+        const m = openModals[i];
+        if (m.offsetParent !== null && window.getComputedStyle(m).display !== 'none') {
+            return;
+        }
+    }
+    // Do not refresh if user has selected any transactions
+    const checkedRows = document.querySelectorAll('.tx-checkbox:checked');
+    if (checkedRows.length > 0) return;
+
+    // Do not refresh if user is currently interacting with an input or select
+    const active = document.activeElement;
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) {
+        if (!active.readOnly && !active.disabled) return;
+    }
+
+    try {
+        const queryParams = window.location.search ? window.location.search + '&ajax_ftv=1' : '?ajax_ftv=1';
+        const res = await fetch('manager_fuel_transaction_validation.php' + queryParams, {
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+        });
+        const data = await res.json();
+        if (data && data.success && data.kpis) {
+            const elPend = document.getElementById('kpi_pending_txs');
+            const elVal  = document.getElementById('kpi_validated_txs');
+            const elRej  = document.getElementById('kpi_rejected_txs');
+            const elLit  = document.getElementById('kpi_liters_sold');
+            const elSal  = document.getElementById('kpi_fuel_sales');
+
+            const currentPending = elPend ? parseInt(elPend.textContent.replace(/,/g, '')) || 0 : -1;
+            const newPending = parseInt(String(data.kpis.pending || '0').replace(/,/g, '')) || 0;
+
+            if (elPend) elPend.textContent = data.kpis.pending;
+            if (elVal)  elVal.textContent  = data.kpis.validated;
+            if (elRej)  elRej.textContent  = data.kpis.rejected;
+            if (elLit)  elLit.textContent  = data.kpis.liters;
+            if (elSal)  elSal.textContent  = data.kpis.sales;
+
+            // If pending count changed, reload seamlessly to update the table log
+            if (currentPending !== -1 && currentPending !== newPending) {
+                location.reload();
+            }
+        }
+    } catch (e) {
+        // Silently catch background polling errors
+    }
+
+    if (window.PetronRealtime && typeof window.PetronRealtime.refreshActiveView === 'function') {
+        window.PetronRealtime.refreshActiveView({ force: false });
+    }
+}
+const mftvAutoRefreshMs = (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000)
+    ? window.PETRON_AUTO_REFRESH_MS
+    : 15000;
+setInterval(autoRefreshFuelValidationPage, mftvAutoRefreshMs);
 
 </script>
 

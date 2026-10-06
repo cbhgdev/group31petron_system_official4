@@ -1021,7 +1021,9 @@ function autoRefreshSuperadminDashboard() {
             }
         })
         .catch(() => {});
-}
-setInterval(autoRefreshSuperadminDashboard, 10000);
+const superadminRefreshMs = (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000)
+    ? window.PETRON_AUTO_REFRESH_MS
+    : 10000;
+setInterval(autoRefreshSuperadminDashboard, superadminRefreshMs);
 </script>
 <?php include __DIR__ . '/../partials/footer.php'; ?>

@@ -183,13 +183,14 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                 <!-- =====================================================
                      SECTION 5: TANK LITERS SUMMARY
                      ===================================================== -->
+                <?php if (!empty($tank_ugt_summary)): ?>
                 <div class="rpt-section-heading"><i class="fas fa-oil-can"></i> Tank Liters Summary</div>
                 <div class="table-responsive mb-4">
-                    <table class="rpt-table align-middle" style="max-width:750px;">
+                    <table class="rpt-table align-middle" style="max-width:750px; width:100%;">
                         <thead>
                             <tr>
-                                <th style="text-align:left;">Tank / Pump Name</th>
-                                <th style="text-align:right;">Liters Sold (L)</th>
+                                <th style="width:65%;text-align:left;">Tank / Pump Name</th>
+                                <th class="text-end" style="width:35%;text-align:right;">Liters Sold (L)</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -199,19 +200,20 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                                 $tot_tank_liters += (float)$t_liters;
                             ?>
                             <tr>
-                                <td style="text-align:left; font-weight:700;"><?= htmlspecialchars($t_name) ?></td>
-                                <td style="text-align:right;" class="fw-bold text-success"><?= number_format((float)$t_liters, 2) ?> L</td>
+                                <td style="width:65%;text-align:left; font-weight:700;"><?= htmlspecialchars($t_name) ?></td>
+                                <td class="text-end fw-bold text-success" style="width:35%;text-align:right;"><?= number_format((float)$t_liters, 2) ?> L</td>
                             </tr>
                             <?php endforeach; ?>
                         </tbody>
                         <tfoot>
                             <tr style="font-weight:800; background:#e8f0fe;">
-                                <td style="text-align:left;">TOTAL TANK LITERS</td>
-                                <td style="text-align:right;" class="fw-bold text-primary"><?= number_format($tot_tank_liters, 2) ?> L</td>
+                                <td style="width:65%;text-align:left;">TOTAL TANK LITERS</td>
+                                <td class="text-end fw-bold text-primary" style="width:35%;text-align:right;"><?= number_format($tot_tank_liters, 2) ?> L</td>
                             </tr>
                         </tfoot>
                     </table>
                 </div>
+                <?php endif; ?>
 
                 <!-- =====================================================
                      SECTION 6: FUEL SALES CLOSING SUMMARY
@@ -426,6 +428,7 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                             <?php endif; ?>
                         </tbody>
                     </table>
+                </div>
                 <?php
 
             } else { // daily_merch_service

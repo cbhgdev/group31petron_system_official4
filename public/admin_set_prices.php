@@ -927,20 +927,8 @@ try {
 } catch (Exception $e) {}
 
 
-// ── Pre-load merchandise batches per product ──────────────────────────────
+// ── Pre-load merchandise batches per product (cached/ajax-ready) ───────────
 $merch_batches_by_product = [];
-try {
-    $bStmt = $pdo->prepare("
-        SELECT mb.*
-        FROM merchandise_batches mb
-        WHERE mb.station_id = ? AND LOWER(COALESCE(mb.status, 'active')) NOT IN ('cancelled', 'disabled')
-        ORDER BY mb.date_received ASC, mb.id ASC
-    ");
-    $bStmt->execute([(int)$station_id]);
-    foreach ($bStmt->fetchAll(PDO::FETCH_ASSOC) as $b) {
-        $merch_batches_by_product[(int)$b['product_id']][] = $b;
-    }
-} catch (Exception $e) {}
 
 $all_categories = array_keys($all_categories);
 sort($all_categories);
@@ -957,7 +945,7 @@ try {
         "Admin viewed pricing for station {$station_id}");
 } catch (Exception $e) { /* silent */ }
 
-// ── Fetch service types with pending approvals ─────────────────────────────
+// ── Fetch service types with pending approvals (single optimized query) ───
 $service_types = [];
 $service_error = null;
 try {
@@ -972,6 +960,7 @@ try {
                p.old_price     AS old_service_fee,
                p.old_cost      AS old_labor_fee,
                p.manager_id    AS pending_manager_id,
+               COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))),''), u.username, 'Unknown') AS manager_name,
                p.status        AS approval_status,
                p.id            AS approval_id
         FROM job_order_service_types s
@@ -980,26 +969,13 @@ try {
               AND p.station_id = s.station_id
               AND p.product_type IN ('service', 'service_type')
               AND p.status = 'pending'
+        LEFT JOIN users u
+               ON p.manager_id = u.id
         WHERE s.station_id = ?
         ORDER BY s.service_name
     ");
     $stmt->execute([(int)$station_id]);
     $service_types = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // Add manager names in a second pass
-    foreach ($service_types as &$svc) {
-        $svc['manager_name'] = null;
-        if (!empty($svc['pending_manager_id'])) {
-            try {
-                $uStmt = $pdo->prepare("SELECT COALESCE(CONCAT(first_name,' ',last_name), username) FROM users WHERE id = ? LIMIT 1");
-                $uStmt->execute([$svc['pending_manager_id']]);
-                $svc['manager_name'] = $uStmt->fetchColumn() ?: 'Unknown';
-            } catch (Exception $ue) {
-                $svc['manager_name'] = 'Unknown';
-            }
-        }
-    }
-    unset($svc);
 } catch (Exception $e) {
     $service_types = [];
     $service_error = null; // suppress debug output in production
@@ -1799,7 +1775,7 @@ table.pricing-table tbody tr:hover {
 
     <!-- ── 1. Admin Filters Bar (Positioned at top so select dropdowns open downwards, matching Manager) ── -->
     <div class="toolbar" style="margin-bottom:16px;background:#f8fafc;padding:12px 16px;border-radius:10px;border:1px solid #e2e8f0;display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
-        <input type="text" id="adminFuelSearch" placeholder="Search UGT or Fuel Name..." oninput="filterAdminFuelTable()" style="min-width:200px;flex:1;padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:15.5px;">
+        <input type="text" id="adminFuelSearch" placeholder="Search UGT or Fuel Name..." oninput="debouncedFilterAdminFuelTable()" style="min-width:200px;flex:1;padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:15.5px;">
         
         <select id="adminFuelTypeFilter" onchange="filterAdminFuelTable()" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:15.5px;background:#fff;">
             <option value="">All Fuel Types</option>
@@ -2073,7 +2049,7 @@ table.pricing-table tbody tr:hover {
 
     <!-- ── 1. Filters Toolbar (Positioned at top so select dropdowns open downwards, matching Manager) ── -->
     <div class="toolbar" style="margin-bottom: 16px;">
-        <input type="text" id="adminSearchInput" placeholder="&#128269; Search Product / SKU&hellip;" oninput="filterAdminMerchTable()" style="min-width: 220px;">
+        <input type="text" id="adminSearchInput" placeholder="&#128269; Search Product / SKU&hellip;" oninput="debouncedFilterAdminMerchTable()" style="min-width: 220px;">
         
         <select id="adminCatFilter" onchange="filterAdminMerchTable()">
             <option value="">All Categories</option>
@@ -2841,7 +2817,6 @@ table.pricing-table tbody tr:hover {
                 <h4 style="margin:0 0 14px 0;font-size:14px;color:#002F6C;font-weight:700;display:flex;align-items:center;gap:8px;border-bottom:1px solid #e2e8f0;padding-bottom:8px;"><i class="fas fa-info-circle"></i> Product Specification &amp; Overview</h4>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:14px;font-size:15.5px;">
                     <div><span style="color:#64748b;font-weight:600;">SKU / Code:</span><br><code id="adm_vm_sku" style="font-weight:800;color:#4f46e5;">-</code></div>
-                    <div><span style="color:#64748b;font-weight:600;">Barcode:</span><br><code id="adm_vm_barcode" style="font-weight:800;color:#0284c7;">-</code></div>
                     <div><span style="color:#64748b;font-weight:600;">Product Name:</span><br><strong id="adm_vm_name" style="color:#0f172a;">-</strong></div>
                     <div><span style="color:#64748b;font-weight:600;">Category:</span><br><strong id="adm_vm_category">-</strong></div>
                     <div><span style="color:#64748b;font-weight:600;">Brand:</span><br><strong id="adm_vm_brand">-</strong></div>
@@ -2959,7 +2934,44 @@ function sanitizeDecimalInput(el) {
 function sanitizeIntegerInput(el) {
     el.value = el.value.replace(/[^0-9]/g, '');
 }
-// ── Admin Merchandise Filter Function ──────────────────────────────────────
+// ── Admin Merchandise Filter Function (Optimized with memory cache & debouncing) ──
+var _adminMerchCache = null;
+var _adminCatHeaderCache = null;
+
+function invalidateAdminMerchCache() {
+    _adminMerchCache = null;
+    _adminCatHeaderCache = null;
+}
+
+function getAdminMerchCache() {
+    if (_adminMerchCache === null) {
+        var rowEls = document.querySelectorAll('#adminMerchBody .admin-merch-row');
+        _adminMerchCache = [];
+        for (var i = 0; i < rowEls.length; i++) {
+            var row = rowEls[i];
+            _adminMerchCache.push({
+                el: row,
+                name: (row.getAttribute('data-name') || '').toLowerCase(),
+                sku: (row.getAttribute('data-sku') || '').toLowerCase(),
+                brand: (row.getAttribute('data-brand') || '').toLowerCase(),
+                unit: (row.getAttribute('data-unit') || '').toLowerCase(),
+                cat: row.getAttribute('data-cat') || '',
+                pStatus: row.getAttribute('data-prodstatus') || '',
+                rStatus: row.getAttribute('data-reqstatus') || ''
+            });
+        }
+        var hdrEls = document.querySelectorAll('#adminMerchBody .cat-row');
+        _adminCatHeaderCache = [];
+        for (var j = 0; j < hdrEls.length; j++) {
+            _adminCatHeaderCache.push({
+                el: hdrEls[j],
+                cat: hdrEls[j].getAttribute('data-cat-header') || ''
+            });
+        }
+    }
+    return { rows: _adminMerchCache, headers: _adminCatHeaderCache };
+}
+
 function filterAdminMerchTable() {
     var q          = (document.getElementById('adminSearchInput') ? document.getElementById('adminSearchInput').value : '').toLowerCase().trim();
     var catFilter  = document.getElementById('adminCatFilter') ? document.getElementById('adminCatFilter').value : '';
@@ -2968,45 +2980,46 @@ function filterAdminMerchTable() {
     var pStFilter  = document.getElementById('adminProdStatusFilter') ? document.getElementById('adminProdStatusFilter').value : '';
     var rStFilter  = document.getElementById('adminReqStatusFilter') ? document.getElementById('adminReqStatusFilter').value : '';
 
-    var rows       = document.querySelectorAll('#adminMerchBody .admin-merch-row');
-    var catHeaders = document.querySelectorAll('#adminMerchBody .cat-row');
+    var cache = getAdminMerchCache();
+    var rows = cache.rows;
+    var catHeaders = cache.headers;
     var catVisibleCount = {};
-    var visible    = 0;
+    var visible = 0;
 
-    rows.forEach(function(row) {
-        var name     = row.getAttribute('data-name') || '';
-        var sku      = row.getAttribute('data-sku')  || '';
-        var brand    = row.getAttribute('data-brand') || '';
-        var unit     = row.getAttribute('data-unit')  || '';
-        var cat      = row.getAttribute('data-cat')   || '';
-        var pStatus  = row.getAttribute('data-prodstatus') || '';
-        var rStatus  = row.getAttribute('data-reqstatus')  || '';
-
-        var matchQ      = !q || name.indexOf(q) !== -1 || sku.indexOf(q) !== -1 || brand.indexOf(q) !== -1;
-        var matchCat    = !catFilter || cat === catFilter;
-        var matchBrand  = !brandFilter || brand === brandFilter;
-        var matchUnit   = !unitFilter || unit === unitFilter;
-        var matchPStatus= !pStFilter || pStatus === pStFilter || (pStFilter === 'inactive' && (pStatus === 'disabled' || pStatus === 'deactivated'));
-        var matchRStatus= !rStFilter || rStatus === rStFilter;
+    for (var i = 0; i < rows.length; i++) {
+        var item = rows[i];
+        var matchQ      = !q || item.name.indexOf(q) !== -1 || item.sku.indexOf(q) !== -1 || item.brand.indexOf(q) !== -1;
+        var matchCat    = !catFilter || item.cat === catFilter;
+        var matchBrand  = !brandFilter || item.brand === brandFilter;
+        var matchUnit   = !unitFilter || item.unit === unitFilter;
+        var matchPStatus= !pStFilter || item.pStatus === pStFilter || (pStFilter === 'inactive' && (item.pStatus === 'disabled' || item.pStatus === 'deactivated'));
+        var matchRStatus= !rStFilter || item.rStatus === rStFilter;
 
         var show = matchQ && matchCat && matchBrand && matchUnit && matchPStatus && matchRStatus;
-        row.style.display = show ? '' : 'none';
+        item.el.style.display = show ? '' : 'none';
         if (show) {
             visible++;
-            catVisibleCount[cat] = (catVisibleCount[cat] || 0) + 1;
+            catVisibleCount[item.cat] = (catVisibleCount[item.cat] || 0) + 1;
         }
-    });
+    }
 
-    catHeaders.forEach(function(hdr) {
-        var cat = hdr.getAttribute('data-cat-header') || '';
-        var count = catVisibleCount[cat] || 0;
-        hdr.style.display = count > 0 ? '' : 'none';
-    });
+    for (var j = 0; j < catHeaders.length; j++) {
+        var hdr = catHeaders[j];
+        var count = catVisibleCount[hdr.cat] || 0;
+        hdr.el.style.display = count > 0 ? '' : 'none';
+    }
 
     var noRes = document.getElementById('adminMerchNoResults');
     if (noRes) noRes.style.display = (visible === 0 && rows.length > 0) ? 'block' : 'none';
 }
+
+var _debouncedFilterAdminMerchTimer = null;
+function debouncedFilterAdminMerchTable() {
+    clearTimeout(_debouncedFilterAdminMerchTimer);
+    _debouncedFilterAdminMerchTimer = setTimeout(filterAdminMerchTable, 160);
+}
 window.filterAdminMerchTable = filterAdminMerchTable;
+window.debouncedFilterAdminMerchTable = debouncedFilterAdminMerchTable;
 
 // ── Professional Toast Banner ─────────────────────────────────────────────
 var adminToastDismissTimer = null;
@@ -3657,7 +3670,7 @@ function closeAdminBatchesModal() {
 // ── Admin View Merchandise Details Modal ─────────────────────────────────────
 function viewAdminMerchandiseDetails(id) {
     document.getElementById('viewAdminMerchModal').style.display = 'flex';
-    ['adm_vm_sku','adm_vm_barcode','adm_vm_name','adm_vm_category','adm_vm_brand','adm_vm_unit','adm_vm_price','adm_vm_cost','adm_vm_stock','adm_vm_batch_count','adm_vm_reorder'].forEach(function(el){
+    ['adm_vm_sku','adm_vm_name','adm_vm_category','adm_vm_brand','adm_vm_unit','adm_vm_price','adm_vm_cost','adm_vm_stock','adm_vm_batch_count','adm_vm_reorder'].forEach(function(el){
         var e = document.getElementById(el); if(e) e.textContent = '...';
     });
     ['adm_vm_batches_body','adm_vm_price_history_body','adm_vm_config_history_body','adm_vm_status_history_body'].forEach(function(el){
@@ -3682,7 +3695,6 @@ function viewAdminMerchandiseDetails(id) {
 
         setVmText('adm_vm_title', (p.name || 'Product') + ' — SPECIFICATION & HISTORY');
         setVmText('adm_vm_sku', p.sku);
-        setVmText('adm_vm_barcode', p.barcode);
         setVmText('adm_vm_name', p.name);
         setVmText('adm_vm_category', p.category_name);
         setVmText('adm_vm_brand', p.brand);
@@ -3781,7 +3793,32 @@ function closeAdminViewMerchModal() {
     document.getElementById('viewAdminMerchModal').style.display = 'none';
 }
 
-// ── Admin Fuel Table Filters ──────────────────────────────────────────────
+// ── Admin Fuel Table Filters (Cached & Debounced) ───────────────────────────
+var _adminFuelCache = null;
+
+function invalidateAdminFuelCache() {
+    _adminFuelCache = null;
+}
+
+function getAdminFuelCache() {
+    if (_adminFuelCache === null) {
+        var rows = document.querySelectorAll('#adminFuelTableBody tr.admin-fuel-row');
+        _adminFuelCache = [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            _adminFuelCache.push({
+                el: row,
+                ugt: (row.getAttribute('data-ugt') || '').toLowerCase(),
+                fueltype: (row.getAttribute('data-fueltype') || '').toLowerCase(),
+                fullname: (row.getAttribute('data-fullname') || '').toLowerCase(),
+                reqstatus: row.getAttribute('data-reqstatus') || 'none',
+                activestatus: row.getAttribute('data-activestatus') || 'active'
+            });
+        }
+    }
+    return _adminFuelCache;
+}
+
 function filterAdminFuelTable() {
     var searchVal = (document.getElementById('adminFuelSearch') ? document.getElementById('adminFuelSearch').value : '').toLowerCase().trim();
     var fuelTypeVal = document.getElementById('adminFuelTypeFilter') ? document.getElementById('adminFuelTypeFilter').value : '';
@@ -3789,28 +3826,26 @@ function filterAdminFuelTable() {
     var reqStatusVal = document.getElementById('adminFuelPriceReqFilter') ? document.getElementById('adminFuelPriceReqFilter').value : '';
     var statusVal = document.getElementById('adminFuelStatusFilter') ? document.getElementById('adminFuelStatusFilter').value : '';
 
-    var rows = document.querySelectorAll('#adminFuelTableBody tr.admin-fuel-row');
-    rows.forEach(function(row) {
-        var ugt = row.getAttribute('data-ugt') || '';
-        var fueltype = row.getAttribute('data-fueltype') || '';
-        var fullname = row.getAttribute('data-fullname') || '';
-        var reqstatus = row.getAttribute('data-reqstatus') || 'none';
-        var activestatus = row.getAttribute('data-activestatus') || 'active';
+    var rows = getAdminFuelCache();
+    for (var i = 0; i < rows.length; i++) {
+        var item = rows[i];
+        var matchesSearch = !searchVal || item.ugt.indexOf(searchVal) !== -1 || item.fullname.indexOf(searchVal) !== -1 || item.fueltype.indexOf(searchVal) !== -1;
+        var matchesFuelType = !fuelTypeVal || item.fueltype === fuelTypeVal.toLowerCase();
+        var matchesUgt = !ugtVal || item.ugt === ugtVal.toLowerCase();
+        var matchesReqStatus = !reqStatusVal || (reqStatusVal === 'pending' && item.reqstatus === 'pending') || (reqStatusVal === 'rejected' && item.reqstatus === 'rejected') || (reqStatusVal === 'none' && (item.reqstatus === 'none' || item.reqstatus === 'approved' || !item.reqstatus));
+        var matchesStatus = !statusVal || item.activestatus === statusVal;
 
-        var matchesSearch = !searchVal || ugt.toLowerCase().indexOf(searchVal) !== -1 || fullname.toLowerCase().indexOf(searchVal) !== -1 || fueltype.toLowerCase().indexOf(searchVal) !== -1;
-        var matchesFuelType = !fuelTypeVal || fueltype.toLowerCase() === fuelTypeVal.toLowerCase();
-        var matchesUgt = !ugtVal || ugt.toLowerCase() === ugtVal.toLowerCase();
-        var matchesReqStatus = !reqStatusVal || (reqStatusVal === 'pending' && reqstatus === 'pending') || (reqStatusVal === 'rejected' && reqstatus === 'rejected') || (reqStatusVal === 'none' && (reqstatus === 'none' || reqstatus === 'approved' || !reqstatus));
-        var matchesStatus = !statusVal || activestatus === statusVal;
+        item.el.style.display = (matchesSearch && matchesFuelType && matchesUgt && matchesReqStatus && matchesStatus) ? '' : 'none';
+    }
+}
 
-        if (matchesSearch && matchesFuelType && matchesUgt && matchesReqStatus && matchesStatus) {
-            row.style.display = '';
-        } else {
-            row.style.display = 'none';
-        }
-    });
+var _debouncedFilterAdminFuelTimer = null;
+function debouncedFilterAdminFuelTable() {
+    clearTimeout(_debouncedFilterAdminFuelTimer);
+    _debouncedFilterAdminFuelTimer = setTimeout(filterAdminFuelTable, 160);
 }
 window.filterAdminFuelTable = filterAdminFuelTable;
+window.debouncedFilterAdminFuelTable = debouncedFilterAdminFuelTable;
 
 function filterAdminFuelByCard(type) {
     var searchEl = document.getElementById('adminFuelSearch');
@@ -4864,10 +4899,6 @@ function openAddMerchandiseModal() {
     if (modal) modal.style.display = 'flex';
     var nameField = document.getElementById('newMerchName');
     if (nameField) setTimeout(function() { nameField.focus(); }, 80);
-    var bs = document.getElementById('newMerchBarcodeStatus');
-    if (bs) bs.innerHTML = '';
-    var bf = document.getElementById('newMerchBarcode');
-    if (bf) { bf.style.borderColor = '#d1d5db'; bf.value = ''; }
 }
 
 function closeAddMerchandiseModal() {
@@ -4875,32 +4906,6 @@ function closeAddMerchandiseModal() {
     if (modal) modal.style.display = 'none';
     var form = document.getElementById('addMerchandiseForm');
     if (form) form.reset();
-}
-
-function activateBarcodeScan(inputId, context) {
-    var el = document.getElementById(inputId);
-    if (!el) return;
-    el.focus();
-    el.style.borderColor = '#f59e0b';
-    el.style.background  = '#fffbeb';
-    var st = document.getElementById('newMerchBarcodeStatus');
-    if (st) st.innerHTML = '<span style="color:#d97706;font-size:13px;"><i class="fas fa-barcode"></i> Ready - scan now or type barcode</span>';
-}
-
-function handleBarcodeKeydown(event, context) {
-    var el   = event.target;
-    var key  = event.key || '';
-    var code = event.keyCode || event.which;
-    if (key === 'Enter' || code === 13) {
-        event.preventDefault();
-        event.stopPropagation();
-        var barcodeVal = el.value.trim();
-        if (barcodeVal.length === 0) return;
-        el.style.borderColor = '#16a34a';
-        el.style.background  = '#f0fdf4';
-        var st = document.getElementById('newMerchBarcodeStatus');
-        if (st) st.innerHTML = '<span style="color:#16a34a;font-size:13px;"><i class="fas fa-check-circle"></i> Barcode captured: ' + barcodeVal + '</span>';
-    }
 }
 
 safeAddListener('addMerchandiseForm', 'submit', function(e) {
@@ -4914,7 +4919,6 @@ safeAddListener('addMerchandiseForm', 'submit', function(e) {
     var sku      = ((document.getElementById('newMerchSku') || {}).value || '').trim();
     var brand    = ((document.getElementById('newMerchBrand') || {}).value || '').trim();
     var size     = ((document.getElementById('newMerchSize') || {}).value || '').trim();
-    var barcode  = ((document.getElementById('newMerchBarcode') || {}).value || '').trim();
     var reorder  = parseInt((document.getElementById('newMerchReorder') || {}).value) || 24;
     var critical = parseInt((document.getElementById('newMerchCritical') || {}).value) || 10;
     var expiry   = ((document.getElementById('newMerchExpiry') || {}).value || '').trim();
@@ -4951,7 +4955,6 @@ safeAddListener('addMerchandiseForm', 'submit', function(e) {
     formData.append('unit_cost', 0);
     formData.append('sku', sku);
     formData.append('size', size);
-    formData.append('barcode', barcode);
     formData.append('reorder_level', reorder);
     formData.append('critical_level', critical);
     formData.append('expiration_date', expiry);

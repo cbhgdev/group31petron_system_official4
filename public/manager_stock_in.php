@@ -48,7 +48,7 @@ $filters = [
     'status' => trim($_GET['status'] ?? ''),
 ];
 
-$pending_statuses = ['Pending Stock-In', 'Ready for Stock-In', 'Validated', 'Verified', 'Partial Delivery', 'Damaged Items', 'Adjusted'];
+$pending_statuses = ['Pending Stock-In', 'Ready for Stock-In', 'Validated', 'Verified', 'Partial Delivery', 'Damaged Items', 'Adjusted', 'Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation', 'Pending Verification', 'Pending Delivery', 'Pending', 'Expected Delivery'];
 
 function si_h($value): string
 {
@@ -330,10 +330,20 @@ function si_group_rows(array $rows, string $type): array
     return $groups;
 }
 
+// Auto-load approved POs into deliveries_oversight if any are missing
+if (function_exists('auto_load_pending_deliveries_from_approved_pos')) {
+    auto_load_pending_deliveries_from_approved_pos($pdo, $station_id);
+}
+
 $merch_rows = si_fetch_pending_rows($pdo, $station_id, 'merch', $filters, $pending_statuses);
 $fuel_rows = si_fetch_pending_rows($pdo, $station_id, 'fuel', $filters, $pending_statuses);
 $merch_groups = si_group_rows($merch_rows, 'merch');
 $fuel_groups = si_group_rows($fuel_rows, 'fuel');
+
+// If type wasn't explicitly provided in URL and merch has no pending items but fuel does, auto-switch to fuel
+if (empty($_GET['type']) && empty($merch_groups) && !empty($fuel_groups)) {
+    $active_type = 'fuel';
+}
 $active_groups = $active_type === 'fuel' ? $fuel_groups : $merch_groups;
 
 $today = date('Y-m-d');
@@ -836,8 +846,8 @@ body .main,
 .approve-btn{flex:0 0 auto;justify-content:center;}
 .empty-state{text-align:center;padding:70px 20px;color:#64748b;}
 .empty-state i{font-size:42px;color:#16a34a;display:block;margin-bottom:12px;}
-#stockToast.stock-toast{display:none;position:fixed!important;top:82px!important;left:50%!important;right:auto!important;bottom:auto!important;transform:translateX(-50%) translateY(-8px)!important;z-index:2147483000!important;box-sizing:border-box!important;width:fit-content!important;min-width:260px!important;max-width:min(480px,calc(100vw - 32px))!important;height:auto!important;min-height:0!important;max-height:140px!important;overflow:auto!important;border-radius:8px!important;padding:12px 16px!important;color:#fff!important;font-size:13px!important;line-height:1.35!important;font-weight:800!important;text-align:left!important;white-space:normal!important;overflow-wrap:break-word!important;box-shadow:0 10px 24px rgba(15,23,42,.28)!important;opacity:0;pointer-events:none;transition:opacity .22s ease,transform .22s ease;}
-#stockToast.stock-toast.is-visible{display:block!important;opacity:1;transform:translateX(-50%) translateY(0)!important;}
+#stockToast.stock-toast{display:none;position:fixed!important;top:96px!important;right:22px!important;left:auto!important;bottom:auto!important;transform:translateX(30px)!important;z-index:2147483000!important;box-sizing:border-box!important;width:fit-content!important;min-width:280px!important;max-width:min(440px,calc(100vw - 32px))!important;height:auto!important;min-height:0!important;max-height:140px!important;overflow:auto!important;border-radius:10px!important;padding:14px 18px!important;color:#fff!important;font-size:13.5px!important;line-height:1.4!important;font-weight:700!important;text-align:left!important;white-space:normal!important;overflow-wrap:break-word!important;box-shadow:0 12px 28px rgba(15,23,42,.25)!important;opacity:0;pointer-events:none;transition:opacity .25s ease,transform .25s ease;}
+#stockToast.stock-toast.is-visible{display:block!important;opacity:1;transform:translateX(0)!important;}
 #stockToast.stock-toast.toast-ok{background:#16a34a!important;}
 #stockToast.stock-toast.toast-err{background:#dc2626!important;}
 /* Confirm Modal Overlay and Buttons (Override global button styling) */
@@ -962,46 +972,6 @@ body .main,
     font-weight: 700;
     font-family: Consolas, monospace;
 }
-.stock-banner-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-shrink: 0;
-}
-.stock-banner-btn {
-    padding: 7px 15px;
-    background: #16a34a !important;
-    color: #ffffff !important;
-    -webkit-text-fill-color: #ffffff !important;
-    border-radius: 6px;
-    font-size: 12.5px;
-    font-weight: 700;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: background 0.15s ease;
-    border: 1px solid #15803d;
-}
-.stock-banner-btn:hover {
-    background: #15803d !important;
-    text-decoration: none;
-}
-.stock-banner-dismiss-btn {
-    background: transparent;
-    border: 1.5px solid #86efac;
-    color: #15803d;
-    font-size: 12px;
-    font-weight: 700;
-    cursor: pointer;
-    padding: 6px 14px;
-    border-radius: 6px;
-    transition: all 0.15s ease;
-}
-.stock-banner-dismiss-btn:hover {
-    background: #dcfce7;
-    color: #14532d;
-}
 @media print{#stockToast.stock-toast,#siConfirmOverlay,#stockSuccessBanner{display:none!important;}}
 @media(max-width:900px){
     .stock-page{padding:16px 12px 48px;}
@@ -1010,7 +980,6 @@ body .main,
     .detail-summary{align-items:stretch;justify-content:flex-start;}
     .approve-btn{width:100%;}
     .stock-banner{flex-direction:column;align-items:flex-start;gap:12px;}
-    .stock-banner-actions{width:100%;justify-content:flex-end;}
 }
 </style>
 
@@ -1046,29 +1015,23 @@ body .main,
                 </div>
                 <div class="stock-banner-meta" id="stockBannerMeta" style="display:none;"></div>
             </div>
-            <div class="stock-banner-actions">
-                <a id="stockBannerPrintBtn" href="#" target="_blank" class="stock-banner-btn" style="display:none;">
-                    <i class="fas fa-print"></i> Print Invoice
-                </a>
-                <button type="button" class="stock-banner-dismiss-btn" onclick="dismissStockBanner()">Dismiss</button>
-            </div>
         </div>
 
         <div class="summary-grid">
-            <div class="summary-card">
+            <a href="<?= si_h(si_tab_url('merch', $filters)) ?>" class="summary-card" style="text-decoration:none;color:inherit;cursor:pointer;" title="Click to view Pending Merchandise">
                 <div>
                     <div class="summary-label">Pending Merchandise Deliveries</div>
                     <div class="summary-value"><?= count($merch_groups) ?></div>
                 </div>
                 <div class="summary-icon"><i class="fas fa-boxes"></i></div>
-            </div>
-            <div class="summary-card">
+            </a>
+            <a href="<?= si_h(si_tab_url('fuel', $filters)) ?>" class="summary-card" style="text-decoration:none;color:inherit;cursor:pointer;" title="Click to view Pending Fuel">
                 <div>
                     <div class="summary-label">Pending Fuel Deliveries</div>
                     <div class="summary-value"><?= count($fuel_groups) ?></div>
                 </div>
                 <div class="summary-icon"><i class="fas fa-gas-pump"></i></div>
-            </div>
+            </a>
             <div class="summary-card">
                 <div>
                     <div class="summary-label">Total Pending Stock-In</div>
@@ -1088,10 +1051,10 @@ body .main,
         <!-- Sub-Tabs for Pending Deliveries -->
         <div class="sub-tab-nav">
             <a class="sub-tab-nav-btn <?= $active_type === 'merch' ? 'active' : '' ?>" href="<?= si_h(si_tab_url('merch', $filters)) ?>">
-                <i class="fas fa-boxes"></i> Merchandise
+                <i class="fas fa-boxes"></i> Merchandise (<?= count($merch_groups) ?>)
             </a>
             <a class="sub-tab-nav-btn <?= $active_type === 'fuel' ? 'active' : '' ?>" href="<?= si_h(si_tab_url('fuel', $filters)) ?>">
-                <i class="fas fa-gas-pump"></i> Fuel
+                <i class="fas fa-gas-pump"></i> Fuel (<?= count($fuel_groups) ?>)
             </a>
         </div>
 
@@ -1812,13 +1775,12 @@ function approveStockIn(type, groupId, poKey) {
             })
             .then(function(data) {
                 if (data.success) {
-                    var invoiceUrl = 'print_supplier_invoice.php?batch_id=' + encodeURIComponent(data.batch_id || poKey) + '&type=' + encodeURIComponent(type);
+                    var successMsg = data.message || ('Successfully approved ' + label + ' stock-in for ' + poKey + '! Official station inventory and prices have been updated.');
                     var successObj = {
                         title: 'Stock-In Approved Successfully!',
-                        message: data.message || ('Successfully approved ' + label + ' stock-in for ' + poKey + '. Official station inventory and prices have been updated.'),
+                        message: successMsg,
                         batch_id: data.batch_id || '',
                         po_key: poKey,
-                        invoice_url: invoiceUrl,
                         time: Date.now()
                     };
                     try {
@@ -1826,9 +1788,8 @@ function approveStockIn(type, groupId, poKey) {
                     } catch(e) {}
 
                     showStockBanner(successObj);
-                    showStockToast(data.message || ('Approved ' + label + ' stock-in! Opening printable invoice...'), 'ok');
-                    window.open(invoiceUrl, '_blank');
-                    setTimeout(function() { window.location.reload(); }, 1400);
+                    showStockToast(successMsg, 'ok');
+                    setTimeout(function() { window.location.reload(); }, 1200);
                 } else {
                     showStockToast(data.message || 'Unable to approve stock-in.', 'err');
                     if (button) {
@@ -1849,14 +1810,23 @@ function approveStockIn(type, groupId, poKey) {
 }
 
 function showStockToast(message, type) {
-    if (window.showPetronFlash) {
-        window.showPetronFlash(message, type === 'ok' ? 'success' : 'error');
+    var toastType = (type === 'ok' || type === 'success') ? 'success' : 'error';
+    if (typeof window.showGlobalToast === 'function') {
+        window.showGlobalToast(message, toastType);
+        return;
+    }
+    if (typeof window.showToast === 'function') {
+        window.showToast(message, toastType);
+        return;
+    }
+    if (typeof window.showPetronFlash === 'function') {
+        window.showPetronFlash(message, toastType);
         return;
     }
     const toast = document.getElementById('stockToast');
     if (!toast) return;
-    toast.textContent = message;
-    toast.className = 'stock-toast ' + (type === 'ok' ? 'toast-ok' : 'toast-err') + ' is-visible';
+    toast.innerHTML = '<div style="display:flex;align-items:center;gap:10px;"><i class="fas ' + (toastType === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle') + '" style="font-size:16px;flex-shrink:0;"></i><span>' + message + '</span></div>';
+    toast.className = 'stock-toast ' + (toastType === 'success' ? 'toast-ok' : 'toast-err') + ' is-visible';
     clearTimeout(window.stockToastTimer);
     clearTimeout(window.stockToastHideTimer);
     window.stockToastTimer = setTimeout(function() {
@@ -1864,7 +1834,7 @@ function showStockToast(message, type) {
         window.stockToastHideTimer = setTimeout(function() {
             toast.className = 'stock-toast';
         }, 240);
-    }, type === 'ok' ? 3000 : 4500);
+    }, toastType === 'success' ? 4000 : 5500);
 }
 
 // ── Stock-In Pagination Engine ──
@@ -1948,7 +1918,6 @@ function showStockBanner(data) {
     var titleEl = document.getElementById('stockBannerTitle');
     var descEl = document.getElementById('stockBannerDesc');
     var metaEl = document.getElementById('stockBannerMeta');
-    var printBtn = document.getElementById('stockBannerPrintBtn');
     
     if (titleEl && data.title) titleEl.textContent = data.title;
     if (descEl && data.message) descEl.textContent = data.message;
@@ -1962,15 +1931,6 @@ function showStockBanner(data) {
             metaEl.innerHTML += '<span class="stock-banner-tag"><i class="fas fa-layer-group"></i> Batch: ' + siEscapeHtml(data.batch_id) + '</span>';
         }
         metaEl.style.display = metaEl.innerHTML ? 'flex' : 'none';
-    }
-    
-    if (printBtn) {
-        if (data.invoice_url) {
-            printBtn.href = data.invoice_url;
-            printBtn.style.display = 'inline-flex';
-        } else {
-            printBtn.style.display = 'none';
-        }
     }
     
     banner.style.display = 'flex';
@@ -2281,10 +2241,17 @@ document.addEventListener('DOMContentLoaded', function() {
             var data = JSON.parse(stored);
             if (data && (Date.now() - (data.time || 0) < 600000)) {
                 showStockBanner(data);
+                showStockToast(data.message || 'Stock-In Approved Successfully!', 'ok');
             }
             sessionStorage.removeItem('petron_stock_in_success');
         }
     } catch (e) {}
+
+    <?php if (!empty($session_success)): ?>
+    try {
+        showStockToast(<?= json_encode($session_success) ?>, 'ok');
+    } catch (e) {}
+    <?php endif; ?>
 });
 </script>
 

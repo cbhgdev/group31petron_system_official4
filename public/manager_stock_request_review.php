@@ -403,6 +403,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             log_activity($pdo, $me['id'], 'Generate Merchandise Purchase Order', "Generated PO {$po_number} from PR {$pr_number}.");
             $pdo->commit();
+            if (function_exists('auto_load_pending_deliveries_from_approved_pos')) {
+                auto_load_pending_deliveries_from_approved_pos($pdo, $station_id);
+            }
             $_SESSION['success'] = "Purchase Order <strong>$po_number</strong> generated and approved.";
             header("Location: print_po_new.php?batch_id=" . urlencode($po_number) . "&type=merch&print=1");
             exit;
@@ -552,6 +555,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             log_activity($pdo, $me['id'], 'Generate Fuel Purchase Order', "Generated fuel PO {$po_number} from PR {$pr_number}.");
             $pdo->commit();
+            if (function_exists('auto_load_pending_deliveries_from_approved_pos')) {
+                auto_load_pending_deliveries_from_approved_pos($pdo, $station_id);
+            }
             $_SESSION['success'] = "Fuel Purchase Order <strong>$po_number</strong> generated and approved.";
             header("Location: print_po_new.php?batch_id=" . urlencode($po_number) . "&type=fuel&print=1");
             exit;
@@ -779,6 +785,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             log_activity($pdo, $me['id'], 'Create Direct Merchandise PO', "Directly created Merchandise PO {$po_number} ({$total_qty} items, ₱" . number_format($grand_total, 2) . ")");
             $pdo->commit();
+            if (function_exists('auto_load_pending_deliveries_from_approved_pos')) {
+                auto_load_pending_deliveries_from_approved_pos($pdo, $station_id);
+            }
             $_SESSION['success'] = "Purchase Order <strong>$po_number</strong> created directly and approved successfully.";
             header("Location: print_po_new.php?batch_id=" . urlencode($po_number) . "&type=merch&print=1");
             exit;
@@ -892,6 +901,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             log_activity($pdo, $me['id'], 'Create Direct Fuel PO', "Directly created Fuel PO {$po_number} totaling ₱" . number_format(array_sum(array_column($items_to_insert, 'total')), 2));
             $pdo->commit();
+            if (function_exists('auto_load_pending_deliveries_from_approved_pos')) {
+                auto_load_pending_deliveries_from_approved_pos($pdo, $station_id);
+            }
             $_SESSION['success'] = "Fuel Purchase Order <strong>$po_number</strong> created directly and approved successfully.";
             header("Location: print_po_new.php?batch_id=" . urlencode($po_number) . "&type=fuel&print=1");
             exit;
@@ -904,17 +916,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// Auto-load approved POs into deliveries_oversight if missing
+if (function_exists('auto_load_pending_deliveries_from_approved_pos')) {
+    auto_load_pending_deliveries_from_approved_pos($pdo, $station_id);
+}
+
 //  Summary Card Counts 
 $cnt_pending_sr_merch = (int)$pdo->query("SELECT COUNT(*) FROM stock_requests WHERE station_id = $station_id AND status IN ('Pending', 'Pending Manager Review') AND LOWER(COALESCE(item_category, '')) != 'fuel'")->fetchColumn();
 $cnt_pending_sr_fuel  = (int)$pdo->query("SELECT COUNT(*) FROM fuel_stock_requests WHERE station_id = $station_id AND status IN ('Pending', 'Pending Manager Review')")->fetchColumn();
 $cnt_pending_pr       = $cnt_pending_sr_merch + $cnt_pending_sr_fuel;
 
-$cnt_po_generated_merch = (int)$pdo->query("SELECT COUNT(DISTINCT COALESCE(NULLIF(batch_id, ''), po_number)) FROM purchase_orders WHERE station_id = $station_id AND type = 'merch' AND status IN ('Approved','Approved PO','Admin Finalized')")->fetchColumn();
-$cnt_po_generated_fuel  = (int)$pdo->query("SELECT COUNT(DISTINCT COALESCE(NULLIF(batch_id, ''), po_number)) FROM fuel_purchase_orders WHERE station_id = $station_id AND status IN ('Approved','Approved PO','Admin Finalized')")->fetchColumn();
+$cnt_po_generated_merch = (int)$pdo->query("SELECT COUNT(DISTINCT COALESCE(NULLIF(batch_id, ''), po_number)) FROM purchase_orders WHERE station_id = $station_id AND (type = 'merch' OR type = 'merchandise' OR type IS NULL OR type = '') AND status IN ('Approved','Approved PO','Admin Finalized','Pending Delivery','Official','Pending Stock-In')")->fetchColumn();
+$cnt_po_generated_fuel  = (int)$pdo->query("SELECT COUNT(DISTINCT COALESCE(NULLIF(batch_id, ''), po_number)) FROM fuel_purchase_orders WHERE station_id = $station_id AND status IN ('Approved','Approved PO','Admin Finalized','Pending Delivery','Official','Pending Stock-In')")->fetchColumn();
 $cnt_po_generated       = $cnt_po_generated_merch + $cnt_po_generated_fuel;
 
-$cnt_pending_delivery = (int)$pdo->query("SELECT COUNT(DISTINCT po_number) FROM purchase_orders WHERE station_id = $station_id AND status IN ('Approved','Approved PO','Admin Finalized') AND id NOT IN (SELECT DISTINCT po_id FROM merchandise_stock_in WHERE station_id = $station_id AND po_id IS NOT NULL)")->fetchColumn()
-                      + (int)$pdo->query("SELECT COUNT(DISTINCT batch_id) FROM fuel_purchase_orders WHERE station_id = $station_id AND status IN ('Approved','Approved PO','Admin Finalized') AND actual_volume IS NULL")->fetchColumn();
+$cnt_pending_del_merch = (int)$pdo->query("SELECT COUNT(DISTINCT po_number) FROM purchase_orders WHERE station_id = $station_id AND (type = 'merch' OR type = 'merchandise' OR type IS NULL OR type = '') AND status IN ('Approved','Approved PO','Admin Finalized','Pending Delivery','Official','Pending Stock-In') AND id NOT IN (SELECT DISTINCT po_id FROM merchandise_stock_in WHERE station_id = $station_id AND po_id IS NOT NULL)")->fetchColumn();
+$cnt_pending_del_fuel  = (int)$pdo->query("SELECT COUNT(DISTINCT batch_id) FROM fuel_purchase_orders WHERE station_id = $station_id AND status IN ('Approved','Approved PO','Admin Finalized','Pending Delivery','Official','Pending Stock-In') AND (actual_volume IS NULL OR actual_volume <= 0)")->fetchColumn();
+$cnt_pending_delivery  = $cnt_pending_del_merch + $cnt_pending_del_fuel;
+$pending_del_target_url = ($cnt_pending_del_merch > 0) ? 'manager_merchandise_deliveries.php' : ($cnt_pending_del_fuel > 0 ? 'manager_stock_in.php?type=fuel' : 'manager_merchandise_deliveries.php');
 
 $cnt_completed = (int)$pdo->query("SELECT COUNT(DISTINCT delivery_ref) FROM deliveries_oversight WHERE station_id = $station_id AND status = 'Stock-In Complete'")->fetchColumn();
 
@@ -1792,7 +1811,7 @@ body.sidebar-collapsed .modal-overlay {
             <div class="summary-card-label"><i class="fas fa-file-invoice" style="color:#9333ea;margin-right:4px;"></i> POs Generated</div>
             <div class="summary-card-value" style="color: #9333ea;"><?= number_format($cnt_po_generated) ?></div>
         </a>
-        <a href="manager_merchandise_deliveries.php" class="summary-card" style="text-decoration: none; color: inherit;">
+        <a href="<?= htmlspecialchars($pending_del_target_url) ?>" class="summary-card" style="text-decoration: none; color: inherit;">
             <div class="summary-card-label"><i class="fas fa-truck" style="color:#1d4ed8;margin-right:4px;"></i> Pending Deliveries</div>
             <div class="summary-card-value" style="color: #1d4ed8;"><?= number_format($cnt_pending_delivery) ?></div>
         </a>
@@ -1829,10 +1848,10 @@ body.sidebar-collapsed .modal-overlay {
     <!-- Sub-tabs Navigation -->
     <div id="pendingCategoryNav" class="sub-tab-nav">
         <button type="button" id="subtabMerchBtn" onclick="switchPendingSubTab('merch')" class="sub-tab-nav-btn active">
-            <i class="fas fa-boxes"></i> Merchandise
+            <i class="fas fa-boxes"></i> Merchandise (<?= count($merch_reqs) ?>)
         </button>
         <button type="button" id="subtabFuelBtn" onclick="switchPendingSubTab('fuel')" class="sub-tab-nav-btn">
-            <i class="fas fa-gas-pump"></i> Fuel
+            <i class="fas fa-gas-pump"></i> Fuel (<?= count($fuel_reqs) ?>)
         </button>
     </div>
 
@@ -2690,8 +2709,14 @@ document.addEventListener('DOMContentLoaded', function() {
     } else if (tabParam === 'merch' || subtabParam === 'merch') {
         targetTab = 'merch';
     } else {
-        // Default on fresh open or sidebar navigation is always Purchase Request
-        targetTab = 'pr';
+        // Default on fresh open: if merchandise is empty but fuel has requests, auto-switch to fuel
+        var hasMerch = <?= count($merch_reqs) > 0 ? 'true' : 'false' ?>;
+        var hasFuel  = <?= count($fuel_reqs) > 0 ? 'true' : 'false' ?>;
+        if (!hasMerch && hasFuel) {
+            targetTab = 'fuel';
+        } else {
+            targetTab = 'pr';
+        }
     }
     switchPendingSubTab(targetTab);
 

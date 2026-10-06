@@ -290,6 +290,11 @@ body{overflow-x:hidden !important;max-width:100vw !important;}
 </style>
 
 <?php
+// Auto-load approved POs into deliveries_oversight if any are missing
+if (function_exists('auto_load_pending_deliveries_from_approved_pos')) {
+    auto_load_pending_deliveries_from_approved_pos($pdo, $station_id);
+}
+
 // Summary counts for the 5 dashboard cards — live from DB
 $cnt_pending = 0; $cnt_verified = 0; $cnt_rejected = 0; $total_qty_verified = 0; $total_records = 0;
 try {
@@ -298,12 +303,12 @@ try {
     foreach ($sc->fetchAll(PDO::FETCH_ASSOC) as $sc_row) {
         $total_records++;
         $sl = strtolower($sc_row['status']);
-        if (in_array($sl, ['pending manager approval','pending manager confirmation','pending validation','pending verification','pending resolution','awaiting replacement'])) {
+        if (in_array($sl, ['pending manager approval','pending manager confirmation','pending validation','pending verification','pending resolution','awaiting replacement','pending stock-in','pending delivery','pending','expected delivery'])) {
             $cnt_pending++;
-        } elseif (in_array($sl, ['confirmed','approved','validated','verified','ready for stock-in','adjusted','stock-in complete'])) {
+        } elseif (in_array($sl, ['confirmed','approved','validated','verified','ready for stock-in','adjusted','stock-in complete','partial delivery','damaged items'])) {
             $cnt_verified++;
             $total_qty_verified += (float)$sc_row['quantity'];
-        } elseif (in_array($sl, ['discrepancy','rejected','flagged','returned','returned to supplier'])) {
+        } elseif (in_array($sl, ['discrepancy','rejected','flagged','returned','returned to supplier','rejected delivery'])) {
             $cnt_rejected++;
         }
     }
@@ -315,6 +320,9 @@ try {
         <h1><i class="fas fa-truck"></i> Merchandise Deliveries Validation</h1>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <a href="manager_stock_in.php?type=merch" class="flt-btn" style="background:#002F70;color:#fff;text-decoration:none;display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:6px;font-weight:700;font-size:12px;box-shadow:0 2px 6px rgba(0,47,112,0.2);">
+            <i class="fas fa-dolly"></i> Go to Stock-In
+        </a>
         <!-- Back button - shown on History tab -->
         <div id="back-button" style="display:none;gap:8px;">
             <button onclick="switchTab('manage')" class="flt-btn flt-btn-search">
@@ -327,7 +335,7 @@ try {
 <!-- Tabs for Manage vs History vs PO -->
 <div class="tab-container" style="margin-bottom:20px;">
     <button class="tab-btn active" id="tab-manage" onclick="switchTab('manage')">
-        <i class="fas fa-clipboard-check"></i> Manage Deliveries <span class="badge" id="badge-pending">0</span>
+        <i class="fas fa-clipboard-check"></i> Manage Deliveries <span class="badge" id="badge-pending"><?php echo $cnt_pending; ?></span>
     </button>
     <button class="tab-btn" id="tab-history" onclick="switchTab('history')">
         <i class="fas fa-history"></i> Delivery History
@@ -336,15 +344,15 @@ try {
 
 <!-- 5 Summary Cards -->
 <div class="sum-grid" style="margin-bottom:18px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));">
-    <div class="sum-card sc-pending">
+    <div class="sum-card sc-pending" style="cursor:pointer;" onclick="filterByCard('Pending')" title="Click to filter Pending Deliveries">
         <div class="sc-num" id="card-pending"><?php echo $cnt_pending; ?></div>
         <div class="sc-lbl"><i class="fas fa-hourglass-half"></i> Pending Deliveries</div>
     </div>
-    <div class="sum-card sc-approved">
+    <div class="sum-card sc-approved" style="cursor:pointer;" onclick="filterByCard('Verified')" title="Click to filter Verified Deliveries">
         <div class="sc-num" id="card-verified"><?php echo $cnt_verified; ?></div>
         <div class="sc-lbl"><i class="fas fa-check-double"></i> Verified Deliveries</div>
     </div>
-    <div class="sum-card sc-discrepancy">
+    <div class="sum-card sc-discrepancy" style="cursor:pointer;" onclick="filterByCard('Rejected')" title="Click to filter Rejected Deliveries">
         <div class="sc-num" id="card-rejected"><?php echo $cnt_rejected; ?></div>
         <div class="sc-lbl"><i class="fas fa-times-circle"></i> Rejected Deliveries</div>
     </div>
@@ -362,11 +370,11 @@ try {
 <div class="filter-row" style="margin-bottom:16px;flex-wrap:wrap;gap:8px;">
     <div class="fg">
         <label>Date From</label>
-        <input type="date" id="f-start" value="<?php echo date('Y-m-d', strtotime('-30 days')); ?>" onchange="loadDeliveries()">
+        <input type="date" id="f-start" value="<?php echo date('Y-m-d', strtotime('-60 days')); ?>" onchange="loadDeliveries()">
     </div>
     <div class="fg">
         <label>Date To</label>
-        <input type="date" id="f-end" value="<?php echo date('Y-m-d'); ?>" onchange="loadDeliveries()">
+        <input type="date" id="f-end" value="<?php echo date('Y-m-d', strtotime('+30 days')); ?>" onchange="loadDeliveries()">
     </div>
     <div class="fg">
         <label>Supplier</label>
@@ -774,10 +782,15 @@ document.addEventListener('DOMContentLoaded', function() {
         // â”€â”€ Auto-switch tab from URL parameter â”€â”€
         var urlParams = new URLSearchParams(window.location.search);
         var urlTab = urlParams.get('tab');
+        var urlStatus = urlParams.get('status');
         if (urlTab === 'history') {
-            switchTab('history');
+            switchTab('history', false);
         } else {
-            switchTab('manage');
+            switchTab('manage', false);
+        }
+        if (urlStatus) {
+            var sf = document.getElementById('f-status');
+            if (sf) sf.value = urlStatus;
         }
 
         console.log('Manager Merchandise Deliveries: Loading deliveries...');
@@ -830,9 +843,9 @@ function badgeHtml(status) {
 // â”€â”€ Status bucket mapping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function getDisplayStatus(raw) {
     var s = (raw || '').toLowerCase();
-    if (s.includes('pending manager') || s === 'pending validation' || s === 'pending verification' || s === 'pending' || s === 'pending admin oversight') return 'Pending';
     if (s === 'pending resolution') return 'Pending Resolution';
     if (s === 'awaiting replacement') return 'Awaiting Replacement';
+    if (s.includes('pending') || s === 'expected delivery') return 'Pending';
     if (s === 'ready for stock-in' || s === 'confirmed' || s === 'approved' || s === 'validated' || s === 'verified' || s === 'stock-in complete' || s === 'partial delivery' || s === 'damaged items') return 'Verified';
     if (s === 'adjusted' || s === 'adjusted — verified') return 'Adjusted — Verified';
     if (s === 'returned' || s === 'returned to staff') return 'Returned to Staff';
@@ -845,7 +858,27 @@ function getDisplayStatus(raw) {
 // â”€â”€ Load deliveries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 var currentTab = 'manage';
 
-function switchTab(tab) {
+function filterByCard(type) {
+    if (type === 'Pending') {
+        switchTab('manage', false);
+        var sf = document.getElementById('f-status');
+        if (sf) sf.value = 'Pending';
+        loadDeliveries();
+    } else if (type === 'Verified') {
+        switchTab('history', false);
+        var sf = document.getElementById('f-status');
+        if (sf) sf.value = 'Verified';
+        loadDeliveries();
+    } else if (type === 'Rejected') {
+        switchTab('history', false);
+        var sf = document.getElementById('f-status');
+        if (sf) sf.value = 'Rejected';
+        loadDeliveries();
+    }
+}
+
+function switchTab(tab, autoLoad) {
+    if (typeof autoLoad === 'undefined') autoLoad = true;
     currentTab = tab;
     document.querySelectorAll('.tab-btn').forEach(function(el) {
         el.classList.remove('active');
@@ -885,7 +918,9 @@ function switchTab(tab) {
                      + '<option value="Returned to Supplier">Returned to Supplier</option>'
                      + '<option value="Rejected">Rejected</option>';
     }
-    loadDeliveries();
+    if (autoLoad) {
+        loadDeliveries();
+    }
 }
 
 function loadDeliveries() {

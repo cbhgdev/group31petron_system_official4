@@ -698,8 +698,14 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
     } else {
         // Cash / Credit Card / Debit Card / GCash / Maya / Petron Fleet Card
         if ($amount_paid <= 0) {
-            $resolved_payment_status = 'Pending';
-            $balance_due = $total_amount;
+            if ($payment_method === 'Cash' && $total_amount > 0) {
+                $amount_paid = $total_amount;
+                $resolved_payment_status = 'Paid';
+                $balance_due = 0;
+            } else {
+                $resolved_payment_status = 'Pending';
+                $balance_due = $total_amount;
+            }
         } elseif ($amount_paid < $total_amount - 0.009) {
             $resolved_payment_status = 'Partially Paid';
             $balance_due = round($total_amount - $amount_paid, 2);
@@ -963,7 +969,7 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
             'payment_status'        => $resolved_payment_status,
             'ar_status'             => $resolved_ar_status,
             // Workflow status tracks service progress only; transaction validity is official on save.
-            'workflow_status'       => $has_service_item ? 'Pending' : 'Completed',
+            'workflow_status'       => !empty($data['workflow_status']) ? $data['workflow_status'] : ($has_service_item ? 'Pending' : 'Completed'),
             // ── Job Order integration ──────────────────────────────────────
             'job_order_id'               => (!empty($data['job_order_id']) && ctype_digit((string)$data['job_order_id'])) ? (int)$data['job_order_id'] : null,
             'job_order_db_id'            => !empty($data['job_order_db_id'])         ? (int)$data['job_order_db_id']       : null,

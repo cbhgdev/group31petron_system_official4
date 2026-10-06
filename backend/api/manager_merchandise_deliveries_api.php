@@ -101,7 +101,11 @@ function map_status_display(string $status): array {
         case 'Pending Validation':
         case 'Pending Verification':
         case 'Pending Admin Oversight':
-            return ['bucket' => 'Pending',  'label' => 'Pending'];
+        case 'Pending Stock-In':
+        case 'Pending Delivery':
+        case 'Pending':
+        case 'Expected Delivery':
+            return ['bucket' => 'Pending',  'label' => 'Pending Verification'];
         case 'Confirmed':
         case 'Approved':
         case 'Validated':
@@ -136,6 +140,11 @@ function map_status_display(string $status): array {
 
 // ── Route ─────────────────────────────────────────────────────────────────────
 try {
+    // Auto-load approved POs into deliveries_oversight if missing
+    if (function_exists('auto_load_pending_deliveries_from_approved_pos')) {
+        auto_load_pending_deliveries_from_approved_pos($pdo, $station_id);
+    }
+
     switch ($action) {
 
         // ── GET: list deliveries (fuel + merchandise) ────────────────────────
@@ -145,12 +154,18 @@ try {
             $category_f = trim($_GET['category'] ?? '');
             $dr_number_f= trim($_GET['dr_number'] ?? '');
             $type_f     = trim($_GET['type']     ?? ''); // 'fuel' | 'merchandise' | ''
-            $start      = $_GET['start'] ?? date('Y-m-d', strtotime('-30 days'));
-            $end        = $_GET['end']   ?? date('Y-m-d');
+            $start      = $_GET['start'] ?? date('Y-m-d', strtotime('-60 days'));
+            $end        = $_GET['end']   ?? date('Y-m-d', strtotime('+30 days'));
 
             // Default to merchandise only — fuel deliveries are managed under Fuel Management
-            $where  = "WHERE do2.station_id = ? AND do2.delivery_date BETWEEN ? AND ? AND do2.delivery_type = 'merchandise'";
-            $params = [$station_id, $start, $end];
+            $where  = "WHERE do2.station_id = ? AND do2.delivery_type = 'merchandise'";
+            $params = [$station_id];
+
+            if ($status_f !== 'active' && $status_f !== 'Pending') {
+                $where .= " AND do2.delivery_date BETWEEN ? AND ?";
+                $params[] = $start;
+                $params[] = $end;
+            }
 
             // Optional type filter override (kept for API flexibility, but UI should not expose fuel here)
             if ($type_f !== '' && $type_f !== 'fuel') {
@@ -160,7 +175,7 @@ try {
             // Map UI filter bucket → actual DB status values
             if ($status_f !== '' && $status_f !== 'active' && $status_f !== 'history') {
                 if ($status_f === 'Pending') {
-                    $where .= " AND do2.status IN ('Pending Manager Approval','Pending Manager Confirmation','Pending Validation','Pending Verification','Pending Admin Oversight')";
+                    $where .= " AND do2.status IN ('Pending Manager Approval','Pending Manager Confirmation','Pending Validation','Pending Verification','Pending Admin Oversight','Pending Stock-In','Pending Delivery','Pending','Expected Delivery')";
                 } elseif ($status_f === 'Verified' || $status_f === 'Ready for Stock-In') {
                     $where .= " AND do2.status IN ('Ready for Stock-In','Confirmed','Approved','Validated','Verified','Stock-In Complete','Partial Delivery','Damaged Items')";
                 } elseif ($status_f === 'Adjusted' || $status_f === 'Adjusted — Verified') {
@@ -179,8 +194,8 @@ try {
                     $where .= " AND do2.status = 'Closed'";
                 }
             } elseif ($status_f === 'active') {
-                // All Active = pending validation + pending resolution + awaiting replacement
-                $where .= " AND do2.status IN ('Pending Manager Approval','Pending Manager Confirmation','Pending Validation','Pending Verification','Pending Admin Oversight','Pending Resolution','Awaiting Replacement')";
+                // All Active = pending validation + pending resolution + awaiting replacement + pending stock-in
+                $where .= " AND do2.status IN ('Pending Manager Approval','Pending Manager Confirmation','Pending Validation','Pending Verification','Pending Admin Oversight','Pending Resolution','Awaiting Replacement','Pending Stock-In','Pending Delivery','Pending','Expected Delivery')";
             } elseif ($status_f === 'history') {
                 // History = all processed
                 $where .= " AND do2.status IN ('Ready for Stock-In','Confirmed','Approved','Validated','Verified','Adjusted','Returned','Returned to Staff','Returned to Supplier','Rejected','Rejected Delivery','Discrepancy','Flagged','Closed','Stock-In Complete','Partial Delivery','Damaged Items')";
@@ -279,7 +294,7 @@ try {
                 SELECT COUNT(*) FROM deliveries_oversight
                 WHERE station_id = ?
                   AND delivery_type = 'merchandise'
-                  AND status IN ('Pending Manager Approval','Pending Manager Confirmation','Pending Validation','Pending Verification','Pending Admin Oversight')
+                  AND status IN ('Pending Manager Approval','Pending Manager Confirmation','Pending Validation','Pending Verification','Pending Admin Oversight','Pending Stock-In','Pending Delivery','Pending','Expected Delivery','Pending Resolution','Awaiting Replacement')
             ");
             $stmt->execute([$station_id]);
             echo json_encode(['success' => true, 'count' => (int)$stmt->fetchColumn()]);
@@ -300,7 +315,7 @@ try {
             $cnt_p = 0; $cnt_v = 0; $cnt_r = 0; $total_qty_v = 0; $total_rec = count($all_sc);
             foreach ($all_sc as $sc_row) {
                 $sl = strtolower($sc_row['status']);
-                if (in_array($sl, ['pending manager approval','pending manager confirmation','pending validation','pending verification','pending admin oversight','pending resolution','awaiting replacement'])) {
+                if (in_array($sl, ['pending manager approval','pending manager confirmation','pending validation','pending verification','pending admin oversight','pending resolution','awaiting replacement','pending stock-in','pending delivery','pending','expected delivery'])) {
                     $cnt_p++;
                 } elseif (in_array($sl, ['confirmed','approved','validated','verified','ready for stock-in','adjusted','stock-in complete','partial delivery','damaged items','closed'])) {
                     $cnt_v++;
@@ -406,7 +421,7 @@ try {
                     echo json_encode(['success' => false, 'message' => 'Delivery not found']);
                     break;
                 }
-                if (!in_array($del['status'], ['Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation', 'Pending Verification'])) {
+                if (!in_array($del['status'], ['Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation', 'Pending Verification', 'Pending Stock-In', 'Pending Delivery', 'Pending', 'Expected Delivery'])) {
                     if ($pdo->inTransaction()) $pdo->rollBack();
                     echo json_encode(['success' => false, 'message' => 'Only Pending deliveries can be verified']);
                     break;
@@ -806,7 +821,7 @@ try {
 
             $pdo->beginTransaction();
             try {
-                $stmt = $pdo->prepare("SELECT * FROM deliveries_oversight WHERE batch_id = ? AND station_id = ? AND status IN ('Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation') FOR UPDATE");
+                $stmt = $pdo->prepare("SELECT * FROM deliveries_oversight WHERE batch_id = ? AND station_id = ? AND status IN ('Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation', 'Pending Verification', 'Pending Stock-In', 'Pending Delivery', 'Pending', 'Expected Delivery') FOR UPDATE");
                 $stmt->execute([$batch_id, $station_id]);
                 $dels = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -823,7 +838,7 @@ try {
                         manager_action_at = NOW(),
                         manager_notes = ?,
                         updated_at = NOW()
-                    WHERE batch_id = ? AND station_id = ? AND status IN ('Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation')
+                    WHERE batch_id = ? AND station_id = ? AND status IN ('Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation', 'Pending Verification', 'Pending Stock-In', 'Pending Delivery', 'Pending', 'Expected Delivery')
                 ")->execute([$me['id'], $reason ?: null, $batch_id, $station_id]);
 
                 if ($pdo->inTransaction()) $pdo->commit();
@@ -851,7 +866,7 @@ try {
 
             $pdo->beginTransaction();
             try {
-                $stmt = $pdo->prepare("SELECT * FROM deliveries_oversight WHERE batch_id = ? AND station_id = ? AND status IN ('Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation') FOR UPDATE");
+                $stmt = $pdo->prepare("SELECT * FROM deliveries_oversight WHERE batch_id = ? AND station_id = ? AND status IN ('Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation', 'Pending Verification', 'Pending Stock-In', 'Pending Delivery', 'Pending', 'Expected Delivery') FOR UPDATE");
                 $stmt->execute([$batch_id, $station_id]);
                 $dels = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -868,7 +883,7 @@ try {
                         manager_action_at = NOW(),
                         manager_notes = ?,
                         updated_at = NOW()
-                    WHERE batch_id = ? AND station_id = ? AND status IN ('Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation')
+                    WHERE batch_id = ? AND station_id = ? AND status IN ('Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Validation', 'Pending Verification', 'Pending Stock-In', 'Pending Delivery', 'Pending', 'Expected Delivery')
                 ")->execute([$me['id'], $reason, $batch_id, $station_id]);
 
                 if ($pdo->inTransaction()) $pdo->commit();

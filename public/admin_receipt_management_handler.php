@@ -182,7 +182,16 @@ if ($action === 'save_template') {
                     $logo_rel = 'uploads/logos/' . $fname;
                     $upd_logo = $pdo->prepare("UPDATE receipt_config SET logo_path = ? WHERE station_id = ?");
                     $upd_logo->execute([$logo_rel, $station_id]);
-                    $logo_url = '/group31petron_system_official4/' . $logo_rel;
+                    // Build correct base URL (works on localhost subdirectory AND live server docroot)
+                    $sn_h = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+                    $pp_h = strpos($sn_h, '/public/');
+                    if ($pp_h !== false) {
+                        $base_h = substr($sn_h, 0, $pp_h); // e.g. /group31petron_system_official4
+                    } else {
+                        $dir_h  = rtrim(dirname($sn_h), '/\\');
+                        $base_h = ($dir_h === '/' || $dir_h === '.' || $dir_h === '') ? '' : $dir_h;
+                    }
+                    $logo_url = rtrim($base_h, '/') . '/' . $logo_rel;
                 }
             }
         }

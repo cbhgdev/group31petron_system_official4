@@ -446,144 +446,127 @@ if (!in_array($active_tab, ['overview', 'movement', 'adjustments', 'alerts'], tr
 
 // ── Fetch Fuel Movement History (Deliveries, Sales, Adjustments) ──────
 $fuel_movement_history = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT
-            fd.delivery_date AS date,
-            fd.fuel_type,
-            COALESCE(NULLIF(fd.invoice_no,''), CONCAT('FDEL-', LPAD(fd.id, 5, '0'))) AS ref_no,
-            'Delivery (IN)' AS movement_type,
-            fd.delivery_liters AS inflow,
-            0 AS outflow,
-            fd.delivery_liters AS net_change,
-            COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Staff') AS user_name,
-            CONCAT_WS(' — ', NULLIF(fd.supplier,''), NULLIF(fd.notes,'')) AS remarks
-        FROM fuel_deliveries fd
-        LEFT JOIN users u ON fd.received_by = u.id
-        WHERE fd.station_id = ?
-        ORDER BY fd.delivery_date DESC LIMIT 150
-    ");
-    $stmt->execute([$station_id]);
-    $fuel_movement_history = array_merge($fuel_movement_history, $stmt->fetchAll(PDO::FETCH_ASSOC));
-} catch (Exception $e) {}
+if ($active_tab === 'movement') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                fd.delivery_date AS date,
+                fd.fuel_type,
+                COALESCE(NULLIF(fd.invoice_no,''), CONCAT('FDEL-', LPAD(fd.id, 5, '0'))) AS ref_no,
+                'Delivery (IN)' AS movement_type,
+                fd.delivery_liters AS inflow,
+                0 AS outflow,
+                fd.delivery_liters AS net_change,
+                COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Staff') AS user_name,
+                CONCAT_WS(' — ', NULLIF(fd.supplier,''), NULLIF(fd.notes,'')) AS remarks
+            FROM fuel_deliveries fd
+            LEFT JOIN users u ON fd.received_by = u.id
+            WHERE fd.station_id = ?
+            ORDER BY fd.delivery_date DESC LIMIT 150
+        ");
+        $stmt->execute([$station_id]);
+        $fuel_movement_history = array_merge($fuel_movement_history, $stmt->fetchAll(PDO::FETCH_ASSOC));
+    } catch (Exception $e) {}
 
-try {
-    $stmt = $pdo->prepare("
-        SELECT
-            ft.transaction_date AS date,
-            ft.fuel_type,
-            COALESCE(NULLIF(ft.transaction_id,''), CONCAT('FTRX-', LPAD(ft.id, 5, '0'))) AS ref_no,
-            'Dispensed / Sales (OUT)' AS movement_type,
-            0 AS inflow,
-            ft.liters_sold AS outflow,
-            -1 * ft.liters_sold AS net_change,
-            COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Pump Attendant') AS user_name,
-            COALESCE(NULLIF(ft.notes,''), CONCAT('Pump #', COALESCE(ft.pump_id, '1'), ' Sales (', COALESCE(ft.shift_name, 'Shift'), ')')) AS remarks
-        FROM fuel_transactions ft
-        LEFT JOIN users u ON ft.staff_id = u.id
-        WHERE ft.station_id = ?
-          AND LOWER(COALESCE(ft.status,'')) NOT IN ('voided','cancelled','rejected')
-        ORDER BY ft.transaction_date DESC LIMIT 150
-    ");
-    $stmt->execute([$station_id]);
-    $fuel_movement_history = array_merge($fuel_movement_history, $stmt->fetchAll(PDO::FETCH_ASSOC));
-} catch (Exception $e) {}
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                ft.transaction_date AS date,
+                ft.fuel_type,
+                COALESCE(NULLIF(ft.transaction_id,''), CONCAT('FTRX-', LPAD(ft.id, 5, '0'))) AS ref_no,
+                'Dispensed / Sales (OUT)' AS movement_type,
+                0 AS inflow,
+                ft.liters_sold AS outflow,
+                -1 * ft.liters_sold AS net_change,
+                COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Pump Attendant') AS user_name,
+                COALESCE(NULLIF(ft.notes,''), CONCAT('Pump #', COALESCE(ft.pump_id, '1'), ' Sales (', COALESCE(ft.shift_name, 'Shift'), ')')) AS remarks
+            FROM fuel_transactions ft
+            LEFT JOIN users u ON ft.staff_id = u.id
+            WHERE ft.station_id = ?
+              AND LOWER(COALESCE(ft.status,'')) NOT IN ('voided','cancelled','rejected')
+            ORDER BY ft.transaction_date DESC LIMIT 150
+        ");
+        $stmt->execute([$station_id]);
+        $fuel_movement_history = array_merge($fuel_movement_history, $stmt->fetchAll(PDO::FETCH_ASSOC));
+    } catch (Exception $e) {}
 
-try {
-    $stmt = $pdo->prepare("
-        SELECT
-            fa.adjustment_date AS date,
-            fa.fuel_type,
-            CONCAT('ADJ-', LPAD(fa.id, 5, '0')) AS ref_no,
-            CASE 
-                WHEN LOWER(COALESCE(fa.adjustment_type,'')) = 'transaction_adjustment' THEN 'Transaction Correction'
-                ELSE 'Calibration / Dip'
-            END AS movement_type,
-            CASE 
-                WHEN COALESCE(fa.variance, 0) > 0 THEN fa.variance
-                WHEN (fa.new_value - fa.previous_value) > 0 THEN (fa.new_value - fa.previous_value)
-                ELSE 0 
-            END AS inflow,
-            CASE 
-                WHEN COALESCE(fa.variance, 0) < 0 THEN ABS(fa.variance)
-                WHEN (fa.new_value - fa.previous_value) < 0 THEN ABS(fa.new_value - fa.previous_value)
-                ELSE 0 
-            END AS outflow,
-            CASE 
-                WHEN COALESCE(fa.variance, 0) != 0 THEN fa.variance
-                ELSE (fa.new_value - fa.previous_value)
-            END AS net_change,
-            COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Manager') AS user_name,
-            COALESCE(NULLIF(fa.reason,''), 'Adjustment') AS remarks
-        FROM fuel_adjustments fa
-        LEFT JOIN users u ON fa.user_id = u.id
-        WHERE fa.station_id = ?
-          AND LOWER(COALESCE(fa.adjustment_type,'')) != 'stock_in'
-        ORDER BY fa.adjustment_date DESC LIMIT 100
-    ");
-    $stmt->execute([$station_id]);
-    $fuel_movement_history = array_merge($fuel_movement_history, $stmt->fetchAll(PDO::FETCH_ASSOC));
-} catch (Exception $e) {}
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                fa.adjustment_date AS date,
+                fa.fuel_type,
+                CONCAT('ADJ-', LPAD(fa.id, 5, '0')) AS ref_no,
+                CASE 
+                    WHEN LOWER(COALESCE(fa.adjustment_type,'')) = 'transaction_adjustment' THEN 'Transaction Correction'
+                    ELSE 'Calibration / Dip'
+                END AS movement_type,
+                CASE 
+                    WHEN COALESCE(fa.variance, 0) > 0 THEN fa.variance
+                    WHEN (fa.new_value - fa.previous_value) > 0 THEN (fa.new_value - fa.previous_value)
+                    ELSE 0 
+                END AS inflow,
+                CASE 
+                    WHEN COALESCE(fa.variance, 0) < 0 THEN ABS(fa.variance)
+                    WHEN (fa.new_value - fa.previous_value) < 0 THEN ABS(fa.new_value - fa.previous_value)
+                    ELSE 0 
+                END AS outflow,
+                CASE 
+                    WHEN COALESCE(fa.variance, 0) != 0 THEN fa.variance
+                    ELSE (fa.new_value - fa.previous_value)
+                END AS net_change,
+                COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Manager') AS user_name,
+                COALESCE(NULLIF(fa.reason,''), 'Adjustment') AS remarks
+            FROM fuel_adjustments fa
+            LEFT JOIN users u ON fa.user_id = u.id
+            WHERE fa.station_id = ?
+              AND LOWER(COALESCE(fa.adjustment_type,'')) != 'stock_in'
+            ORDER BY fa.adjustment_date DESC LIMIT 100
+        ");
+        $stmt->execute([$station_id]);
+        $fuel_movement_history = array_merge($fuel_movement_history, $stmt->fetchAll(PDO::FETCH_ASSOC));
+    } catch (Exception $e) {}
 
-usort($fuel_movement_history, function($a, $b) {
-    return strcmp((string)($b['date'] ?? ''), (string)($a['date'] ?? ''));
-});
+    usort($fuel_movement_history, function($a, $b) {
+        return strcmp((string)($b['date'] ?? ''), (string)($a['date'] ?? ''));
+    });
+}
 
-// â”€â”€ Fetch Fuel Deliveries History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fetch Fuel Deliveries History ──────────────────────────────────
 $fuel_deliveries_list = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT fd.id,
-               CONCAT('DEL-', LPAD(fd.id, 5, '0')) AS delivery_no,
-               COALESCE(NULLIF(fd.invoice_no,''), fd.po_number, '—') AS po_number,
-               COALESCE(NULLIF(fd.supplier,''), 'Petron Corporation') AS supplier,
-               COALESCE(fd.fuel_type, 'Diesel') AS fuel_type,
-               fd.delivery_liters AS liters,
-               COALESCE(fd.cost_per_liter, 65.50) AS unit_cost,
-               fd.delivery_date AS date,
-               COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Staff') AS received_by_name,
-               COALESCE(fd.status, 'Verified') AS status
-        FROM fuel_deliveries fd
-        LEFT JOIN users u ON fd.received_by = u.id
-        WHERE fd.station_id = ?
-        ORDER BY fd.delivery_date DESC, fd.id DESC
-        LIMIT 200
-    ");
-    $stmt->execute([$station_id]);
-    $fuel_deliveries_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
 
-// â”€â”€ Fetch Fuel Adjustment History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fetch Fuel Adjustment History ──────────────────────────────────
 $fuel_adjustments_list = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT
-            CONCAT('ADJ-', LPAD(fa.id, 5, '0')) AS adjustment_no,
-            fa.id,
-            fa.adjustment_date AS date,
-            COALESCE(NULLIF(fa.fuel_type,''), fi.fuel_type, ft.name, 'Diesel') AS fuel_type,
-            COALESCE(NULLIF(fa.ugt_no,''), NULLIF(fi.ugt_no,''), 'UGT-01') AS ugt_no,
-            COALESCE(fa.adjustment_type, 'Physical Count / Tank Dip') AS adjustment_type,
-            fa.liters,
-            COALESCE(fa.adjustment_direction, IF(fa.variance >= 0, 'Increase', 'Decrease')) AS adjustment_direction,
-            fa.previous_value AS previous_reading,
-            fa.new_value AS new_reading,
-            COALESCE(fa.variance, (fa.new_value - fa.previous_value)) AS variance,
-            COALESCE(NULLIF(fa.reason,''), NULLIF(fa.notes,''), 'Routine Calibration') AS reason,
-            COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Manager') AS adjusted_by,
-            COALESCE(fa.status, 'Approved') AS status
-        FROM fuel_adjustments fa
-        LEFT JOIN fuel_inventory fi ON (fa.fuel_type_id = fi.fuel_type_id OR LOWER(fa.fuel_type) = LOWER(fi.fuel_type))
-        LEFT JOIN fuel_types ft ON fa.fuel_type_id = ft.id
-        LEFT JOIN users u ON fa.user_id = u.id
-        WHERE fa.station_id = ?
-        GROUP BY fa.id
-        ORDER BY CASE WHEN LOWER(COALESCE(fa.status,'')) LIKE '%pending%' THEN 0 ELSE 1 END, fa.adjustment_date DESC, fa.id DESC
-        LIMIT 200
-    ");
-    $stmt->execute([$station_id]);
-    $fuel_adjustments_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'adjustments') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                CONCAT('ADJ-', LPAD(fa.id, 5, '0')) AS adjustment_no,
+                fa.id,
+                fa.adjustment_date AS date,
+                COALESCE(NULLIF(fa.fuel_type,''), fi.fuel_type, ft.name, 'Diesel') AS fuel_type,
+                COALESCE(NULLIF(fa.ugt_no,''), NULLIF(fi.ugt_no,''), 'UGT-01') AS ugt_no,
+                COALESCE(fa.adjustment_type, 'Physical Count / Tank Dip') AS adjustment_type,
+                fa.liters,
+                COALESCE(fa.adjustment_direction, IF(fa.variance >= 0, 'Increase', 'Decrease')) AS adjustment_direction,
+                fa.previous_value AS previous_reading,
+                fa.new_value AS new_reading,
+                COALESCE(fa.variance, (fa.new_value - fa.previous_value)) AS variance,
+                COALESCE(NULLIF(fa.reason,''), NULLIF(fa.notes,''), 'Routine Calibration') AS reason,
+                COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Manager') AS adjusted_by,
+                COALESCE(fa.status, 'Approved') AS status
+            FROM fuel_adjustments fa
+            LEFT JOIN fuel_inventory fi ON (fa.fuel_type_id = fi.fuel_type_id OR LOWER(fa.fuel_type) = LOWER(fi.fuel_type))
+            LEFT JOIN fuel_types ft ON fa.fuel_type_id = ft.id
+            LEFT JOIN users u ON fa.user_id = u.id
+            WHERE fa.station_id = ?
+            GROUP BY fa.id
+            ORDER BY CASE WHEN LOWER(COALESCE(fa.status,'')) LIKE '%pending%' THEN 0 ELSE 1 END, fa.adjustment_date DESC, fa.id DESC
+            LIMIT 200
+        ");
+        $stmt->execute([$station_id]);
+        $fuel_adjustments_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
 
 

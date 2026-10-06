@@ -5,6 +5,9 @@
  */
 
 function loyalty_ensure_tables(PDO $pdo): void {
+    if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['loyalty_tables_ensured'])) {
+        return;
+    }
     static $done = false;
     if ($done) return;
     $done = true;
@@ -102,6 +105,10 @@ function loyalty_ensure_tables(PDO $pdo): void {
 
     } catch (Exception $e) {
         error_log('loyalty_ensure_tables error: ' . $e->getMessage());
+    }
+
+    if (session_status() === PHP_SESSION_ACTIVE) {
+        $_SESSION['loyalty_tables_ensured'] = true;
     }
 }
 

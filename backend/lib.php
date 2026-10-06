@@ -230,6 +230,17 @@ if (!function_exists('petron_banner_duration')) {
     }
 }
 
+if (!function_exists('petron_auto_refresh_interval')) {
+    function petron_auto_refresh_interval(?int $station_id = null): int {
+        $val = petron_get_setting_value('dashboard_auto_refresh', $station_id, '');
+        if ($val === '' || !is_numeric($val)) {
+            $val = petron_get_setting_value('auto_refresh_interval', $station_id, '10');
+        }
+        $sec = (int)$val;
+        return max(5, min(300, $sec > 0 ? $sec : 10));
+    }
+}
+
 if (!function_exists('petron_notifications_enabled')) {
     function petron_notifications_enabled(?int $station_id = null): bool {
         $val = petron_get_setting_value('enable_system_notifications', $station_id, '1');
@@ -1690,12 +1701,16 @@ function format_merch_unit($unit) {
 
 if (!function_exists('get_product_brand')) {
 function get_product_brand($product_name, $category = '', $description = '') {
+    static $brand_cache = [];
     $name = strtolower(trim((string)$product_name));
     $cat = strtolower(trim((string)$category));
     $desc = strtolower(trim((string)$description));
-    $text = trim($name . ' ' . $cat . ' ' . $desc);
+    $cache_key = $name . '|' . $cat . '|' . $desc;
+    if (isset($brand_cache[$cache_key])) {
+        return $brand_cache[$cache_key];
+    }
 
-    if ($name === '') return 'Generic';
+    if ($name === '') return $brand_cache[$cache_key] = 'Generic';
 
     $exact_contains = [
         'coke/ sprite / royal' => 'Coke/Sprite/Royal',
@@ -1747,33 +1762,39 @@ function get_product_brand($product_name, $category = '', $description = '') {
     ];
 
     foreach ($exact_contains as $needle => $brand) {
-        if (str_contains($name, $needle)) return $brand;
+        if (str_contains($name, $needle)) return $brand_cache[$cache_key] = $brand;
     }
 
+    $text = trim($name . ' ' . $cat . ' ' . $desc);
     if (preg_match('/\bfes[-\s]?\d+/i', $name) || preg_match('/\bffs[-\s]?\d+/i', $name)) {
-        return 'Fleetmax';
+        return $brand_cache[$cache_key] = 'Fleetmax';
     }
-    if (preg_match('/\bhd\s*\d+/i', $name)) return 'Petron HD';
-    if (preg_match('/\bmo\s*\d+/i', $name)) return 'Petron MO';
+    if (preg_match('/\bhd\s*\d+/i', $name)) return $brand_cache[$cache_key] = 'Petron HD';
+    if (preg_match('/\bmo\s*\d+/i', $name)) return $brand_cache[$cache_key] = 'Petron MO';
     if (str_contains($text, 'oil/fuel filter') || str_contains($name, 'oil filter') || str_contains($name, 'fuel filter')) {
-        return 'Generic Filter';
+        return $brand_cache[$cache_key] = 'Generic Filter';
     }
     if (str_contains($text, 'oil/lube/grease')) {
-        return 'Petron';
+        return $brand_cache[$cache_key] = 'Petron';
     }
 
     $words = preg_split('/\s+/', trim((string)$product_name));
     $first = preg_replace('/[^A-Za-z0-9\-]/', '', $words[0] ?? '');
-    return strlen($first) > 1 ? ucfirst(strtolower($first)) : 'Generic';
+    return $brand_cache[$cache_key] = (strlen($first) > 1 ? ucfirst(strtolower($first)) : 'Generic');
 }
 }
 
 function format_product_unit_display($unit, $product_name = '', $category = '', $description = '') {
+    static $unit_cache = [];
     $u = strtolower(trim((string)$unit));
+    $cache_key = $u . '|' . $product_name . '|' . $category . '|' . $description;
+    if (isset($unit_cache[$cache_key])) {
+        return $unit_cache[$cache_key];
+    }
+
     $name = strtolower(trim((string)$product_name));
     $cat = strtolower(trim((string)$category));
     $desc = strtolower(trim((string)$description));
-    $text = trim($name . ' ' . $cat . ' ' . $desc);
 
     $standard = [
         'pc' => 'Piece (pc)', 'pcs' => 'Piece (pc)', 'piece' => 'Piece (pc)', 'pieces' => 'Piece (pc)',
@@ -1800,68 +1821,43 @@ function format_product_unit_display($unit, $product_name = '', $category = '', 
     ];
 
     if ($u !== '' && !in_array($u, ['pc', 'pcs', 'piece', 'pieces'], true)) {
-        return $standard[$u] ?? ucfirst((string)$unit);
+        return $unit_cache[$cache_key] = ($standard[$u] ?? ucfirst((string)$unit));
     }
 
-    if (preg_match('/\bp\s*\/\s*\d+\b/i', $name)) return 'Pail';
-    if (preg_match('/\b\d+\s*\/\s*\d+\b/i', $name)) return 'Case';
+    if (preg_match('/\bp\s*\/\s*\d+\b/i', $name)) return $unit_cache[$cache_key] = 'Pail';
+    if (preg_match('/\b\d+\s*\/\s*\d+\b/i', $name)) return $unit_cache[$cache_key] = 'Case';
 
-    if (preg_match('/\b(dozen|dz)\b/i', $text)) return 'Dozen';
-    if (preg_match('/\b(set|kit)\b/i', $text)) return 'Set';
-    if (preg_match('/\b(pair|pairs)\b/i', $text)) return 'Pair';
+    $text = trim($name . ' ' . $cat . ' ' . $desc);
+    if (preg_match('/\b(dozen|dz)\b/i', $text)) return $unit_cache[$cache_key] = 'Dozen';
+    if (preg_match('/\b(set|kit)\b/i', $text)) return $unit_cache[$cache_key] = 'Set';
+    if (preg_match('/\b(pair|pairs)\b/i', $text)) return $unit_cache[$cache_key] = 'Pair';
     if (preg_match('/\b(box|carton|case|bag|sachet|cup|stick|tube|roll|pail)\b/i', $text, $m)) {
-        return $standard[strtolower($m[1])] ?? ucfirst($m[1]);
+        return $unit_cache[$cache_key] = ($standard[strtolower($m[1])] ?? ucfirst($m[1]));
     }
-    if (preg_match('/\b(can|canned)\b/i', $text)) return 'Can';
+    if (preg_match('/\b(can|canned)\b/i', $text)) return $unit_cache[$cache_key] = 'Can';
 
-    if (preg_match('/\b(coke|sprite|royal|gatorade|mineral water|water)\b/i', $text)) return 'Bottle';
-    if (preg_match('/\b(chippy|piattos|nova|oishi|clover|sweetcorn|cracklings|cheese ring|chiz curls|roller coaster|potato fries)\b/i', $text)) return 'Bag';
-    if (preg_match('/\b(breadstix|butter coconut|choco mucho|fita|presto|skyflakes|jjampong|sotanghon|snack|cookies|slugs|singles)\b/i', $text)) return 'Pack';
-    if (preg_match('/\b(filter|fleetmax|sakura|vic)\b/i', $text)) return 'Piece (pc)';
+    if (preg_match('/\b(coke|sprite|royal|gatorade|mineral water|water)\b/i', $text)) return $unit_cache[$cache_key] = 'Bottle';
+    if (preg_match('/\b(chippy|piattos|nova|oishi|clover|sweetcorn|cracklings|cheese ring|chiz curls|roller coaster|potato fries)\b/i', $text)) return $unit_cache[$cache_key] = 'Bag';
+    if (preg_match('/\b(breadstix|butter coconut|choco mucho|fita|presto|skyflakes|jjampong|sotanghon|snack|cookies|slugs|singles)\b/i', $text)) return $unit_cache[$cache_key] = 'Pack';
+    if (preg_match('/\b(filter|fleetmax|sakura|vic)\b/i', $text)) return $unit_cache[$cache_key] = 'Piece (pc)';
 
-    if (preg_match('/\b\d+(?:\.\d+)?\s*kg\b/i', $name)) return 'Kilogram (kg)';
-    if (preg_match('/\b\d+(?:\.\d+)?\s*g\b/i', $name)) return 'Gram (g)';
-    if (preg_match('/\b\d+(?:\.\d+)?\s*ml\b/i', $name)) return 'Milliliter (mL)';
-    if (preg_match('/\b\d+(?:\.\d+)?\s*l\b/i', $name)) return 'Liter (L)';
+    if (preg_match('/\b\d+(?:\.\d+)?\s*kg\b/i', $name)) return $unit_cache[$cache_key] = 'Kilogram (kg)';
+    if (preg_match('/\b\d+(?:\.\d+)?\s*g\b/i', $name)) return $unit_cache[$cache_key] = 'Gram (g)';
+    if (preg_match('/\b\d+(?:\.\d+)?\s*ml\b/i', $name)) return $unit_cache[$cache_key] = 'Milliliter (mL)';
+    if (preg_match('/\b\d+(?:\.\d+)?\s*l\b/i', $name)) return $unit_cache[$cache_key] = 'Liter (L)';
 
-    return 'Piece (pc)';
+    return $unit_cache[$cache_key] = 'Piece (pc)';
 }
 
 function format_product_category_display($category, $product_name = '', $description = '') {
+    static $cat_cache = [];
     $cat = trim((string)$category);
     $cat_l = strtolower($cat);
     $name_l = strtolower(trim((string)$product_name));
     $desc_l = strtolower(trim((string)$description));
-    $text = trim($name_l . ' ' . $desc_l);
-
-    if (preg_match('/\b(vic)\b/i', $name_l) && preg_match('/filter/i', $name_l)) {
-        return 'VIC Filters';
-    }
-
-    if (
-        preg_match('/\b(filter|fleetmax|sakura|nomis)\b/i', $text) ||
-        str_contains($desc_l, 'oil/fuel filter')
-    ) {
-        return 'Filters';
-    }
-
-    if (
-        str_contains($desc_l, 'oil/lube/grease') ||
-        preg_match('/\b(2t|atf|gep|hd|mo|mp grease|grease|ultron|sprint|blaze|rev-x|revx|trekker|enduro|hydrotur|powerburn|terrain)\b/i', $text)
-    ) {
-        return 'Oils/Lubes/Grease';
-    }
-
-    if (preg_match('/\b(coke|sprite|royal|gatorade|mineral water|bottled water)\b/i', $name_l)) {
-        return 'Drinks/Food';
-    }
-
-    if (preg_match('/\b(breadstix|butter coconut|cheese ring|chippy|chiz curls|choco mucho|clover|cracklings|fita|jjampong|sotanghon|nova|oishi|piattos|potato fries|presto|roller coaster|skyflakes|sweetcorn|cookies|slugs|singles)\b/i', $name_l)) {
-        return 'Snacks';
-    }
-
-    if (preg_match('/\b(wiper|mat|air freshener|accessory|accessories|tool|car care)\b/i', $text)) {
-        return 'Car Accessories';
+    $cache_key = $cat_l . '|' . $name_l . '|' . $desc_l;
+    if (isset($cat_cache[$cache_key])) {
+        return $cat_cache[$cache_key];
     }
 
     $valid = [
@@ -1875,7 +1871,38 @@ function format_product_category_display($category, $product_name = '', $descrip
         'others' => 'Others',
     ];
 
-    return $valid[$cat_l] ?? ($cat !== '' ? $cat : 'Others');
+    if (preg_match('/\b(vic)\b/i', $name_l) && preg_match('/filter/i', $name_l)) {
+        return $cat_cache[$cache_key] = 'VIC Filters';
+    }
+
+    $text = trim($name_l . ' ' . $desc_l);
+    if (
+        preg_match('/\b(filter|fleetmax|sakura|nomis)\b/i', $text) ||
+        str_contains($desc_l, 'oil/fuel filter')
+    ) {
+        return $cat_cache[$cache_key] = 'Filters';
+    }
+
+    if (
+        str_contains($desc_l, 'oil/lube/grease') ||
+        preg_match('/\b(2t|atf|gep|hd|mo|mp grease|grease|ultron|sprint|blaze|rev-x|revx|trekker|enduro|hydrotur|powerburn|terrain)\b/i', $text)
+    ) {
+        return $cat_cache[$cache_key] = 'Oils/Lubes/Grease';
+    }
+
+    if (preg_match('/\b(coke|sprite|royal|gatorade|mineral water|bottled water)\b/i', $name_l)) {
+        return $cat_cache[$cache_key] = 'Drinks/Food';
+    }
+
+    if (preg_match('/\b(breadstix|butter coconut|cheese ring|chippy|chiz curls|choco mucho|clover|cracklings|fita|jjampong|sotanghon|nova|oishi|piattos|potato fries|presto|roller coaster|skyflakes|sweetcorn|cookies|slugs|singles)\b/i', $name_l)) {
+        return $cat_cache[$cache_key] = 'Snacks';
+    }
+
+    if (preg_match('/\b(wiper|mat|air freshener|accessory|accessories|tool|car care)\b/i', $text)) {
+        return $cat_cache[$cache_key] = 'Car Accessories';
+    }
+
+    return $cat_cache[$cache_key] = ($valid[$cat_l] ?? ($cat !== '' ? $cat : 'Others'));
 }
 
 function ensure_product_category_id(PDO $pdo, string $category): int {
@@ -1945,7 +1972,16 @@ function normalize_merchandise_catalog_rows(array $rows): array {
         $row['description'] = $description;
         $row['category'] = $category;
         $row['category_name'] = $category;
-        $row['brand'] = get_product_brand($name, $category, $description);
+        $existing_brand = trim((string)($row['brand'] ?? ''));
+        if ($existing_brand !== '' && $existing_brand !== 'Generic' && strcasecmp($existing_brand, 'Petron Corporation') !== 0) {
+            $brand = $existing_brand;
+        } else {
+            $brand = get_product_brand($name, $category, $description);
+            if ($brand === 'Generic' && $existing_brand !== '') {
+                $brand = $existing_brand;
+            }
+        }
+        $row['brand'] = $brand;
         $row['unit'] = $unit;
         $row['supplier'] = 'Petron Corporation';
         $row['unit_cost'] = (float)($row['unit_cost'] ?? $row['cost'] ?? 0);
@@ -2358,6 +2394,7 @@ function create_role_notification($pdo, $targetRole, $type, $title, $message, $s
 function ensure_notifications_table(PDO $pdo): void {
   static $ready = false;
   if ($ready) return;
+  if ($pdo->inTransaction()) return; // Never execute DDL inside an active transaction (causes implicit MySQL commit)
 
   $pdo->exec("CREATE TABLE IF NOT EXISTS notifications (
     id           INT AUTO_INCREMENT PRIMARY KEY,
@@ -3771,8 +3808,7 @@ function notify(
     $title   = function_exists('clean_mojibake') ? clean_mojibake($title) : $title;
     $message = function_exists('clean_mojibake') ? clean_mojibake($message) : $message;
     try {
-        static $migrated = false;
-        if (!$migrated) {
+        if (empty($_SESSION['notifications_schema_migrated']) && !$pdo->inTransaction()) {
             foreach ([
                 "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS recipient_role VARCHAR(30) NULL AFTER user_id",
                 "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reference_type VARCHAR(80) NULL AFTER redirect_url",
@@ -3781,7 +3817,9 @@ function notify(
             ] as $ddl) {
                 try { $pdo->exec($ddl); } catch (Throwable $e) {}
             }
-            $migrated = true;
+            if (session_status() === PHP_SESSION_ACTIVE) {
+                $_SESSION['notifications_schema_migrated'] = true;
+            }
         }
 
         $stmt = $pdo->prepare("
@@ -4363,4 +4401,223 @@ if (!function_exists('fetch_pumps_for_fuel_product')) {
         return $pumps;
     }
 }
+
+if (!function_exists('auto_load_pending_deliveries_from_approved_pos')) {
+    /**
+     * Auto-loads approved Purchase Orders into deliveries_oversight as pending deliveries
+     * so that Manager Deliveries and Stock-In always accurately reflect approved POs
+     * without requiring manual re-entry.
+     */
+    function auto_load_pending_deliveries_from_approved_pos(PDO $pdo, int $station_id): int {
+        if ($station_id <= 0) return 0;
+        $inserted_count = 0;
+
+        // Ensure columns exist on deliveries_oversight
+        foreach ([
+            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS source_ref VARCHAR(100) DEFAULT NULL",
+            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS batch_id VARCHAR(100) DEFAULT NULL",
+            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS sales_invoice_no VARCHAR(100) DEFAULT NULL",
+            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS delivery_time TIME DEFAULT NULL",
+            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS unit_cost DECIMAL(12,4) DEFAULT 0",
+            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS unit_price DECIMAL(12,4) DEFAULT 0",
+            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS expected_quantity DECIMAL(12,3) DEFAULT 0",
+            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS actual_quantity DECIMAL(12,3) DEFAULT 0",
+            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS damaged_quantity DECIMAL(12,3) DEFAULT 0",
+        ] as $schema_sql) {
+            try { $pdo->exec($schema_sql); } catch (Exception $e) {}
+        }
+
+        // 1. Merchandise POs that are Approved/Finalized and not yet completed in merchandise_stock_in
+        try {
+            $stmt_po = $pdo->prepare("
+                SELECT po.*, COALESCE(s.name, po.supplier_name, 'Petron Corporation') AS resolved_supplier
+                FROM purchase_orders po
+                LEFT JOIN suppliers s ON po.supplier_id = s.id
+                WHERE po.station_id = ?
+                  AND (po.type = 'merch' OR po.type = 'merchandise' OR po.type IS NULL OR po.type = '')
+                  AND po.status IN ('Approved', 'Approved PO', 'Admin Finalized', 'Pending Delivery', 'Official', 'Pending Stock-In', 'Pending Validation', 'Pending')
+                  AND (po.stock_in_done = 0 OR po.stock_in_done IS NULL)
+                  AND po.id NOT IN (
+                      SELECT DISTINCT po_id FROM merchandise_stock_in
+                      WHERE station_id = ? AND po_id IS NOT NULL
+                  )
+            ");
+            $stmt_po->execute([$station_id, $station_id]);
+            $approved_pos = $stmt_po->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($approved_pos as $po) {
+                $po_num = trim((string)$po['po_number']);
+                $batch_id = trim((string)($po['batch_id'] ?: $po['po_number']));
+                if (!$po_num) continue;
+
+                // Check if already represented in deliveries_oversight
+                $stmt_chk = $pdo->prepare("
+                    SELECT COUNT(*) FROM deliveries_oversight
+                    WHERE station_id = ?
+                      AND delivery_type = 'merchandise'
+                      AND (source_ref = ? OR (batch_id = ? AND batch_id != '') OR delivery_ref LIKE ?)
+                      AND status != 'Cancelled'
+                ");
+                $stmt_chk->execute([$station_id, $po_num, $batch_id, '%' . $po_num . '%']);
+                if ((int)$stmt_chk->fetchColumn() > 0) {
+                    continue; // Already has delivery records
+                }
+
+                // Fetch items for this PO
+                $items = [];
+                try {
+                    $stmt_items = $pdo->prepare("
+                        SELECT poi.*, ip.sku AS ip_sku, ip.category AS ip_category,
+                               COALESCE(si.unit, ip.size, 'pcs') AS ip_unit
+                        FROM purchase_order_items poi
+                        LEFT JOIN inventory_products ip ON poi.product_id = ip.id
+                        LEFT JOIN station_inventory si ON poi.product_id = si.product_id AND si.station_id = ?
+                        WHERE poi.po_id = ?
+                    ");
+                    $stmt_items->execute([$station_id, $po['id']]);
+                    $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
+                } catch (Exception $e) {}
+
+                $del_date = !empty($po['expected_delivery_date']) ? $po['expected_delivery_date'] : (!empty($po['expected_delivery']) ? $po['expected_delivery'] : date('Y-m-d'));
+                $del_time = '09:00:00';
+                $supplier = $po['resolved_supplier'] ?: 'Petron Corporation';
+
+                if (!empty($items)) {
+                    foreach ($items as $item) {
+                        $qty = (float)($item['quantity'] ?? $item['quantity_ordered'] ?? 0);
+                        if ($qty <= 0) continue;
+                        $unit_cost = (float)($item['unit_price'] ?? 0);
+                        $prod_name = $item['item_name'] ?: 'Merchandise Product';
+                        $unit = $item['ip_unit'] ?: 'pcs';
+                        $del_ref = 'MDR-' . date('Ymd', strtotime($po['created_at'] ?: 'now')) . '-' . str_pad($po['id'], 4, '0', STR_PAD_LEFT);
+
+                        $pdo->prepare("
+                            INSERT INTO deliveries_oversight (
+                                delivery_type, delivery_ref, supplier, product, quantity, unit, unit_price, unit_cost,
+                                expected_quantity, actual_quantity, damaged_quantity,
+                                delivery_date, delivery_time, dr_number, sales_invoice_no,
+                                encoded_by, station_id, status, remarks, source_ref, batch_id, created_at, updated_at
+                            ) VALUES (
+                                'merchandise', ?, ?, ?, ?, ?, ?, ?,
+                                ?, ?, 0,
+                                ?, ?, ?, ?,
+                                ?, ?, 'Pending Stock-In', ?, ?, ?, NOW(), NOW()
+                            )
+                        ")->execute([
+                            $del_ref, $supplier, $prod_name, $qty, $unit, $unit_cost, $unit_cost,
+                            $qty, $qty,
+                            $del_date, $del_time, $po_num, 'INV-' . $po_num,
+                            $po['created_by'] ?: null, $station_id,
+                            'Auto-loaded from Approved Purchase Order ' . $po_num,
+                            $po_num, $batch_id
+                        ]);
+                        $inserted_count++;
+                    }
+                } else {
+                    $qty = (float)($po['quantity'] ?? 1);
+                    $unit_cost = (float)($po['unit_price'] ?? 0);
+                    $prod_name = $po['product_name'] ?: 'Merchandise Delivery';
+                    $del_ref = 'MDR-' . date('Ymd', strtotime($po['created_at'] ?: 'now')) . '-' . str_pad($po['id'], 4, '0', STR_PAD_LEFT);
+
+                    $pdo->prepare("
+                        INSERT INTO deliveries_oversight (
+                            delivery_type, delivery_ref, supplier, product, quantity, unit, unit_price, unit_cost,
+                            expected_quantity, actual_quantity, damaged_quantity,
+                            delivery_date, delivery_time, dr_number, sales_invoice_no,
+                            encoded_by, station_id, status, remarks, source_ref, batch_id, created_at, updated_at
+                        ) VALUES (
+                            'merchandise', ?, ?, ?, ?, 'pcs', ?, ?,
+                            ?, ?, 0,
+                            ?, ?, ?, ?,
+                            ?, ?, 'Pending Stock-In', ?, ?, ?, NOW(), NOW()
+                        )
+                    ")->execute([
+                        $del_ref, $supplier, $prod_name, $qty, $unit_cost, $unit_cost,
+                        $qty, $qty,
+                        $del_date, $del_time, $po_num, 'INV-' . $po_num,
+                        $po['created_by'] ?: null, $station_id,
+                        'Auto-loaded from Approved Purchase Order ' . $po_num,
+                        $po_num, $batch_id
+                    ]);
+                    $inserted_count++;
+                }
+            }
+        } catch (Exception $e) {
+            error_log('auto_load merch error: ' . $e->getMessage());
+        }
+
+        // 2. Fuel POs that are Approved/Finalized and not yet completed
+        try {
+            $stmt_fpo = $pdo->prepare("
+                SELECT fpo.*, ft.name AS fuel_type_name, COALESCE(s.name, 'Petron Corporation') AS resolved_supplier
+                FROM fuel_purchase_orders fpo
+                LEFT JOIN fuel_types ft ON fpo.fuel_type_id = ft.id
+                LEFT JOIN suppliers s ON fpo.supplier_id = s.id
+                WHERE fpo.station_id = ?
+                  AND fpo.status IN ('Approved', 'Approved PO', 'Admin Finalized', 'Pending Delivery', 'Official', 'Pending Stock-In', 'Pending Validation', 'Pending')
+                  AND (fpo.actual_volume IS NULL OR fpo.actual_volume <= 0)
+                  AND (fpo.batch_id IS NULL OR fpo.batch_id NOT IN (
+                      SELECT DISTINCT batch_ref FROM fuel_stock_in
+                      WHERE station_id = ? AND batch_ref IS NOT NULL
+                  ))
+            ");
+            $stmt_fpo->execute([$station_id, $station_id]);
+            $approved_fpos = $stmt_fpo->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($approved_fpos as $fpo) {
+                $po_num = trim((string)$fpo['po_number']);
+                $batch_id = trim((string)($fpo['batch_id'] ?: $fpo['po_number']));
+                if (!$po_num) continue;
+
+                // Check if already in deliveries_oversight
+                $stmt_chk = $pdo->prepare("
+                    SELECT COUNT(*) FROM deliveries_oversight
+                    WHERE station_id = ?
+                      AND delivery_type = 'fuel'
+                      AND (source_ref = ? OR (batch_id = ? AND batch_id != '') OR delivery_ref LIKE ?)
+                      AND status != 'Cancelled'
+                ");
+                $stmt_chk->execute([$station_id, $po_num, $batch_id, '%' . $po_num . '%']);
+                if ((int)$stmt_chk->fetchColumn() > 0) {
+                    continue;
+                }
+
+                $del_date = !empty($fpo['expected_delivery_date']) ? $fpo['expected_delivery_date'] : date('Y-m-d');
+                $del_time = '09:00:00';
+                $supplier = $fpo['resolved_supplier'] ?: 'Petron Corporation';
+                $liters = (float)($fpo['volume'] ?? 0);
+                $unit_cost = (float)($fpo['unit_price'] ?? 0);
+                $prod_name = $fpo['fuel_type_name'] ?: 'Fuel';
+                $del_ref = 'FDR-' . date('Ymd', strtotime($fpo['created_at'] ?: 'now')) . '-' . str_pad($fpo['id'], 4, '0', STR_PAD_LEFT);
+
+                $pdo->prepare("
+                    INSERT INTO deliveries_oversight (
+                        delivery_type, delivery_ref, supplier, product, quantity, unit, unit_price, unit_cost,
+                        expected_quantity, actual_quantity, damaged_quantity,
+                        delivery_date, delivery_time, dr_number, sales_invoice_no,
+                        encoded_by, station_id, status, remarks, source_ref, batch_id, created_at, updated_at
+                    ) VALUES (
+                        'fuel', ?, ?, ?, ?, 'L', ?, ?,
+                        ?, ?, 0,
+                        ?, ?, ?, ?,
+                        ?, ?, 'Pending Stock-In', ?, ?, ?, NOW(), NOW()
+                    )
+                ")->execute([
+                    $del_ref, $supplier, $prod_name, $liters, $unit_cost, $unit_cost,
+                    $liters, $liters,
+                    $del_date, $del_time, $po_num, 'INV-' . $po_num,
+                    $fpo['created_by'] ?: null, $station_id,
+                    'Auto-loaded from Approved Fuel Purchase Order ' . $po_num,
+                    $po_num, $batch_id
+                ]);
+                $inserted_count++;
+            }
+        } catch (Exception $e) {
+            error_log('auto_load fuel error: ' . $e->getMessage());
+        }
+
+        return $inserted_count;
+    }
+}
+
 

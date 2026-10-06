@@ -31,7 +31,17 @@
     /* ── Configuration ──────────────────────────────────────────────────────── */
     var BASE_PATH  = window.PETRON_BASE_PATH || '';
     var API_URL    = BASE_PATH + '/backend/api_refresh.php';
-    var POLL_INTERVAL_MS = 15000; // 15 seconds background poll
+
+    function getPollIntervalMs() {
+        if (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000) {
+            return window.PETRON_AUTO_REFRESH_MS;
+        }
+        if (typeof window.PETRON_AUTO_REFRESH_SECONDS === 'number' && window.PETRON_AUTO_REFRESH_SECONDS >= 5) {
+            return window.PETRON_AUTO_REFRESH_SECONDS * 1000;
+        }
+        return 15000;
+    }
+    var POLL_INTERVAL_MS = getPollIntervalMs(); // dynamic fallback 15s
 
     var CSRF_TOKEN = (function () {
         var m = document.querySelector('meta[name="csrf-token"]');
@@ -41,6 +51,7 @@
     /* ── Internal State ──────────────────────────────────────────────────────── */
     var _handlers         = {};
     var _timers           = {};
+    var _pollTimer        = null;
     var _abortCtrls       = {};
     var _inFlight         = {};
     var _isRefreshingView = false;
@@ -203,7 +214,8 @@
             var tableSelectors = [
                 '#joUnifiedTable', '#mhTable', '#jomTable', '#reportTable',
                 'table.txn-table', 'table.report-table', 'table.data-table',
-                'table.print-table', 'table.manager-table', 'table.admin-table'
+                'table.print-table', 'table.manager-table', 'table.admin-table',
+                'table.afto-tbl', '.afto-tbl'
             ];
             tableSelectors.forEach(function (sel) {
                 document.querySelectorAll(sel).forEach(function (currentTbl) {
@@ -254,6 +266,12 @@
             }
             if (typeof window.joApplyFilters === 'function') {
                 try { window.joApplyFilters(); } catch (e) {}
+            }
+            if (typeof window.mftvRender === 'function') {
+                try { window.mftvRender(); } catch (e) {}
+            }
+            if (typeof window.updateBatchButtons === 'function') {
+                try { window.updateBatchButtons(); } catch (e) {}
             }
 
             document.dispatchEvent(new CustomEvent('petron:view-refreshed', { detail: { url: targetUrl } }));
@@ -406,6 +424,19 @@
 
         pause:  function () { _paused = true; return this; },
         resume: function () { _paused = false; return this; },
+        resetPollingInterval: function (ms) {
+            if (typeof ms === 'number' && ms >= 5000) {
+                window.PETRON_AUTO_REFRESH_MS = ms;
+                window.PETRON_AUTO_REFRESH_SECONDS = Math.round(ms / 1000);
+            }
+            if (typeof schedulePolling === 'function') {
+                schedulePolling();
+            }
+            return this;
+        },
+        getPollingInterval: function () {
+            return typeof getPollIntervalMs === 'function' ? getPollIntervalMs() : 15000;
+        },
     };
 
     window.PetronRealtime = PetronRealtime;
@@ -471,13 +502,21 @@
         });
     }
 
-    /* ── Background Real-Time Polling Loop (Every 15s) ───────────────────────── */
+    function schedulePolling() {
+        if (_pollTimer) clearInterval(_pollTimer);
+        var interval = getPollIntervalMs();
+        _pollTimer = setInterval(runBackgroundPolling, interval);
+    }
+
+    /* ── Background Real-Time Polling Loop (Dynamic Interval) ─────────────────── */
     function runBackgroundPolling() {
         if (!_paused && !isUserEditing()) {
             PetronRealtime.trigger(['notifications', 'badges']);
 
-            // Auto-refresh active view if at least 10s elapsed since last user mutation
-            if (Date.now() - _lastMutationTime > 10000) {
+            // Auto-refresh active view if at least minElapsed elapsed since last user mutation
+            var interval = getPollIntervalMs();
+            var minElapsed = Math.min(5000, interval);
+            if (Date.now() - _lastMutationTime > minElapsed) {
                 refreshActiveView({ force: false });
             }
         }
@@ -490,8 +529,8 @@
         // Initial fetch of unread count and badges
         PetronRealtime.trigger(['notifications', 'badges']);
 
-        // Start 15s background polling loop
-        setInterval(runBackgroundPolling, POLL_INTERVAL_MS);
+        // Start dynamic background polling loop
+        schedulePolling();
     });
 
 })();

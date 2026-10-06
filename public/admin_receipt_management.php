@@ -166,6 +166,18 @@ $val_show_qr       = isset($config['show_qr']) ? (int)$config['show_qr'] : 1;
 
 $current_logo = !empty($config['logo_path']) ? $config['logo_path'] : (function_exists('get_system_logo_url') ? get_system_logo_url($station_id) : 'assets/img/Petron Logo.png');
 
+// Build the correct public URL for images — works on both localhost subdirectory & live server docroot
+$script_name_rm = str_replace('\\', '/', $_SERVER['SCRIPT_NAME'] ?? '');
+$public_pos_rm  = strpos($script_name_rm, '/public/');
+if ($public_pos_rm !== false) {
+    $app_base_rm = substr($script_name_rm, 0, $public_pos_rm); // e.g. /group31petron_system_official4
+} else {
+    $dir_rm = rtrim(dirname($script_name_rm), '/\\');
+    $app_base_rm = ($dir_rm === '/' || $dir_rm === '.' || $dir_rm === '') ? '' : $dir_rm;
+}
+// $logo_url_base = e.g. "/group31petron_system_official4" on localhost, "" on live server
+$logo_url_base = rtrim($app_base_rm, '/');
+
 require_once __DIR__ . '/../partials/header.php';
 ?>
 
@@ -344,9 +356,9 @@ require_once __DIR__ . '/../partials/header.php';
                     <div class="rm-form-group" style="grid-column: span 2;">
                         <label>Receipt Logo (Station Branding)</label>
                         <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-                            <img id="pv_logo_img" src="<?= $h('/group31petron_system_official4/' . ltrim($current_logo, '/')) ?>"
+                            <img id="pv_logo_img" src="<?= $h($logo_url_base . '/' . ltrim($current_logo, '/')) ?>"
                                  alt="Logo Preview" style="max-height:46px;max-width:130px;border:1px solid #e2e8f0;padding:4px;border-radius:6px;background:#fff;object-fit:contain;"
-                                 onerror="this.src='/group31petron_system_official4/assets/img/Petron Logo.png'">
+                                 onerror="this.src='<?= $h($logo_url_base) ?>/assets/img/Petron Logo.png'">
                             <?php if ($can_edit_template): ?>
                             <div style="flex:1;min-width:200px;">
                                 <input type="file" name="receipt_logo" id="f_receipt_logo" accept="image/*" onchange="previewLogo(event)" style="font-size:12px;">
@@ -459,7 +471,7 @@ require_once __DIR__ . '/../partials/header.php';
                     <div class="rm-preview-receipt" id="livePreview">
                         <!-- Centered Header Branding -->
                         <div class="pr-center" style="margin-bottom:8px;">
-                            <img id="pv_preview_logo" src="<?= $h('/group31petron_system_official4/' . ltrim($current_logo, '/')) ?>"
+                            <img id="pv_preview_logo" src="<?= $h($logo_url_base . '/' . ltrim($current_logo, '/')) ?>"
                                  style="max-height:48px;max-width:120px;object-fit:contain;" alt="Logo"
                                  onerror="this.style.display='none'">
                         </div>

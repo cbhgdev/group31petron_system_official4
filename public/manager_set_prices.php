@@ -385,20 +385,8 @@ try {
     error_log('[manager_set_prices] merch error: ' . $e->getMessage());
 }
 
-// ── Pre-load merchandise batches per product ──────────────────────────────
+// ── Pre-load merchandise batches per product (cached/ajax-ready) ───────────
 $merch_batches_by_product = [];
-try {
-    $bStmt = $pdo->prepare("
-        SELECT mb.*
-        FROM merchandise_batches mb
-        WHERE mb.station_id = ? AND LOWER(COALESCE(mb.status, 'active')) NOT IN ('cancelled', 'disabled')
-        ORDER BY mb.date_received ASC, mb.id ASC
-    ");
-    $bStmt->execute([(int)$station_id]);
-    foreach ($bStmt->fetchAll(PDO::FETCH_ASSOC) as $b) {
-        $merch_batches_by_product[(int)$b['product_id']][] = $b;
-    }
-} catch (Exception $e) {}
 
 $all_categories = array_keys($all_categories);
 sort($all_categories);
@@ -409,22 +397,10 @@ sort($all_units);
 $all_suppliers = array_keys($all_suppliers);
 sort($all_suppliers);
 
-// ── Ensure job_order_service_types table exists & fetch service types ──────
+// ── Fetch service types & pending approvals ────────────────────────────────
 $service_types = [];
 $service_error = null;
 try {
-    // Migration safety: add new columns if missing
-    $new_cols = [
-        "ALTER TABLE job_order_service_types ADD COLUMN IF NOT EXISTS service_code VARCHAR(20) DEFAULT NULL AFTER id",
-        "ALTER TABLE job_order_service_types ADD COLUMN IF NOT EXISTS labor_fee DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER service_price",
-        "ALTER TABLE job_order_service_types ADD COLUMN IF NOT EXISTS estimated_duration INT DEFAULT 60 AFTER labor_fee",
-        "ALTER TABLE job_order_service_types ADD COLUMN IF NOT EXISTS required_mechanics INT DEFAULT 1 AFTER estimated_duration",
-        "ALTER TABLE job_order_service_types ADD COLUMN IF NOT EXISTS description TEXT DEFAULT NULL AFTER required_mechanics",
-    ];
-    foreach ($new_cols as $sql) { try { $pdo->exec($sql); } catch (Exception $e) {} }
-
-    // Back-fill service codes for rows missing them
-    $pdo->exec("UPDATE job_order_service_types SET service_code = CONCAT('SVC-', LPAD(id, 4, '0')) WHERE service_code IS NULL OR service_code = ''");
 
     $stmt = $pdo->prepare("
         SELECT s.id, s.service_code, s.service_name, s.service_key, s.category,
@@ -500,7 +476,7 @@ table.cust-table, #merchTable, #mgrMerchTable, table.pricing-table, table.tbl-re
     box-sizing: border-box !important;
 }
 
-table th {
+table:not(.data-tbl) th {
     padding: 9px 8px !important;
     font-size: 12.5px !important;
     font-weight: 800 !important;
@@ -509,7 +485,7 @@ table th {
     white-space: nowrap !important;
 }
 
-table td {
+table:not(.data-tbl) td {
     padding: 9px 8px !important;
     font-size: 13.5px !important;
     line-height: 1.3 !important;
@@ -985,6 +961,65 @@ body, html { overflow-x: hidden; max-width: 100%; }
     .summary-grid { grid-template-columns: repeat(2, 1fr); }
     .toolbar { flex-direction: column; align-items: stretch; }
     .toolbar input[type="text"] { min-width: unset; width: 100%; }
+}
+
+/* ── Print Isolation & Anti-Overlap Styles for Pricing Reports ── */
+@media print {
+    body.report-printing > *:not(#report-print-root) {
+        display: none !important;
+    }
+    body.report-printing,
+    body.report-printing #report-print-root {
+        display: block !important;
+        position: static !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: #ffffff !important;
+    }
+    #report-print-root .rpt-paper-sheet {
+        box-shadow: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        width: 100% !important;
+        max-width: none !important;
+        border-radius: 0 !important;
+    }
+    #report-print-root table.data-tbl,
+    table.data-tbl {
+        width: 100% !important;
+        border-collapse: collapse !important;
+        table-layout: fixed !important;
+        margin-top: 4px !important;
+    }
+    #report-print-root table.data-tbl th,
+    table.data-tbl th {
+        white-space: normal !important;
+        word-break: normal !important;
+        overflow-wrap: break-word !important;
+        font-size: 7.5pt !important;
+        padding: 5px 3px !important;
+        line-height: 1.25 !important;
+        font-weight: bold !important;
+        text-transform: uppercase !important;
+        background: #00264D !important;
+        color: #ffffff !important;
+        border: 1px solid #00264D !important;
+        vertical-align: middle !important;
+        box-sizing: border-box !important;
+    }
+    #report-print-root table.data-tbl td,
+    table.data-tbl td {
+        white-space: normal !important;
+        word-break: break-word !important;
+        overflow-wrap: break-word !important;
+        font-size: 7.5pt !important;
+        padding: 4px 4px !important;
+        line-height: 1.25 !important;
+        border: 1px solid #cbd5e1 !important;
+        vertical-align: middle !important;
+        box-sizing: border-box !important;
+    }
 }
 </style>
 
@@ -1705,7 +1740,10 @@ function exportPricing(format) {
                 }
 
                 document.body.classList.add('report-printing');
+                var cleaned = false;
                 var cleanup = function() {
+                    if (cleaned) return;
+                    cleaned = true;
                     document.body.classList.remove('report-printing');
                     var n = document.getElementById('report-print-root');
                     if (n) n.remove();
@@ -1714,8 +1752,10 @@ function exportPricing(format) {
                     window.removeEventListener('afterprint', cleanup);
                 };
                 window.addEventListener('afterprint', cleanup);
-                window.print();
-                setTimeout(cleanup, 1500);
+                setTimeout(function() {
+                    window.print();
+                }, 120);
+                setTimeout(cleanup, 60000);
             })
             .catch(function() {
                 // Fallback: open in new tab if fetch fails
@@ -1780,7 +1820,84 @@ function switchTab(name) {
     switchTab(targetTab);
 })();
 
-// ── Fuel Products Filter ────────────────────────────────────────────────────
+// ── Manager Filter Caches ───────────────────────────────────────────────────
+var _mgrFuelCache = null;
+var _mgrMerchCache = null;
+var _mgrCatHeaderCache = null;
+var _mgrSvcCache = null;
+
+function getMgrFuelCache() {
+    if (_mgrFuelCache === null) {
+        var rows = document.querySelectorAll('#fuelPricingTable tr.fuel-row, #tab-fuel tr.fuel-row');
+        _mgrFuelCache = [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            _mgrFuelCache.push({
+                el: row,
+                ugt: (row.getAttribute('data-ugt') || '').toLowerCase(),
+                name: (row.getAttribute('data-name') || '').toLowerCase(),
+                fueltype: (row.getAttribute('data-fueltype') || '').toLowerCase().trim(),
+                status: (row.getAttribute('data-status') || '').trim(),
+                active: (row.getAttribute('data-active') || '').trim()
+            });
+        }
+    }
+    return _mgrFuelCache;
+}
+
+function getMgrMerchCache() {
+    if (_mgrMerchCache === null) {
+        var rows = document.querySelectorAll('#merchBody .merch-row');
+        _mgrMerchCache = [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            _mgrMerchCache.push({
+                el: row,
+                name: (row.getAttribute('data-name') || '').toLowerCase(),
+                sku: (row.getAttribute('data-sku') || '').toLowerCase(),
+                brand: (row.getAttribute('data-brand') || '').toLowerCase(),
+                unit: (row.getAttribute('data-unit') || '').toLowerCase(),
+                supplier: (row.getAttribute('data-supplier') || '').toLowerCase(),
+                cat: row.getAttribute('data-cat') || '',
+                catLower: (row.getAttribute('data-cat') || '').toLowerCase(),
+                status: (row.getAttribute('data-status') || '').trim(),
+                noprice: row.getAttribute('data-noprice') === '1',
+                belowcost: row.getAttribute('data-belowcost') === '1'
+            });
+        }
+        var catHeaders = document.querySelectorAll('#merchBody .cat-row');
+        _mgrCatHeaderCache = [];
+        for (var j = 0; j < catHeaders.length; j++) {
+            var hdr = catHeaders[j];
+            _mgrCatHeaderCache.push({
+                el: hdr,
+                cat: hdr.getAttribute('data-cat-header') || '',
+                countSpan: hdr.querySelector('.cat-count')
+            });
+        }
+    }
+    return { rows: _mgrMerchCache, headers: _mgrCatHeaderCache };
+}
+
+function getMgrSvcCache() {
+    if (_mgrSvcCache === null) {
+        var rows = document.querySelectorAll('#servicePricingTable tr.service-row, #serviceTableBody tr.service-row, #tab-services tr.service-row');
+        _mgrSvcCache = [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            _mgrSvcCache.push({
+                el: row,
+                name: (row.getAttribute('data-name') || '').toLowerCase(),
+                cat: (row.getAttribute('data-category') || '').trim(),
+                catLower: (row.getAttribute('data-category') || '').toLowerCase().trim(),
+                active: (row.getAttribute('data-active') || '').trim()
+            });
+        }
+    }
+    return _mgrSvcCache;
+}
+
+// ── Fuel Products Filter (Cached & Optimized) ──────────────────────────────
 window.filterFuelTable = function filterFuelTable() {
     var searchEl = document.getElementById('fuelSearchInput');
     var q        = searchEl ? (searchEl.value || '').toLowerCase().trim() : '';
@@ -1794,35 +1911,29 @@ window.filterFuelTable = function filterFuelTable() {
         sessionStorage.setItem('petron_mgr_fuel_ft', ftFilter);
     } catch(e) {}
 
-    var rows    = document.querySelectorAll('#fuelPricingTable tr.fuel-row, #tab-fuel tr.fuel-row');
+    var rows = getMgrFuelCache();
     var visible = 0;
 
-    rows.forEach(function(row) {
-        var ugt      = (row.getAttribute('data-ugt') || '').toLowerCase();
-        var name     = (row.getAttribute('data-name') || '').toLowerCase();
-        var fueltype = (row.getAttribute('data-fueltype') || '').toLowerCase().trim();
-        var status   = (row.getAttribute('data-status') || '').trim();
-        var active   = (row.getAttribute('data-active') || '').trim();
-        var rowText  = (row.textContent || '').toLowerCase();
-
-        var matchQ  = !q || ugt.indexOf(q) !== -1 || name.indexOf(q) !== -1 || rowText.indexOf(q) !== -1;
-        var matchFt = !ftFilter || fueltype === ftFilter;
+    for (var i = 0; i < rows.length; i++) {
+        var item = rows[i];
+        var matchQ  = !q || item.ugt.indexOf(q) !== -1 || item.name.indexOf(q) !== -1 || item.fueltype.indexOf(q) !== -1;
+        var matchFt = !ftFilter || item.fueltype === ftFilter;
         var matchSt = true;
-        if (stFilter === 'Normal') matchSt = (status === 'Normal' && active !== 'inactive');
-        else if (stFilter === 'Low Stock') matchSt = (status === 'Low Stock' && active !== 'inactive');
-        else if (stFilter === 'Out of Stock') matchSt = (status === 'Out of Stock' && active !== 'inactive');
-        else if (stFilter === 'Deactivated') matchSt = (status === 'Deactivated' || active === 'inactive');
+        if (stFilter === 'Normal') matchSt = (item.status === 'Normal' && item.active !== 'inactive');
+        else if (stFilter === 'Low Stock') matchSt = (item.status === 'Low Stock' && item.active !== 'inactive');
+        else if (stFilter === 'Out of Stock') matchSt = (item.status === 'Out of Stock' && item.active !== 'inactive');
+        else if (stFilter === 'Deactivated') matchSt = (item.status === 'Deactivated' || item.active === 'inactive');
 
         var show = matchQ && matchFt && matchSt;
-        row.style.display = show ? '' : 'none';
+        item.el.style.display = show ? '' : 'none';
         if (show) visible++;
-    });
+    }
 
     var noRes = document.getElementById('fuelNoResults');
     if (noRes) noRes.style.display = (visible === 0 && rows.length > 0) ? 'block' : 'none';
 };
 
-// ── Merchandise filter ───────────────────────────────────────────────────────
+// ── Merchandise filter (Cached & Optimized) ─────────────────────────────────
 window.filterTable = function filterTable() {
     var merchTab = document.getElementById('tab-merch');
     if (!merchTab) return;
@@ -1845,66 +1956,60 @@ window.filterTable = function filterTable() {
         sessionStorage.setItem('petron_mgr_merch_st', stFilter);
     } catch(e) {}
 
-    var rows       = document.querySelectorAll('#merchBody .merch-row');
-    var catHeaders = document.querySelectorAll('#merchBody .cat-row');
-    var visible    = 0;
+    var cache = getMgrMerchCache();
+    var rows = cache.rows;
+    var catHeaders = cache.headers;
+    var visible = 0;
     var catVisibleCount = {};
 
-    rows.forEach(function(row) {
-        var name      = row.getAttribute('data-name') || '';
-        var sku       = row.getAttribute('data-sku')  || '';
-        var brand     = row.getAttribute('data-brand') || '';
-        var unit      = row.getAttribute('data-unit') || '';
-        var supplier  = row.getAttribute('data-supplier') || '';
-        var cat       = row.getAttribute('data-cat')  || '';
-        var status    = row.getAttribute('data-status') || '';
-        var noprice   = row.getAttribute('data-noprice') === '1';
-        var belowcost = row.getAttribute('data-belowcost') === '1';
-        var rowText   = (row.textContent || '').toLowerCase();
+    var brandFilterLower = brandFilter ? brandFilter.toLowerCase() : '';
+    var unitFilterLower = unitFilter ? unitFilter.toLowerCase() : '';
+    var supplierFilterLower = supplierFilter ? supplierFilter.toLowerCase() : '';
 
-        var matchQ        = !q || name.indexOf(q) !== -1 || sku.indexOf(q) !== -1 || brand.indexOf(q) !== -1 || unit.indexOf(q) !== -1 || supplier.indexOf(q) !== -1 || cat.toLowerCase().indexOf(q) !== -1 || rowText.indexOf(q) !== -1;
-        var matchCat      = !catFilter || cat === catFilter;
-        var matchBrand    = !brandFilter || brand === brandFilter.toLowerCase();
-        var matchUnit     = !unitFilter || unit === unitFilter.toLowerCase();
-        var matchSupplier = !supplierFilter || supplier === supplierFilter.toLowerCase();
+    for (var i = 0; i < rows.length; i++) {
+        var item = rows[i];
+        var matchQ = !q || item.name.indexOf(q) !== -1 || item.sku.indexOf(q) !== -1 || item.brand.indexOf(q) !== -1 || item.unit.indexOf(q) !== -1 || item.supplier.indexOf(q) !== -1 || item.catLower.indexOf(q) !== -1;
+        var matchCat      = !catFilter || item.cat === catFilter;
+        var matchBrand    = !brandFilterLower || item.brand === brandFilterLower;
+        var matchUnit     = !unitFilterLower || item.unit === unitFilterLower;
+        var matchSupplier = !supplierFilterLower || item.supplier === supplierFilterLower;
         var matchSt       = true;
-        if (stFilter === 'available')  matchSt = (status === 'available');
-        else if (stFilter === 'low')   matchSt = (status === 'low');
-        else if (stFilter === 'critical') matchSt = (status === 'critical');
-        else if (stFilter === 'out')   matchSt = (status === 'out');
-        else if (stFilter === 'inactive' || stFilter === 'deactivated') matchSt = (status === 'inactive' || status === 'deactivated');
-        else if (stFilter === 'noprice')   matchSt = noprice;
-        else if (stFilter === 'belowcost') matchSt = belowcost;
+        if (stFilter === 'available')  matchSt = (item.status === 'available');
+        else if (stFilter === 'low')   matchSt = (item.status === 'low');
+        else if (stFilter === 'critical') matchSt = (item.status === 'critical');
+        else if (stFilter === 'out')   matchSt = (item.status === 'out');
+        else if (stFilter === 'inactive' || stFilter === 'deactivated') matchSt = (item.status === 'inactive' || item.status === 'deactivated');
+        else if (stFilter === 'noprice')   matchSt = item.noprice;
+        else if (stFilter === 'belowcost') matchSt = item.belowcost;
 
         var show = matchQ && matchCat && matchBrand && matchUnit && matchSupplier && matchSt;
-        row.style.display = show ? '' : 'none';
+        item.el.style.display = show ? '' : 'none';
         if (show) {
             visible++;
-            catVisibleCount[cat] = (catVisibleCount[cat] || 0) + 1;
+            catVisibleCount[item.cat] = (catVisibleCount[item.cat] || 0) + 1;
         }
-    });
+    }
 
-    catHeaders.forEach(function(hdr) {
-        var cat = hdr.getAttribute('data-cat-header') || '';
-        var count = catVisibleCount[cat] || 0;
+    for (var j = 0; j < catHeaders.length; j++) {
+        var hdr = catHeaders[j];
+        var count = catVisibleCount[hdr.cat] || 0;
         if (count > 0) {
-            hdr.style.display = '';
-            var countSpan = hdr.querySelector('.cat-count');
-            if (countSpan) countSpan.textContent = '(' + count + ' item' + (count !== 1 ? 's' : '') + ')';
+            hdr.el.style.display = '';
+            if (hdr.countSpan) hdr.countSpan.textContent = '(' + count + ' item' + (count !== 1 ? 's' : '') + ')';
         } else {
-            hdr.style.display = 'none';
+            hdr.el.style.display = 'none';
         }
-    });
+    }
 
     var noRes = document.getElementById('merchNoResults');
     if (noRes) noRes.style.display = (visible === 0 && rows.length > 0) ? 'block' : 'none';
 };
 
-// ── Service Types filter ────────────────────────────────────────────────────
+// ── Service Types filter (Cached & Optimized) ───────────────────────────────
 window.filterServiceTable = function filterServiceTable() {
     var searchEl  = document.getElementById('svcSearchInput');
     var q         = searchEl ? (searchEl.value || '').toLowerCase().trim() : '';
-    var catFilter = document.getElementById('serviceCategoryFilter') ? document.getElementById('serviceCategoryFilter').value.trim() : '';
+    var catFilter = document.getElementById('serviceCategoryFilter') ? document.getElementById('serviceCategoryFilter').value.trim().toLowerCase() : '';
     var stFilter  = document.getElementById('svcStatusFilter') ? document.getElementById('svcStatusFilter').value.trim() : '';
 
     // Persist filter values
@@ -1914,29 +2019,43 @@ window.filterServiceTable = function filterServiceTable() {
         sessionStorage.setItem('petron_mgr_svc_st', stFilter);
     } catch(e) {}
 
-    var rows = document.querySelectorAll('#servicePricingTable tr.service-row, #serviceTableBody tr.service-row, #tab-services tr.service-row');
+    var rows = getMgrSvcCache();
     var visible = 0;
 
-    rows.forEach(function(row) {
-        var name    = (row.getAttribute('data-name') || '').toLowerCase();
-        var cat     = (row.getAttribute('data-category') || '').trim();
-        var active  = (row.getAttribute('data-active') || '').trim();
-        var rowText = (row.textContent || '').toLowerCase();
-
-        var matchQ   = !q || name.indexOf(q) !== -1 || cat.toLowerCase().indexOf(q) !== -1 || rowText.indexOf(q) !== -1;
-        var matchCat = !catFilter || cat.toLowerCase() === catFilter.toLowerCase();
+    for (var i = 0; i < rows.length; i++) {
+        var item = rows[i];
+        var matchQ   = !q || item.name.indexOf(q) !== -1 || item.catLower.indexOf(q) !== -1;
+        var matchCat = !catFilter || item.catLower === catFilter;
         var matchSt  = true;
-        if (stFilter === '1') matchSt = (active === '1');
-        else if (stFilter === '0') matchSt = (active === '0');
+        if (stFilter === '1') matchSt = (item.active === '1');
+        else if (stFilter === '0') matchSt = (item.active === '0');
 
         var show = matchQ && matchCat && matchSt;
-        row.style.display = show ? '' : 'none';
+        item.el.style.display = show ? '' : 'none';
         if (show) visible++;
-    });
+    }
 
     var noRes = document.getElementById('svcNoResults');
     if (noRes) noRes.style.display = (visible === 0 && rows.length > 0) ? 'block' : 'none';
 };
+
+var _debouncedMgrFuelTimer = null;
+function debouncedFilterFuelTable() {
+    clearTimeout(_debouncedMgrFuelTimer);
+    _debouncedMgrFuelTimer = setTimeout(window.filterFuelTable, 160);
+}
+
+var _debouncedMgrMerchTimer = null;
+function debouncedFilterTable() {
+    clearTimeout(_debouncedMgrMerchTimer);
+    _debouncedMgrMerchTimer = setTimeout(window.filterTable, 160);
+}
+
+var _debouncedMgrSvcTimer = null;
+function debouncedFilterServiceTable() {
+    clearTimeout(_debouncedMgrSvcTimer);
+    _debouncedMgrSvcTimer = setTimeout(window.filterServiceTable, 160);
+}
 
 document.addEventListener('DOMContentLoaded', function() {
     // 1. Restore Fuel Filters from sessionStorage
@@ -1988,12 +2107,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (sStEl  && savedSvcSt  !== null && savedSvcSt !== '')  sStEl.value  = savedSvcSt;
     } catch(e) {}
 
-    // 4. Attach Event Listeners
+    // 4. Attach Event Listeners (Debounced single input listener for buttery smooth typing)
     var fuelQInput = document.getElementById('fuelSearchInput');
     if (fuelQInput) {
-        fuelQInput.addEventListener('input', window.filterFuelTable);
-        fuelQInput.addEventListener('keyup', window.filterFuelTable);
-        fuelQInput.addEventListener('change', window.filterFuelTable);
+        fuelQInput.addEventListener('input', debouncedFilterFuelTable);
     }
     var fuelStSelect = document.getElementById('fuelStatusFilter');
     if (fuelStSelect) {
@@ -2003,9 +2120,7 @@ document.addEventListener('DOMContentLoaded', function() {
     ['merchSearchInput', 'searchInput'].forEach(function(id) {
         var input = document.getElementById(id);
         if (input) {
-            input.addEventListener('input', window.filterTable);
-            input.addEventListener('keyup', window.filterTable);
-            input.addEventListener('change', window.filterTable);
+            input.addEventListener('input', debouncedFilterTable);
         }
     });
     ['catFilter', 'brandFilter', 'unitFilter', 'supplierFilter', 'statusFilter'].forEach(function(id) {
@@ -2017,9 +2132,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     var svcQInput = document.getElementById('svcSearchInput');
     if (svcQInput) {
-        svcQInput.addEventListener('input', window.filterServiceTable);
-        svcQInput.addEventListener('keyup', window.filterServiceTable);
-        svcQInput.addEventListener('change', window.filterServiceTable);
+        svcQInput.addEventListener('input', debouncedFilterServiceTable);
     }
     ['serviceCategoryFilter', 'svcStatusFilter'].forEach(function(id) {
         var sel = document.getElementById(id);
@@ -2750,7 +2863,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 </h4>
                 <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:14px;font-size:14.5px;">
                     <div><span style="color:#64748b;font-weight:600;font-size:12px;text-transform:uppercase;">SKU / Code:</span><br><code id="vm_sku" style="font-weight:800;color:#4f46e5;">-</code></div>
-                    <div><span style="color:#64748b;font-weight:600;font-size:12px;text-transform:uppercase;">Barcode:</span><br><code id="vm_barcode" style="font-weight:700;color:#334155;">-</code></div>
                     <div><span style="color:#64748b;font-weight:600;font-size:12px;text-transform:uppercase;">Product Name:</span><br><strong id="vm_name" style="color:#0f172a;">-</strong></div>
                     <div><span style="color:#64748b;font-weight:600;font-size:12px;text-transform:uppercase;">Category:</span><br><strong id="vm_category" style="color:#0f172a;">-</strong></div>
                     <div><span style="color:#64748b;font-weight:600;font-size:12px;text-transform:uppercase;">Brand:</span><br><strong id="vm_brand" style="color:#0f172a;">-</strong></div>
@@ -4225,137 +4337,6 @@ function activateFuel(id, fuelType) {
 function openAddMerchandiseModal() {
     document.getElementById('addMerchandiseModal').style.display = 'flex';
     document.getElementById('newMerchName').focus();
-    // Reset barcode status
-    var bs = document.getElementById('newMerchBarcodeStatus');
-    if (bs) bs.innerHTML = '';
-    var bf = document.getElementById('newMerchBarcode');
-    if (bf) { bf.style.borderColor = '#d1d5db'; bf.value = ''; }
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-// BARCODE SCANNER SUPPORT
-// Works with USB/Bluetooth barcode guns (rapid keystrokes + Enter terminator)
-// Also works with manual keyboard typing + Enter
-// ══════════════════════════════════════════════════════════════════════════
-
-// activateBarcodeScan: highlight field as ready for scan, focus it
-function activateBarcodeScan(inputId, context) {
-    var el = document.getElementById(inputId);
-    if (!el) return;
-
-    // Do NOT clear existing value — barcode is optional
-    el.focus();
-    el.style.borderColor = '#f59e0b';
-    el.style.background  = '#fffbeb';
-    el.setAttribute('data-scan-context', context);
-    el.setAttribute('data-scan-active', '1');
-
-    var statusId = context === 'add' ? 'newMerchBarcodeStatus' : 'editMerchBarcodeStatus';
-    var st = document.getElementById(statusId);
-    if (st) st.innerHTML = '<span style="color:#d97706;"><i class="fas fa-barcode"></i> Ready — scan now or type barcode, then press Enter</span>';
-}
-
-// handleBarcodeKeydown: fires on keydown in the barcode input
-// Barcode guns send chars very fast then fire Enter — we catch Enter
-function handleBarcodeKeydown(event, context) {
-    var el   = event.target;
-    var key  = event.key || '';
-    var code = event.keyCode || event.which;
-
-    if (key === 'Enter' || code === 13) {
-        event.preventDefault();
-        event.stopPropagation();
-
-        var barcodeVal = el.value.trim();
-        if (barcodeVal.length === 0) return;
-
-        // Visual confirmation
-        el.style.borderColor = '#16a34a';
-        el.style.background  = '#f0fdf4';
-
-        var ctx = el.getAttribute('data-scan-context') || context;
-        lookupProductByBarcode(barcodeVal, ctx);
-    }
-}
-
-// Global keydown listener: auto-route rapid scanner input to focused barcode field
-// Barcode guns fire chars at < 30ms intervals — detect that pattern
-(function() {
-    var _buf       = '';
-    var _lastTime  = 0;
-    var _targetEl  = null;
-    var RAPID_MS   = 50; // max ms between keystrokes to classify as scanner input
-
-    document.addEventListener('keydown', function(e) {
-        // Only intercept if a barcode input has data-scan-active
-        var addEl  = document.getElementById('newMerchBarcode');
-        var editEl = document.getElementById('editMerchBarcode');
-        var active = null;
-
-        if (addEl  && addEl.getAttribute('data-scan-active')  === '1' && document.activeElement === addEl)  active = addEl;
-        if (editEl && editEl.getAttribute('data-scan-active') === '1' && document.activeElement === editEl) active = editEl;
-
-        if (!active) return; // not in scan mode, let normal keydown handle it
-
-        var now = Date.now();
-        var ch  = e.key;
-
-        if (ch === 'Enter' || e.keyCode === 13) {
-            // Scanner completed — value is already in the input via normal keydown
-            // handleBarcodeKeydown will handle it
-            return;
-        }
-
-        // Track rapid input
-        if (now - _lastTime < RAPID_MS) {
-            // Still in rapid sequence — mark as scanner input
-            active.setAttribute('data-from-scanner', '1');
-        } else {
-            // New sequence
-            active.removeAttribute('data-from-scanner');
-        }
-        _lastTime = now;
-    }, true);
-})();
-
-// lookupProductByBarcode: calls backend handler to find product by barcode
-function lookupProductByBarcode(barcode, context) {
-    var statusId = context === 'add' ? 'newMerchBarcodeStatus' : 'editMerchBarcodeStatus';
-    var st = document.getElementById(statusId);
-
-    if (st) st.innerHTML = '<span style="color:#0284c7;"><i class="fas fa-spinner fa-spin"></i> Looking up barcode <code>' + barcode + '</code>...</span>';
-
-    fetch('manager_set_prices_handler.php?action=lookup_barcode&barcode=' + encodeURIComponent(barcode))
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-        if (data.success && data.product) {
-            var p = data.product;
-            if (st) st.innerHTML = '<span style="color:#16a34a;"><i class="fas fa-check-circle"></i> Found: <strong>' + escHtml(p.name || '') + '</strong> — empty fields auto-filled!</span>';
-
-            if (context === 'add') {
-                fillIfEmpty('newMerchName',     p.name         || '');
-                fillIfEmpty('newMerchBrand',    p.brand        || '');
-                fillIfEmpty('newMerchCategory', p.category_name || p.category || '');
-                fillIfEmpty('newMerchSize',     p.unit         || '');
-                fillIfEmpty('newMerchPrice',    p.price        || '');
-            } else {
-                fillIfEmpty('editMerchBrand',    p.brand        || '');
-                fillIfEmpty('editMerchCategory', p.category_name || p.category || '');
-                fillIfEmpty('editMerchSize',     p.unit         || '');
-            }
-        } else {
-            if (st) st.innerHTML = '<span style="color:#64748b;"><i class="fas fa-info-circle"></i> Barcode <code style="background:#f1f5f9;padding:1px 6px;border-radius:3px;">' + escHtml(barcode) + '</code> saved — no existing product match.</span>';
-        }
-    })
-    .catch(function() {
-        if (st) st.innerHTML = '<span style="color:#64748b;"><i class="fas fa-barcode"></i> Barcode saved: <code>' + escHtml(barcode) + '</code></span>';
-    });
-}
-
-// fillIfEmpty: only fills a field if it is currently blank
-function fillIfEmpty(id, val) {
-    var el = document.getElementById(id);
-    if (el && val && !el.value.trim()) el.value = val;
 }
 
 // escHtml: escape HTML special chars for safe display
@@ -4382,7 +4363,6 @@ function openEditMerchModal(id) {
                 document.getElementById('editMerchCategory').value  = i.category || '';
                 document.getElementById('editMerchBrand').value     = i.brand || '';
                 document.getElementById('editMerchSize').value      = i.size || i.unit || '';
-                if (document.getElementById('editMerchBarcode')) document.getElementById('editMerchBarcode').value = i.barcode || '';
                 document.getElementById('editMerchPrice').value     = parseFloat(i.unit_price || 0);
                 document.getElementById('editMerchReorder').value   = parseInt(i.reorder_level || 24);
                 document.getElementById('editMerchCritical').value  = parseInt(i.critical_level || 10);
@@ -4420,7 +4400,7 @@ function viewMerchandiseDetails(id) {
     }
 
     // Loading placeholders
-    ['vm_sku','vm_barcode','vm_name','vm_category','vm_brand','vm_unit','vm_price','vm_cost','vm_stock','vm_batch_count','vm_reorder','vm_code_sub'].forEach(function(el){
+    ['vm_sku','vm_name','vm_category','vm_brand','vm_unit','vm_price','vm_cost','vm_stock','vm_batch_count','vm_reorder','vm_code_sub'].forEach(function(el){
         setSafeText(el, '...');
     });
     setSafeHtml('vm_status', '...');
@@ -4444,9 +4424,8 @@ function viewMerchandiseDetails(id) {
         if (!data.success) { showCustomAlert(data.message || 'Failed to load details.', 'error'); closeViewMerchModal(); return; }
         var p = data.product || {};
         setSafeText('vm_title', ((p.name || 'Product').toUpperCase() + ' — SPECIFICATION & HISTORY'));
-        setSafeText('vm_code_sub', p.sku || p.barcode || '—');
+        setSafeText('vm_code_sub', p.sku || '—');
         setSafeText('vm_sku', p.sku || '—');
-        setSafeText('vm_barcode', p.barcode || '—');
         setSafeText('vm_name', p.name || '—');
         setSafeText('vm_category', p.category_name || '—');
         setSafeText('vm_brand', p.brand || '—');
@@ -4583,7 +4562,6 @@ safeAddListener('addMerchandiseForm', 'submit', function(e) {
     var sku      = document.getElementById('newMerchSku').value.trim();
     var brand    = document.getElementById('newMerchBrand').value.trim();
     var size     = document.getElementById('newMerchSize').value.trim();
-    var barcode  = (document.getElementById('newMerchBarcode') ? document.getElementById('newMerchBarcode').value.trim() : '');
     var reorder  = parseInt(document.getElementById('newMerchReorder').value) || 24;
     var critical = parseInt(document.getElementById('newMerchCritical').value) || 10;
     var expiry   = ((document.getElementById('newMerchExpiry') || {}).value || '').trim();
@@ -4616,7 +4594,6 @@ safeAddListener('addMerchandiseForm', 'submit', function(e) {
     formData.append('unit_cost', 0); // cost set per delivery batch
     formData.append('sku', sku);
     formData.append('size', size);
-    formData.append('barcode', barcode);
     formData.append('reorder_level', reorder);
     formData.append('critical_level', critical);
     formData.append('expiration_date', expiry);
@@ -4671,7 +4648,6 @@ safeAddListener('editMerchPriceForm', 'submit', function(e) {
     fd.append('category',       document.getElementById('editMerchCategory').value.trim());
     fd.append('brand',          document.getElementById('editMerchBrand').value.trim());
     fd.append('size',           document.getElementById('editMerchSize').value.trim());
-    fd.append('barcode', (document.getElementById('editMerchBarcode') ? document.getElementById('editMerchBarcode').value.trim() : ''));
     fd.append('unit_price',     document.getElementById('editMerchPrice').value);
     fd.append('unit_cost',      0); // cost managed per delivery batch
     fd.append('reorder_level',  document.getElementById('editMerchReorder').value);

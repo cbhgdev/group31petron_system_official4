@@ -35,8 +35,14 @@ $jo_cols = aat_cols($pdo,'job_orders');
 $mt_date = aat_has($mt_cols,'transaction_date')
     ? "CASE WHEN mt.transaction_date > '2000-01-01' THEN mt.transaction_date ELSE mt.created_at END"
     : 'mt.created_at';
-$mt_stat = aat_has($mt_cols,'validation_status') ? 'mt.validation_status' : "'Approved'";
-$mt_shift = "CASE WHEN LOWER(TRIM(COALESCE(mt.shift_period, mt.shift_name, u.assigned_shift, u.shift_assignment, ''))) IN ('first', 'shift 1', 'shift1') THEN 'Shift 1' WHEN LOWER(TRIM(COALESCE(mt.shift_period, mt.shift_name, u.assigned_shift, u.shift_assignment, ''))) IN ('second', 'shift 2', 'shift2') THEN 'Shift 2' ELSE COALESCE(NULLIF(TRIM(mt.shift_period),''), NULLIF(TRIM(mt.shift_name),''), NULLIF(TRIM(u.assigned_shift),''), NULLIF(TRIM(u.shift_assignment),''), 'N/A') END";
+$mt_shift = "CASE
+    WHEN LOWER(REPLACE(REPLACE(REPLACE(TRIM(COALESCE(mt.shift_period, mt.shift_name, u.assigned_shift, u.shift_assignment, '')), '-', ''), ' ', ''), '_', '')) IN ('1','first','shift1') THEN 'Shift 1'
+    WHEN LOWER(REPLACE(REPLACE(REPLACE(TRIM(COALESCE(mt.shift_period, mt.shift_name, u.assigned_shift, u.shift_assignment, '')), '-', ''), ' ', ''), '_', '')) IN ('2','second','shift2') THEN 'Shift 2'
+    WHEN LOWER(REPLACE(REPLACE(REPLACE(TRIM(COALESCE(mt.shift_period, mt.shift_name, u.assigned_shift, u.shift_assignment, '')), '-', ''), ' ', ''), '_', '')) IN ('3','third','shift3') THEN 'Shift 3'
+    WHEN COALESCE(NULLIF(TRIM(mt.shift_period),''), NULLIF(TRIM(mt.shift_name),''), NULLIF(TRIM(u.assigned_shift),''), NULLIF(TRIM(u.shift_assignment),''), '') != '' THEN COALESCE(NULLIF(TRIM(mt.shift_period),''), NULLIF(TRIM(mt.shift_name),''), 'N/A')
+    WHEN HOUR(COALESCE(mt.created_at, {$mt_date})) >= 6 AND HOUR(COALESCE(mt.created_at, {$mt_date})) < 14 THEN 'Shift 1'
+    ELSE 'Shift 2'
+END";
 $mt_pay   = aat_has($mt_cols,'payment_method') ? "COALESCE(mt.payment_method,'Cash')" : "'Cash'";
 $mt_pstat = aat_has($mt_cols,'payment_status') ? "COALESCE(mt.payment_status,'')" : "''";
 $void_reason_col = aat_has($mt_cols,'void_reason') ? 'mt.void_reason' : 'NULL';
@@ -119,8 +125,19 @@ if($search!=='') {
     if($has_plate_col) { $params[]="%$search%"; $params[]="%$search%"; }
 }
 
-$shift_col = aat_has($mt_cols,'shift_period') ? 'mt.shift_period' : (aat_has($mt_cols,'shift_name') ? 'mt.shift_name' : null);
-if($f_shift!=='' && $shift_col) { $where.=" AND COALESCE($shift_col,'')=?"; $params[]=$f_shift; }
+if ($f_shift !== '') {
+    $norm_s = strtolower(preg_replace('/[^a-z0-9]+/', '', $f_shift));
+    if (in_array($norm_s, ['1', 'first', 'shift1'], true)) {
+        $where .= " AND ({$mt_shift} = 'Shift 1')";
+    } elseif (in_array($norm_s, ['2', 'second', 'shift2'], true)) {
+        $where .= " AND ({$mt_shift} = 'Shift 2')";
+    } elseif (in_array($norm_s, ['3', 'third', 'shift3'], true)) {
+        $where .= " AND ({$mt_shift} = 'Shift 3')";
+    } else {
+        $where .= " AND LOWER({$mt_shift}) = LOWER(?)";
+        $params[] = $f_shift;
+    }
+}
 if($f_customer!=='') { $where.=" AND TRIM(mt.customer_name)=?"; $params[]=$f_customer; }
 
 if($f_type==='merchandise') { $where.=" AND COALESCE(mt.transaction_type,'merchandise')='merchandise'"; }
@@ -144,7 +161,7 @@ if($f_pay!=='') {
 }
 
 if($f_status==='Completed') {
-    $where.=" AND (COALESCE($mt_stat, '') NOT IN ('Voided', 'Adjusted'))";
+    $where.=" AND (COALESCE($mt_stat, '') NOT IN ('Voided', 'Adjusted')) AND (COALESCE(mt.workflow_status, '') NOT IN ('In Progress', 'Pending'))";
 } elseif($f_status==='Voided') {
     $where.=" AND ($mt_stat='Voided')";
 } elseif($f_status==='Adjusted') {
@@ -223,6 +240,7 @@ try {
         $mt_shift as shift, $staff_col as staff_name,
         $mt_pstat as payment_status, $mt_date as txn_date,
         $mt_stat as validation_status,
+        COALESCE(NULLIF(TRIM(mt.workflow_status),''), jo.status, '') as workflow_status,
         mt.validated_at,
         $validated_by_col as validated_by_name,
         $void_reason_col as void_reason,
@@ -355,27 +373,6 @@ if(in_array($export,['excel','csv'])) {
         ]);
     }
     fclose($out); exit;
-}
-
-// ── AJAX JSON POLLING ENDPOINT FOR ALL TRANSACTIONS OVERSIGHT ─────────────────
-if (isset($_GET['ajax']) || isset($_GET['ajax_vt']) || isset($_GET['ajax_aat'])) {
-    header('Content-Type: application/json');
-    echo json_encode([
-        'success' => true,
-        'kpis' => [
-            'total_txns'  => number_format($kpi_txn_count),
-            'total_sales' => '₱' . number_format($kpi_total_sales, 2),
-            'merchandise' => number_format($kpi_merch_count),
-            'job_orders'  => number_format($kpi_jo_count),
-            'paid'        => number_format($kpi_paid_count),
-            'unpaid'      => number_format($kpi_unpaid_count),
-            'ar'          => number_format($kpi_ar_count),
-            'voided'      => number_format($kpi_voided_count),
-            'adjusted'    => number_format($kpi_adjusted_count)
-        ],
-        'rows_count' => count($rows)
-    ]);
-    exit;
 }
 
 // ── AJAX JSON POLLING ENDPOINT FOR ALL TRANSACTIONS OVERSIGHT ─────────────────
@@ -733,31 +730,38 @@ overflow: hidden;
                 }
 
                 $vs = strtolower(trim($r['validation_status'] ?? ''));
-                $js = strtolower(trim($r['status'] ?? ''));
-                if ($vs === 'voided' || $js === 'voided') {
+                $ws = strtolower(trim($r['workflow_status'] ?? ''));
+                $norm_vs = preg_replace('/[^a-z0-9]+/', '', $vs);
+                $norm_ws = preg_replace('/[^a-z0-9]+/', '', $ws);
+
+                if (in_array($norm_vs, ['voided', 'void'], true) || in_array($norm_ws, ['voided', 'void'], true)) {
                     $statusLabel = 'Voided';
                     $statusIcon  = 'fa-ban';
                     $statusBadge = 'badge-red';
-                } elseif ($vs === 'void_requested' || $vs === 'void requested' || $js === 'void_requested') {
+                } elseif ($norm_vs === 'voidrequested' || $norm_ws === 'voidrequested') {
                     $statusLabel = 'Void Requested';
                     $statusIcon  = 'fa-clock';
                     $statusBadge = 'badge-red';
-                } elseif ($vs === 'adjusted' || $js === 'adjusted') {
+                } elseif ($norm_vs === 'adjusted' || $norm_ws === 'adjusted') {
                     $statusLabel = 'Adjusted';
                     $statusIcon  = 'fa-sliders-h';
                     $statusBadge = 'badge-gray';
-                } elseif ($vs === 'adjustment_requested' || $vs === 'adjustment requested' || $js === 'adjustment_requested') {
+                } elseif ($norm_vs === 'adjustmentrequested' || $norm_ws === 'adjustmentrequested') {
                     $statusLabel = 'Adjustment Requested';
                     $statusIcon  = 'fa-clock';
                     $statusBadge = 'badge-orange';
-                } elseif ($vs === 'released' || $js === 'released') {
+                } elseif ($norm_vs === 'released' || $norm_ws === 'released') {
                     $statusLabel = 'Released';
                     $statusIcon  = 'fa-check';
                     $statusBadge = 'badge-green';
-                } elseif ($js === 'in_progress' || $js === 'in progress' || $js === 'processing') {
+                } elseif (in_array($norm_ws, ['inprogress', 'active', 'processing', 'ongoing'], true)) {
                     $statusLabel = 'In Progress';
                     $statusIcon  = 'fa-spinner fa-spin';
                     $statusBadge = 'badge-blue';
+                } elseif (in_array($norm_ws, ['pending', 'awaitingpayment', 'draft'], true)) {
+                    $statusLabel = 'Pending';
+                    $statusIcon  = 'fa-clock';
+                    $statusBadge = 'badge-amber';
                 } else {
                     $statusLabel = 'Completed';
                     $statusIcon  = 'fa-check-circle';
@@ -1066,6 +1070,7 @@ function openAdminTxnModal(d) {
     document.getElementById('adminModalOrNo').textContent  = d.or_no  || '';
     document.getElementById('adminModalTxnId').textContent = 'ID: ' + (d.transaction_id || '');
 
+    /* All records in admin_all_transactions come from merchandise_transactions */
     const recType = 'merchandise_transactions';
 
     /* Show modal with spinner */
@@ -1379,6 +1384,9 @@ async function autoRefreshAdminAllTransactions() {
     }
 }
 
-setInterval(autoRefreshAdminAllTransactions, 10000);
+const adminTxnRefreshMs = (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000)
+    ? window.PETRON_AUTO_REFRESH_MS
+    : 10000;
+setInterval(autoRefreshAdminAllTransactions, adminTxnRefreshMs);
 </script>
 <?php require_once __DIR__ . '/../partials/footer.php'; ?>

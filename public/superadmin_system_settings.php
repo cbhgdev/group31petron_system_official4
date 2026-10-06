@@ -1067,7 +1067,7 @@ function populateFormFields(s) {
     onAccentColorChange(accentCol);
 
     document.getElementById('ss_sidebar_mode').value = s.sidebar_mode || 'Expanded';
-    document.getElementById('ss_dashboard_auto_refresh').value = s.dashboard_auto_refresh || '10';
+    document.getElementById('ss_dashboard_auto_refresh').value = s.dashboard_auto_refresh || s.auto_refresh_interval || '10';
     document.getElementById('ss_session_timeout').value = s.session_timeout || '30';
     document.getElementById('ss_min_password_length').value = s.min_password_length || '8';
     document.getElementById('ss_max_login_attempts').value = s.max_login_attempts || '5';
@@ -1407,6 +1407,7 @@ async function saveAllSystemSettings() {
             color_button: document.getElementById('ss_accent_color').value,
             sidebar_mode: document.getElementById('ss_sidebar_mode').value,
             dashboard_auto_refresh: document.getElementById('ss_dashboard_auto_refresh').value,
+            auto_refresh_interval: document.getElementById('ss_dashboard_auto_refresh').value,
             session_timeout: document.getElementById('ss_session_timeout').value,
             min_password_length: document.getElementById('ss_min_password_length').value,
             max_login_attempts: document.getElementById('ss_max_login_attempts').value,
@@ -1481,6 +1482,16 @@ async function saveAllSystemSettings() {
                 window.petronSystemSettings.defaultOrientation = payload.settings.default_orientation;
                 window.petronSystemSettings.showCompanyLogoReports = (payload.settings.show_company_logo_reports === '1');
                 window.petronSystemSettings.showReportFooter = (payload.settings.show_report_footer === '1');
+            }
+
+            // Live sync auto-refresh interval immediately
+            if (payload.settings.dashboard_auto_refresh) {
+                const refreshSec = Math.max(5, parseInt(payload.settings.dashboard_auto_refresh, 10) || 10);
+                window.PETRON_AUTO_REFRESH_SECONDS = refreshSec;
+                window.PETRON_AUTO_REFRESH_MS = refreshSec * 1000;
+                if (window.PetronRealtime && typeof window.PetronRealtime.resetPollingInterval === 'function') {
+                    window.PetronRealtime.resetPollingInterval(window.PETRON_AUTO_REFRESH_MS);
+                }
             }
 
             showToast('Settings Saved', 'System, notification & report settings saved successfully.');

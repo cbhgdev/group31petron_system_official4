@@ -288,16 +288,10 @@ if (!function_exists('get_product_brand')) {
     }
 }
 
-// Barcode generator helper
+// Barcode helper stub (empty)
 if (!function_exists('get_product_barcode')) {
     function get_product_barcode($sku) {
-        if (empty($sku)) return '4800012345678';
-        $clean = preg_replace('/[^A-Za-z0-9]/', '', $sku);
-        $num = '';
-        for ($i = 0; $i < strlen($clean); $i++) {
-            $num .= ord($clean[$i]) % 10;
-        }
-        return '480' . str_pad(substr($num, 0, 10), 10, '0', STR_PAD_RIGHT);
+        return '';
     }
 }
 
@@ -389,7 +383,6 @@ if (isset($_GET['print_id'])) {
         $item['category_name'] ?? '',
         $item['description'] ?? ''
     );
-    $item['barcode'] = get_product_barcode($item['sku']);
     $item['supplier'] = 'Petron Corporation';
     $item['unit'] = format_product_unit_display(
         $item['unit'] ?? 'pcs',
@@ -1055,195 +1048,207 @@ foreach ($all_items as $item) {
 
 // ── Fetch Stock Movement History (Unified across logs, deliveries & sales) ──
 $movement_history = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT il.id AS log_id,
-               il.created_at,
-               il.action AS movement_type,
-               il.quantity_change AS quantity,
-               COALESCE(NULLIF(il.notes,''), '—') AS notes,
-               COALESCE(
-                   NULLIF(NULLIF(il.reference_no, ''), 'merchandise_transaction'),
-                   NULLIF(CONCAT_WS('-', NULLIF(il.reference_type, 'merchandise_transaction'), il.reference_id), ''),
-                   CONCAT('LOG-', LPAD(il.id, 5, '0'))
-               ) AS reference_no,
-                COALESCE(NULLIF(ip.product_name,''), NULLIF(p.name,''), 'Merchandise Item') AS product_name,
-                COALESCE(NULLIF(ip.sku,''), CONCAT('P', LPAD(COALESCE(p.id, il.id),4,'0')), '') AS sku,
-               COALESCE(NULLIF(si.unit,''), NULLIF(ip.size,''), 'pcs') AS unit,
-               COALESCE(NULLIF(u.name,''), NULLIF(CONCAT(u.first_name, ' ', u.last_name),' '), u.username, 'System') AS user_name
-        FROM inventory_logs il
-        LEFT JOIN inventory_products ip ON ip.id = il.product_id
-        LEFT JOIN products p ON p.id = il.product_id AND (ip.id IS NULL)
-        LEFT JOIN station_inventory si ON si.product_id = il.product_id AND si.station_id = il.station_id
-        LEFT JOIN users u ON u.id = il.user_id
+if ($active_tab === 'movement') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT il.id AS log_id,
+                   il.created_at,
+                   il.action AS movement_type,
+                   il.quantity_change AS quantity,
+                   COALESCE(NULLIF(il.notes,''), '—') AS notes,
+                   COALESCE(
+                       NULLIF(NULLIF(il.reference_no, ''), 'merchandise_transaction'),
+                       NULLIF(CONCAT_WS('-', NULLIF(il.reference_type, 'merchandise_transaction'), il.reference_id), ''),
+                       CONCAT('LOG-', LPAD(il.id, 5, '0'))
+                   ) AS reference_no,
+                    COALESCE(NULLIF(ip.product_name,''), NULLIF(p.name,''), 'Merchandise Item') AS product_name,
+                    COALESCE(NULLIF(ip.sku,''), CONCAT('P', LPAD(COALESCE(p.id, il.id),4,'0')), '') AS sku,
+                   COALESCE(NULLIF(si.unit,''), NULLIF(ip.size,''), 'pcs') AS unit,
+                   COALESCE(NULLIF(u.name,''), NULLIF(CONCAT(u.first_name, ' ', u.last_name),' '), u.username, 'System') AS user_name
+            FROM inventory_logs il
+            LEFT JOIN inventory_products ip ON ip.id = il.product_id
+            LEFT JOIN products p ON p.id = il.product_id AND (ip.id IS NULL)
+            LEFT JOIN station_inventory si ON si.product_id = il.product_id AND si.station_id = il.station_id
+            LEFT JOIN users u ON u.id = il.user_id
 
-        UNION ALL
+            UNION ALL
 
-        SELECT (1000000 + msi.id) AS log_id,
-               msi.encoded_at AS created_at,
-               'Stock In' AS movement_type,
-               msi.qty_received AS quantity,
-               COALESCE(NULLIF(msi.remarks,''), CONCAT('PO: ', COALESCE(msi.po_number,'—'), ' | Batch: ', COALESCE(msi.batch_ref,'—'))) AS notes,
-               COALESCE(NULLIF(msi.po_number, ''), NULLIF(msi.batch_ref, ''), CONCAT('SI-', LPAD(msi.id, 5, '0'))) AS reference_no,
-               COALESCE(NULLIF(msi.product_name,''), NULLIF(ip.product_name,''), NULLIF(p.name,''), 'Merchandise Item') AS product_name,
-               COALESCE(NULLIF(msi.sku,''), NULLIF(ip.sku,''), CONCAT('P', LPAD(COALESCE(p.id, msi.id),4,'0')), '') AS sku,
-               COALESCE(NULLIF(si.unit,''), NULLIF(ip.size,''), 'pcs') AS unit,
-               COALESCE(NULLIF(u.name,''), NULLIF(CONCAT(u.first_name, ' ', u.last_name),' '), 'Staff') AS user_name
-        FROM merchandise_stock_in msi
-        LEFT JOIN inventory_products ip ON ip.id = msi.product_id
-        LEFT JOIN products p ON p.id = msi.product_id AND (ip.id IS NULL)
-        LEFT JOIN station_inventory si ON si.product_id = msi.product_id AND si.station_id = msi.station_id
-        LEFT JOIN users u ON u.id = msi.encoded_by
-        WHERE msi.id NOT IN (SELECT COALESCE(reference_id, 0) FROM inventory_logs WHERE reference_type LIKE '%delivery%' OR reference_type LIKE '%stock_in%')
+            SELECT (1000000 + msi.id) AS log_id,
+                   msi.encoded_at AS created_at,
+                   'Stock In' AS movement_type,
+                   msi.qty_received AS quantity,
+                   COALESCE(NULLIF(msi.remarks,''), CONCAT('PO: ', COALESCE(msi.po_number,'—'), ' | Batch: ', COALESCE(msi.batch_ref,'—'))) AS notes,
+                   COALESCE(NULLIF(msi.po_number, ''), NULLIF(msi.batch_ref, ''), CONCAT('SI-', LPAD(msi.id, 5, '0'))) AS reference_no,
+                   COALESCE(NULLIF(msi.product_name,''), NULLIF(ip.product_name,''), NULLIF(p.name,''), 'Merchandise Item') AS product_name,
+                   COALESCE(NULLIF(msi.sku,''), NULLIF(ip.sku,''), CONCAT('P', LPAD(COALESCE(p.id, msi.id),4,'0')), '') AS sku,
+                   COALESCE(NULLIF(si.unit,''), NULLIF(ip.size,''), 'pcs') AS unit,
+                   COALESCE(NULLIF(u.name,''), NULLIF(CONCAT(u.first_name, ' ', u.last_name),' '), 'Staff') AS user_name
+            FROM merchandise_stock_in msi
+            LEFT JOIN inventory_products ip ON ip.id = msi.product_id
+            LEFT JOIN products p ON p.id = msi.product_id AND (ip.id IS NULL)
+            LEFT JOIN station_inventory si ON si.product_id = msi.product_id AND si.station_id = msi.station_id
+            LEFT JOIN users u ON u.id = msi.encoded_by
+            WHERE msi.id NOT IN (SELECT COALESCE(reference_id, 0) FROM inventory_logs WHERE reference_type LIKE '%delivery%' OR reference_type LIKE '%stock_in%')
 
-        UNION ALL
+            UNION ALL
 
-        SELECT (2000000 + mt.id) AS log_id,
-               mt.created_at,
-               mt.transaction_type AS movement_type,
-               -mti.quantity AS quantity,
-               COALESCE(NULLIF(mt.manager_notes,''), NULLIF(mt.staff_remarks,''), 'Sale Transaction') AS notes,
-               COALESCE(NULLIF(mt.transaction_id, ''), CONCAT('SO-', LPAD(mt.id, 5, '0'))) AS reference_no,
-               COALESCE(NULLIF(mti.product_name,''), NULLIF(ip.product_name,''), NULLIF(p.name,''), 'Merchandise Item') AS product_name,
-               COALESCE(NULLIF(mti.item_sku,''), NULLIF(ip.sku,''), CONCAT('P', LPAD(COALESCE(p.id, mti.id),4,'0')), '') AS sku,
-               COALESCE(NULLIF(si.unit,''), NULLIF(ip.size,''), 'pcs') AS unit,
-               COALESCE(NULLIF(u.name,''), NULLIF(CONCAT(u.first_name, ' ', u.last_name),' '), 'Staff') AS user_name
-        FROM merchandise_transactions mt
-        JOIN merchandise_transaction_items mti ON mti.transaction_id = mt.id
-        LEFT JOIN inventory_products ip ON ip.id = mti.product_id
-        LEFT JOIN products p ON p.id = mti.product_id AND (ip.id IS NULL)
-        LEFT JOIN station_inventory si ON si.product_id = mti.product_id AND si.station_id = mt.station_id
-        LEFT JOIN users u ON u.id = mt.staff_id
-        WHERE mt.id NOT IN (SELECT COALESCE(reference_id, 0) FROM inventory_logs WHERE reference_type LIKE '%transaction%' OR reference_type LIKE '%sale%')
-          AND mt.transaction_id NOT IN (SELECT COALESCE(reference_no, '') FROM inventory_logs WHERE reference_no IS NOT NULL AND reference_no != '')
+            SELECT (2000000 + mt.id) AS log_id,
+                   mt.created_at,
+                   mt.transaction_type AS movement_type,
+                   -mti.quantity AS quantity,
+                   COALESCE(NULLIF(mt.manager_notes,''), NULLIF(mt.staff_remarks,''), 'Sale Transaction') AS notes,
+                   COALESCE(NULLIF(mt.transaction_id, ''), CONCAT('SO-', LPAD(mt.id, 5, '0'))) AS reference_no,
+                   COALESCE(NULLIF(mti.product_name,''), NULLIF(ip.product_name,''), NULLIF(p.name,''), 'Merchandise Item') AS product_name,
+                   COALESCE(NULLIF(mti.item_sku,''), NULLIF(ip.sku,''), CONCAT('P', LPAD(COALESCE(p.id, mti.id),4,'0')), '') AS sku,
+                   COALESCE(NULLIF(si.unit,''), NULLIF(ip.size,''), 'pcs') AS unit,
+                   COALESCE(NULLIF(u.name,''), NULLIF(CONCAT(u.first_name, ' ', u.last_name),' '), 'Staff') AS user_name
+            FROM merchandise_transactions mt
+            JOIN merchandise_transaction_items mti ON mti.transaction_id = mt.id
+            LEFT JOIN inventory_products ip ON ip.id = mti.product_id
+            LEFT JOIN products p ON p.id = mti.product_id AND (ip.id IS NULL)
+            LEFT JOIN station_inventory si ON si.product_id = mti.product_id AND si.station_id = mt.station_id
+            LEFT JOIN users u ON u.id = mt.staff_id
+            WHERE mt.id NOT IN (SELECT COALESCE(reference_id, 0) FROM inventory_logs WHERE reference_type LIKE '%transaction%' OR reference_type LIKE '%sale%')
+              AND mt.transaction_id NOT IN (SELECT COALESCE(reference_no, '') FROM inventory_logs WHERE reference_no IS NOT NULL AND reference_no != '')
 
-        ORDER BY created_at DESC
-        LIMIT 200
-    ");
-    $stmt->execute();
-    $movement_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    error_log("Error fetching movement history: " . $e->getMessage());
+            ORDER BY created_at DESC
+            LIMIT 200
+        ");
+        $stmt->execute();
+        $movement_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        error_log("Error fetching movement history: " . $e->getMessage());
+    }
 }
 
-// â”€â”€ Fetch Stock-In History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fetch Stock-In History ──
 $stockin_history = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT msi.id, msi.encoded_at AS date, msi.qty_received, msi.unit_cost, msi.batch_no,
-               msi.po_number, msi.status, msi.notes,
-               COALESCE(ip.product_name, p.name, 'Unknown') AS product_name,
-               COALESCE(ip.sku, CONCAT('P', LPAD(p.id,4,'0')), '') AS sku,
-               COALESCE(ip.category, pc.name, 'General') AS category_name,
-               COALESCE(u.name, 'Staff') AS received_by,
-               COALESCE(ip.brand, 'Petron Corporation') AS supplier
-        FROM merchandise_stock_in msi
-        LEFT JOIN inventory_products ip ON ip.id = msi.product_id
-        LEFT JOIN products p ON p.id = msi.product_id AND (ip.id IS NULL)
-        LEFT JOIN product_categories pc ON pc.id = p.category_id
-        LEFT JOIN users u ON u.id = msi.encoded_by
-        WHERE msi.station_id = ?
-        ORDER BY msi.encoded_at DESC
-        LIMIT 200
-    ");
-    $stmt->execute([$station_id]);
-    $stockin_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'stockin') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT msi.id, msi.encoded_at AS date, msi.qty_received, msi.unit_cost, msi.batch_no,
+                   msi.po_number, msi.status, msi.notes,
+                   COALESCE(ip.product_name, p.name, 'Unknown') AS product_name,
+                   COALESCE(ip.sku, CONCAT('P', LPAD(p.id,4,'0')), '') AS sku,
+                   COALESCE(ip.category, pc.name, 'General') AS category_name,
+                   COALESCE(u.name, 'Staff') AS received_by,
+                   COALESCE(ip.brand, 'Petron Corporation') AS supplier
+            FROM merchandise_stock_in msi
+            LEFT JOIN inventory_products ip ON ip.id = msi.product_id
+            LEFT JOIN products p ON p.id = msi.product_id AND (ip.id IS NULL)
+            LEFT JOIN product_categories pc ON pc.id = p.category_id
+            LEFT JOIN users u ON u.id = msi.encoded_by
+            WHERE msi.station_id = ?
+            ORDER BY msi.encoded_at DESC
+            LIMIT 200
+        ");
+        $stmt->execute([$station_id]);
+        $stockin_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
-// â”€â”€ Fetch Stock-Out History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fetch Stock-Out History ──
 $stockout_history = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT
-            CONCAT('SO-', LPAD(mt.id, 5, '0')) AS ref_no,
-            mt.created_at AS date,
-            mt.transaction_type,
-            COALESCE(ip.product_name, p.name, 'Unknown') AS product_name,
-            COALESCE(ip.sku, CONCAT('P', LPAD(p.id,4,'0')), '') AS sku,
-            COALESCE(mti.quantity, 0) AS qty
-        FROM merchandise_transactions mt
-        JOIN merchandise_transaction_items mti ON mti.transaction_id = mt.id
-        LEFT JOIN inventory_products ip ON ip.id = mti.product_id
-        LEFT JOIN products p ON p.id = mti.product_id AND (ip.id IS NULL)
-        WHERE mt.station_id = ?
-          AND mt.transaction_type IN ('sale','stock_out','return','wastage')
-        ORDER BY mt.created_at DESC
-        LIMIT 200
-    ");
-    $stmt->execute([$station_id]);
-    $stockout_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'stockout') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                CONCAT('SO-', LPAD(mt.id, 5, '0')) AS ref_no,
+                mt.created_at AS date,
+                mt.transaction_type,
+                COALESCE(ip.product_name, p.name, 'Unknown') AS product_name,
+                COALESCE(ip.sku, CONCAT('P', LPAD(p.id,4,'0')), '') AS sku,
+                COALESCE(mti.quantity, 0) AS qty
+            FROM merchandise_transactions mt
+            JOIN merchandise_transaction_items mti ON mti.transaction_id = mt.id
+            LEFT JOIN inventory_products ip ON ip.id = mti.product_id
+            LEFT JOIN products p ON p.id = mti.product_id AND (ip.id IS NULL)
+            WHERE mt.station_id = ?
+              AND mt.transaction_type IN ('sale','stock_out','return','wastage')
+            ORDER BY mt.created_at DESC
+            LIMIT 200
+        ");
+        $stmt->execute([$station_id]);
+        $stockout_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
-// â”€â”€ Fetch Transfer Records â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fetch Transfer Records ──
 $transfer_records = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT
-            CONCAT('TR-', LPAD(il.id, 5, '0')) AS transfer_no,
-            COALESCE(ip.product_name, 'Unknown') AS product_name,
-            COALESCE(ip.sku, '') AS sku,
-            COALESCE(il.notes, '—') AS from_location,
-            COALESCE(NULLIF(CONCAT_WS(' ', il.reference_type, il.reference_id), ''), '—') AS to_location,
-            ABS(il.quantity_change) AS qty,
-            il.created_at AS date,
-            COALESCE(u.name, 'Staff') AS performed_by
-        FROM inventory_logs il
-        LEFT JOIN inventory_products ip ON ip.id = il.product_id
-        LEFT JOIN users u ON u.id = il.user_id
-        WHERE il.station_id = ?
-          AND LOWER(il.action) IN ('transfer','transfer_out','transfer_in')
-        ORDER BY il.created_at DESC
-        LIMIT 200
-    ");
-    $stmt->execute([$station_id]);
-    $transfer_records = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'transfer') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                CONCAT('TR-', LPAD(il.id, 5, '0')) AS transfer_no,
+                COALESCE(ip.product_name, 'Unknown') AS product_name,
+                COALESCE(ip.sku, '') AS sku,
+                COALESCE(il.notes, '—') AS from_location,
+                COALESCE(NULLIF(CONCAT_WS(' ', il.reference_type, il.reference_id), ''), '—') AS to_location,
+                ABS(il.quantity_change) AS qty,
+                il.created_at AS date,
+                COALESCE(u.name, 'Staff') AS performed_by
+            FROM inventory_logs il
+            LEFT JOIN inventory_products ip ON ip.id = il.product_id
+            LEFT JOIN users u ON u.id = il.user_id
+            WHERE il.station_id = ?
+              AND LOWER(il.action) IN ('transfer','transfer_out','transfer_in')
+            ORDER BY il.created_at DESC
+            LIMIT 200
+        ");
+        $stmt->execute([$station_id]);
+        $transfer_records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
-// â”€â”€ Fetch Damaged Items â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fetch Damaged Items ──
 $damaged_items = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT
-            CONCAT('DMG-', LPAD(il.id, 5, '0')) AS damage_no,
-            COALESCE(ip.product_name, 'Unknown') AS product_name,
-            COALESCE(ip.sku, '') AS sku,
-            ABS(il.quantity_change) AS qty,
-            COALESCE(il.notes, '—') AS reason,
-            il.created_at AS date,
-            COALESCE(u.name, 'Staff') AS performed_by
-        FROM inventory_logs il
-        LEFT JOIN inventory_products ip ON ip.id = il.product_id
-        LEFT JOIN users u ON u.id = il.user_id
-        WHERE il.station_id = ?
-          AND LOWER(il.action) IN ('damage','damaged','defective','disposal')
-        ORDER BY il.created_at DESC
-        LIMIT 200
-    ");
-    $stmt->execute([$station_id]);
-    $damaged_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'damaged') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                CONCAT('DMG-', LPAD(il.id, 5, '0')) AS damage_no,
+                COALESCE(ip.product_name, 'Unknown') AS product_name,
+                COALESCE(ip.sku, '') AS sku,
+                ABS(il.quantity_change) AS qty,
+                COALESCE(il.notes, '—') AS reason,
+                il.created_at AS date,
+                COALESCE(u.name, 'Staff') AS performed_by
+            FROM inventory_logs il
+            LEFT JOIN inventory_products ip ON ip.id = il.product_id
+            LEFT JOIN users u ON u.id = il.user_id
+            WHERE il.station_id = ?
+              AND LOWER(il.action) IN ('damage','damaged','defective','disposal')
+            ORDER BY il.created_at DESC
+            LIMIT 200
+        ");
+        $stmt->execute([$station_id]);
+        $damaged_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
-// â”€â”€ Fetch Expired Products â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fetch Expired Products ──
 $expired_products = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT
-            COALESCE(ip.product_name, 'Unknown') AS product_name,
-            COALESCE(ip.sku, '') AS sku,
-            COALESCE(mb.batch_number, msi.batch_ref, '—') AS batch,
-            mb.created_at AS expiry_date,
-            COALESCE(mb.remaining_qty, msi.qty_received, 0) AS qty
-        FROM merchandise_batches mb
-        LEFT JOIN inventory_products ip ON ip.id = mb.product_id
-        LEFT JOIN merchandise_stock_in msi ON msi.product_id = mb.product_id AND msi.station_id = mb.station_id
-        WHERE mb.station_id = ?
-          AND mb.status = 'active'
-        ORDER BY mb.id DESC
-        LIMIT 200
-    ");
-    $stmt->execute([$station_id]);
-    $expired_products = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'expired') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                COALESCE(ip.product_name, 'Unknown') AS product_name,
+                COALESCE(ip.sku, '') AS sku,
+                COALESCE(mb.batch_number, msi.batch_ref, '—') AS batch,
+                mb.created_at AS expiry_date,
+                COALESCE(mb.remaining_qty, msi.qty_received, 0) AS qty
+            FROM merchandise_batches mb
+            LEFT JOIN inventory_products ip ON ip.id = mb.product_id
+            LEFT JOIN merchandise_stock_in msi ON msi.product_id = mb.product_id AND msi.station_id = mb.station_id
+            WHERE mb.station_id = ?
+              AND mb.status = 'active'
+            ORDER BY mb.id DESC
+            LIMIT 200
+        ");
+        $stmt->execute([$station_id]);
+        $expired_products = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
 require_once __DIR__ . '/../partials/header.php';
 ?>

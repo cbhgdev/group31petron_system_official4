@@ -2659,11 +2659,11 @@ document.addEventListener('DOMContentLoaded', function () {
     // ── AUTOMATIC BACKGROUND DATA FETCHING (Every 10 Seconds) ──
     async function refreshManagerDashboard() {
         try {
-                        const df = document.getElementById('date_from') ? document.getElementById('date_from').value : '';
-            const dt = document.getElementById('date_to')   ? document.getElementById('date_to').value   : '';
-            let url = 'manager_dashboard.php?ajax=1';
-            if (df) url += '&date_from=' + encodeURIComponent(df);
-            if (dt) url += '&date_to='   + encodeURIComponent(dt);
+            /* Use the server-rendered dates (locked at page load) to prevent
+               KPI flickering when the user edits the date inputs without submitting. */
+            const df = encodeURIComponent('<?= $date_from ?>');
+            const dt = encodeURIComponent('<?= $date_to ?>');
+            let url = 'manager_dashboard.php?ajax=1&date_from=' + df + '&date_to=' + dt;
             const resp = await fetch(url);
             if (!resp.ok) return;
             const data = await resp.json();
@@ -2715,7 +2715,10 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    setInterval(refreshManagerDashboard, 10000);
+    const mgrRefreshMs = (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000)
+        ? window.PETRON_AUTO_REFRESH_MS
+        : 10000;
+    setInterval(refreshManagerDashboard, mgrRefreshMs);
 });
 </script>
 

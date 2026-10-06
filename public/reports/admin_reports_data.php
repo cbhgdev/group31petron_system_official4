@@ -355,47 +355,90 @@ if (!function_exists('getAdminReportData')) {
                     $data['ugt_summary'] = [];
                 }
 
-                // Compute 7 UGT Tanks Liters Sold Summary (matching Staff Report & Fuel Closing)
-                $tank_ugt_summary = [
-                    'UGT #1 (DIESEL 1)'       => 0.0,
-                    'UGT #2 (DIESEL 2)'       => 0.0,
-                    'UGT #3 (TURBO DIESEL)'   => 0.0,
-                    'UGT #4 (XCS PLUS)'       => 0.0,
-                    'UGT #5 (XTRA ADVANCE 1)' => 0.0,
-                    'UGT #6 (XTRA ADVANCE 2)' => 0.0,
-                    'UGT #7 (KEROSENE)'       => 0.0,
-                ];
+                // Dynamic UGT Tanks Liters Sold Summary:
+                // Only load tanks that have actually been configured/added for this station in fuel_inventory.
+                // A new station with no fuel products configured will have an empty tank summary.
+                $tank_ugt_summary = [];
+                $tank_mapping     = [];
 
-                foreach ($raw_ugt as $r) {
-                    $pName  = strtoupper(trim(($r['raw_fuel_type'] ?? '') ?: ($r['clean_fuel_type'] ?? '')));
-                    $ftype  = strtolower(trim($r['clean_fuel_type'] ?? ''));
-                    $liters = (float)($r['net_volume_sold'] ?? 0);
+                try {
+                    $stmt_tanks = $pdo->prepare(
+                        "SELECT id, ugt_no, fuel_type, capacity
+                         FROM fuel_inventory
+                         WHERE 1=1 {$st_clause('fuel_inventory')}
+                           AND LOWER(COALESCE(status, 'active')) NOT IN ('archived', 'deleted')
+                         ORDER BY id ASC"
+                    );
+                    $stmt_tanks->execute($st_params);
+                    $configured_tanks = $stmt_tanks->fetchAll(PDO::FETCH_ASSOC);
 
-                    if (strpos($pName, 'DIESEL 1') !== false) {
-                        $tank_ugt_summary['UGT #1 (DIESEL 1)'] += $liters;
-                    } elseif (strpos($pName, 'DIESEL 2') !== false) {
-                        $tank_ugt_summary['UGT #2 (DIESEL 2)'] += $liters;
-                    } elseif (strpos($pName, 'TURBO') !== false) {
-                        $tank_ugt_summary['UGT #3 (TURBO DIESEL)'] += $liters;
-                    } elseif (strpos($pName, 'XCS') !== false) {
-                        $tank_ugt_summary['UGT #4 (XCS PLUS)'] += $liters;
-                    } elseif (strpos($pName, 'XTRA UNL 1') !== false || strpos($pName, 'XTRA AD 1') !== false || strpos($pName, 'ADVANCE 1') !== false) {
-                        $tank_ugt_summary['UGT #5 (XTRA ADVANCE 1)'] += $liters;
-                    } elseif (strpos($pName, 'XTRA UNL 2') !== false || strpos($pName, 'XTRA AD 2') !== false || strpos($pName, 'ADVANCE 2') !== false) {
-                        $tank_ugt_summary['UGT #6 (XTRA ADVANCE 2)'] += $liters;
-                    } elseif (strpos($pName, 'KERO') !== false) {
-                        $tank_ugt_summary['UGT #7 (KEROSENE)'] += $liters;
-                    } else {
-                        if (strpos($ftype, 'turbo') !== false) {
-                            $tank_ugt_summary['UGT #3 (TURBO DIESEL)'] += $liters;
-                        } elseif (strpos($ftype, 'diesel') !== false) {
-                            $tank_ugt_summary['UGT #1 (DIESEL 1)'] += $liters;
-                        } elseif (strpos($ftype, 'xcs') !== false) {
-                            $tank_ugt_summary['UGT #4 (XCS PLUS)'] += $liters;
-                        } elseif (strpos($ftype, 'xtra') !== false || strpos($ftype, 'advance') !== false) {
-                            $tank_ugt_summary['UGT #5 (XTRA ADVANCE 1)'] += $liters;
-                        } elseif (strpos($ftype, 'kero') !== false) {
-                            $tank_ugt_summary['UGT #7 (KEROSENE)'] += $liters;
+                    // Safely sort by numerical UGT number in PHP
+                    usort($configured_tanks, function($a, $b) {
+                        $numA = (int)preg_replace('/[^0-9]/', '', (string)($a['ugt_no'] ?? ''));
+                        $numB = (int)preg_replace('/[^0-9]/', '', (string)($b['ugt_no'] ?? ''));
+                        if ($numA !== $numB) {
+                            return $numA <=> $numB;
+                        }
+                        return ($a['id'] ?? 0) <=> ($b['id'] ?? 0);
+                    });
+
+                    foreach ($configured_tanks as $stk) {
+                        $u_raw = trim((string)($stk['ugt_no'] ?? ''));
+                        if ($u_raw !== '') {
+                            $u_num = preg_replace('/[^0-9]/', '', $u_raw);
+                            $u_label = $u_num ? ('UGT #' . (int)$u_num) : $u_raw;
+                        } else {
+                            $u_label = 'UGT #' . $stk['id'];
+                        }
+                        $f_label = strtoupper(trim((string)($stk['fuel_type'] ?? 'Fuel')));
+                        $tank_label = strtoupper($u_label) . ' (' . $f_label . ')';
+
+                        $tank_ugt_summary[$tank_label] = 0.0;
+                        $tank_mapping[] = [
+                            'label'     => $tank_label,
+                            'u_num'     => preg_replace('/[^0-9]/', '', $u_label),
+                            'u_raw'     => strtoupper($u_raw),
+                            'fuel_type' => $f_label,
+                            'clean_ft'  => strtolower(trim((string)($stk['fuel_type'] ?? '')))
+                        ];
+                    }
+                } catch (Exception $e) {
+                    $tank_ugt_summary = [];
+                    $tank_mapping     = [];
+                }
+
+                // Only populate liters if station has configured tanks and transactions exist
+                if (!empty($tank_ugt_summary) && !empty($raw_ugt)) {
+                    foreach ($raw_ugt as $r) {
+                        $pName  = strtoupper(trim(($r['raw_fuel_type'] ?? '') ?: ($r['clean_fuel_type'] ?? '')));
+                        $ftype  = strtolower(trim($r['clean_fuel_type'] ?? ''));
+                        $uNum   = preg_replace('/[^0-9]/', '', (string)($r['ugt_no'] ?? ''));
+                        $liters = (float)($r['net_volume_sold'] ?? 0);
+
+                        $assigned = false;
+                        // 1. Try to match by UGT number if present
+                        if ($uNum !== '') {
+                            foreach ($tank_mapping as $tm) {
+                                if ($tm['u_num'] !== '' && (int)$tm['u_num'] === (int)$uNum) {
+                                    $tank_ugt_summary[$tm['label']] += $liters;
+                                    $assigned = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // 2. Try to match by fuel type
+                        if (!$assigned) {
+                            foreach ($tank_mapping as $tm) {
+                                if (
+                                    (!empty($pName) && (stripos($tm['fuel_type'], $pName) !== false || stripos($pName, $tm['fuel_type']) !== false)) ||
+                                    (!empty($ftype) && (stripos($tm['clean_ft'], $ftype) !== false || stripos($ftype, $tm['clean_ft']) !== false))
+                                ) {
+                                    $tank_ugt_summary[$tm['label']] += $liters;
+                                    $assigned = true;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }

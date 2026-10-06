@@ -957,6 +957,37 @@ $stmt = $pdo->prepare("SELECT COUNT(*) FROM stock_requests WHERE station_id = ? 
 $stmt->execute([$station_id]);
 $summary_pending_requests = (int)$stmt->fetchColumn();
 
+// Active tab definition
+$active_tab = $_GET['tab'] ?? 'inventory';
+if (!in_array($active_tab, ['inventory', 'alerts', 'movement', 'requests', 'adjustments', 'stockin', 'stockout', 'transfers', 'damaged', 'expired'])) {
+    $active_tab = 'inventory';
+}
+// URL-driven filter/view params (from sidebar deep-links)
+$url_filter = in_array($_GET['filter'] ?? '', ['low','critical']) ? ($_GET['filter']) : '';
+$url_view   = ($_GET['view'] ?? '') === 'movement' ? 'movement' : '';
+
+// Stock Added Today & Stock Deducted Today (for dashboard cards)
+$stock_added_today    = 0;
+$stock_deducted_today = 0;
+if ($active_tab === 'inventory') {
+    try {
+        $s = $pdo->prepare("SELECT COALESCE(SUM(qty_received),0) FROM merchandise_stock_in WHERE station_id=? AND DATE(encoded_at)=CURDATE()");
+        $s->execute([$station_id]);
+        $stock_added_today = (int)$s->fetchColumn();
+    } catch (Exception $e) {}
+    try {
+        $s = $pdo->prepare("
+            SELECT COALESCE(SUM(ti.quantity),0)
+            FROM merchandise_transaction_items ti
+            JOIN merchandise_transactions t ON t.id = ti.transaction_id
+            WHERE t.station_id=? AND DATE(t.created_at)=CURDATE()
+              AND t.workflow_status NOT IN ('voided','void','cancelled')
+        ");
+        $s->execute([$station_id]);
+        $stock_deducted_today = (int)$s->fetchColumn();
+    } catch (Exception $e) {}
+}
+
 // Stock requests data
 $stock_requests = [];
 $summary_req_total = 0;
@@ -965,99 +996,111 @@ $summary_req_approved = 0;
 $summary_req_rejected = 0;
 $req_categories = [];
 $req_staff_users = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT sr.*, u.name AS staff_name, 
-               COALESCE(si.reorder_level, ip.min_stock, 24) AS reorder_level,
-               COALESCE(si.critical_level, 10)              AS critical_level,
-               COALESCE(si.unit, ip.size, 'pcs') AS unit,
-               ip.sku AS prod_sku
-        FROM stock_requests sr 
-        JOIN users u ON sr.staff_id = u.id 
-        LEFT JOIN inventory_products ip ON sr.item_id = ip.id
-        LEFT JOIN station_inventory si ON sr.item_id = si.product_id AND si.station_id = sr.station_id
-        WHERE sr.station_id = ? 
-        ORDER BY CASE sr.status WHEN 'Pending' THEN 1 ELSE 2 END, sr.created_at DESC
-    ");
-    $stmt->execute([$station_id]);
-    $stock_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    foreach ($stock_requests as $req) {
-        $summary_req_total++;
-        $status_lc = strtolower($req['status'] ?? 'pending');
-        if ($status_lc === 'pending') {
-            $summary_req_pending++;
-        } elseif ($status_lc === 'approved' || $status_lc === 'validated' || $status_lc === 'waiting for purchase order' || $status_lc === 'purchase order generated') {
-            $summary_req_approved++;
-        } elseif ($status_lc === 'rejected') {
-            $summary_req_rejected++;
-        }
-
-        $cat = $req['item_category'] ?? '';
-        if ($cat !== '') {
-            $req_categories[$cat] = true;
-        }
-
-        $staff = $req['staff_name'] ?? '';
-        if ($staff !== '') {
-            $req_staff_users[$staff] = true;
-        }
-    }
-    ksort($req_categories);
-    ksort($req_staff_users);
-} catch (Exception $e) {}
 
 // Merchandise Adjustments data
 $merchandise_adjustments = [];
 $summary_adj_pending = 0;
-try {
-    $stmt = $pdo->prepare("
-        SELECT ma.*, u.name AS staff_name
-        FROM merchandise_adjustments ma
-        LEFT JOIN users u ON ma.requested_by = u.id
-        WHERE ma.station_id = ?
-        ORDER BY CASE ma.status WHEN 'Pending' THEN 1 ELSE 2 END, ma.requested_at DESC
-    ");
-    $stmt->execute([$station_id]);
-    $merchandise_adjustments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($merchandise_adjustments as $adj) {
-        if (strtolower($adj['status'] ?? '') === 'pending') {
-            $summary_adj_pending++;
+
+if ($active_tab === 'requests' || $active_tab === 'adjustments') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT sr.*, u.name AS staff_name, 
+                   COALESCE(si.reorder_level, ip.min_stock, 24) AS reorder_level,
+                   COALESCE(si.critical_level, 10)              AS critical_level,
+                   COALESCE(si.unit, ip.size, 'pcs') AS unit,
+                   ip.sku AS prod_sku
+            FROM stock_requests sr 
+            JOIN users u ON sr.staff_id = u.id 
+            LEFT JOIN inventory_products ip ON sr.item_id = ip.id
+            LEFT JOIN station_inventory si ON sr.item_id = si.product_id AND si.station_id = sr.station_id
+            WHERE sr.station_id = ? 
+            ORDER BY CASE sr.status WHEN 'Pending' THEN 1 ELSE 2 END, sr.created_at DESC
+        ");
+        $stmt->execute([$station_id]);
+        $stock_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($stock_requests as $req) {
+            $summary_req_total++;
+            $status_lc = strtolower($req['status'] ?? 'pending');
+            if ($status_lc === 'pending') {
+                $summary_req_pending++;
+            } elseif ($status_lc === 'approved' || $status_lc === 'validated' || $status_lc === 'waiting for purchase order' || $status_lc === 'purchase order generated') {
+                $summary_req_approved++;
+            } elseif ($status_lc === 'rejected') {
+                $summary_req_rejected++;
+            }
+
+            $cat = $req['item_category'] ?? '';
+            if ($cat !== '') {
+                $req_categories[$cat] = true;
+            }
+
+            $staff = $req['staff_name'] ?? '';
+            if ($staff !== '') {
+                $req_staff_users[$staff] = true;
+            }
         }
-    }
-} catch (Exception $e) {}
+        ksort($req_categories);
+        ksort($req_staff_users);
+    } catch (Exception $e) {}
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT ma.*, u.name AS staff_name
+            FROM merchandise_adjustments ma
+            LEFT JOIN users u ON ma.requested_by = u.id
+            WHERE ma.station_id = ?
+            ORDER BY CASE ma.status WHEN 'Pending' THEN 1 ELSE 2 END, ma.requested_at DESC
+        ");
+        $stmt->execute([$station_id]);
+        $merchandise_adjustments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($merchandise_adjustments as $adj) {
+            if (strtolower($adj['status'] ?? '') === 'pending') {
+                $summary_adj_pending++;
+            }
+        }
+    } catch (Exception $e) {}
+} else {
+    // Quick badge count query for tabs when not viewing adjustments
+    try {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM merchandise_adjustments WHERE station_id = ? AND status = 'Pending'");
+        $stmt->execute([$station_id]);
+        $summary_adj_pending = (int)$stmt->fetchColumn();
+    } catch (Exception $e) {}
+}
 
 // Awaiting Deliveries Verification
 $pending_pos = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT po.*, CONCAT(u_mgr.first_name, ' ', u_mgr.last_name) AS manager_name, CONCAT(u_adm.first_name, ' ', u_adm.last_name) AS admin_name, sr.item_sku, sr.item_category, sr.remarks AS sr_remarks, sr.current_stock 
-        FROM purchase_orders po 
-        LEFT JOIN users u_mgr ON po.created_by=u_mgr.id 
-        LEFT JOIN users u_adm ON po.admin_id=u_adm.id 
-        LEFT JOIN stock_requests sr ON po.request_id=sr.id 
-        WHERE po.station_id=? AND po.type='merch' AND po.admin_finalized=1 AND po.delivery_validated=0 AND po.stock_in_done=0 
-        ORDER BY po.admin_finalized_at ASC
-    ");
-    $stmt->execute([$station_id]);
-    $pending_pos = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
-
-// Validated deliveries history
 $validated_pos = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT po.*, CONCAT(u_mgr.first_name, ' ', u_mgr.last_name) AS manager_name, CONCAT(u_adm.first_name, ' ', u_adm.last_name) AS admin_name, CONCAT(u_val.first_name, ' ', u_val.last_name) AS validated_by_name 
-        FROM purchase_orders po 
-        LEFT JOIN users u_mgr ON po.created_by=u_mgr.id 
-        LEFT JOIN users u_adm ON po.admin_id=u_adm.id 
-        LEFT JOIN users u_val ON po.delivery_validated_by=u_val.id 
-        WHERE po.station_id=? AND po.type='merch' AND po.delivery_validated=1 
-        ORDER BY po.delivery_validated_at DESC LIMIT 50
-    ");
-    $stmt->execute([$station_id]);
-    $validated_pos = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'deliveries') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT po.*, CONCAT(u_mgr.first_name, ' ', u_mgr.last_name) AS manager_name, CONCAT(u_adm.first_name, ' ', u_adm.last_name) AS admin_name, sr.item_sku, sr.item_category, sr.remarks AS sr_remarks, sr.current_stock 
+            FROM purchase_orders po 
+            LEFT JOIN users u_mgr ON po.created_by=u_mgr.id 
+            LEFT JOIN users u_adm ON po.admin_id=u_adm.id 
+            LEFT JOIN stock_requests sr ON po.request_id=sr.id 
+            WHERE po.station_id=? AND po.type='merch' AND po.admin_finalized=1 AND po.delivery_validated=0 AND po.stock_in_done=0 
+            ORDER BY po.admin_finalized_at ASC
+        ");
+        $stmt->execute([$station_id]);
+        $pending_pos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT po.*, CONCAT(u_mgr.first_name, ' ', u_mgr.last_name) AS manager_name, CONCAT(u_adm.first_name, ' ', u_adm.last_name) AS admin_name, CONCAT(u_val.first_name, ' ', u_val.last_name) AS validated_by_name 
+            FROM purchase_orders po 
+            LEFT JOIN users u_mgr ON po.created_by=u_mgr.id 
+            LEFT JOIN users u_adm ON po.admin_id=u_adm.id 
+            LEFT JOIN users u_val ON po.delivery_validated_by=u_val.id 
+            WHERE po.station_id=? AND po.type='merch' AND po.delivery_validated=1 
+            ORDER BY po.delivery_validated_at DESC LIMIT 50
+        ");
+        $stmt->execute([$station_id]);
+        $validated_pos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
 // Movement History
 $movement_history = [];
@@ -1067,238 +1110,220 @@ $mov_sale_count = 0;
 $mov_adjustment_count = 0;
 $mov_variance_count = 0;
 
-try {
-    $stmt = $pdo->prepare("
-        SELECT il.id AS log_id, il.created_at, il.action AS movement_type, il.quantity_change AS quantity, 
-               il.quantity_before, il.quantity_after, il.reference_type, il.reference_id, il.notes, 
-               COALESCE(il.product_name, ip.product_name, 'Merchandise Item') AS product_name,
-               COALESCE(ip.sku, il.reference_id, 'N/A') AS sku,
-               COALESCE(si.unit, ip.size, 'pcs') AS unit,
-               COALESCE(il.performed_by, u.name, 'System') AS user_name 
-        FROM inventory_logs il 
-        LEFT JOIN inventory_products ip ON il.product_id = ip.id 
-        LEFT JOIN station_inventory si ON si.product_id = ip.id AND si.station_id = il.station_id 
-        LEFT JOIN users u ON il.user_id = u.id 
-        WHERE il.station_id = ? 
-        ORDER BY il.created_at DESC LIMIT 500
-    ");
-    $stmt->execute([$station_id]);
-    $movement_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+if ($active_tab === 'movement' || in_array($active_tab, ['stockin', 'stockout', 'transfers', 'damaged', 'expired'])) {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT il.id AS log_id, il.created_at, il.action AS movement_type, il.quantity_change AS quantity, 
+                   il.quantity_before, il.quantity_after, il.reference_type, il.reference_id, il.notes, 
+                   COALESCE(il.product_name, ip.product_name, 'Merchandise Item') AS product_name,
+                   COALESCE(ip.sku, il.reference_id, 'N/A') AS sku,
+                   COALESCE(si.unit, ip.size, 'pcs') AS unit,
+                   COALESCE(il.performed_by, u.name, 'System') AS user_name 
+            FROM inventory_logs il 
+            LEFT JOIN inventory_products ip ON il.product_id = ip.id 
+            LEFT JOIN station_inventory si ON si.product_id = ip.id AND si.station_id = il.station_id 
+            LEFT JOIN users u ON il.user_id = u.id 
+            WHERE il.station_id = ? 
+            ORDER BY il.created_at DESC LIMIT 500
+        ");
+        $stmt->execute([$station_id]);
+        $movement_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-
-    $mov_total_count = count($movement_history);
-    foreach ($movement_history as $log) {
-        $m_type = strtolower($log['movement_type'] ?? '');
-        if ($m_type === 'delivery' || $m_type === 'stock_in' || $m_type === 'stock-in') {
-            $mov_delivery_count++;
-        } elseif ($m_type === 'sale' || $m_type === 'release') {
-            $mov_sale_count++;
-        } elseif ($m_type === 'adjustment') {
-            $mov_adjustment_count++;
-            // If notes contain variance or it's an adjustment, count as variance case
-            if (stripos($log['notes'] ?? '', 'variance') !== false || stripos($log['notes'] ?? '', 'physical') !== false) {
-                $mov_variance_count++;
+        $mov_total_count = count($movement_history);
+        foreach ($movement_history as $log) {
+            $m_type = strtolower($log['movement_type'] ?? '');
+            if ($m_type === 'delivery' || $m_type === 'stock_in' || $m_type === 'stock-in') {
+                $mov_delivery_count++;
+            } elseif ($m_type === 'sale' || $m_type === 'release') {
+                $mov_sale_count++;
+            } elseif ($m_type === 'adjustment') {
+                $mov_adjustment_count++;
+                if (stripos($log['notes'] ?? '', 'variance') !== false || stripos($log['notes'] ?? '', 'physical') !== false) {
+                    $mov_variance_count++;
+                }
             }
         }
-    }
-} catch (Exception $e) {}
-
-$active_tab = $_GET['tab'] ?? 'inventory';
-if (!in_array($active_tab, ['inventory', 'alerts', 'movement', 'requests', 'adjustments', 'stockin', 'stockout', 'transfers', 'damaged', 'expired'])) {
-    $active_tab = 'inventory';
+    } catch (Exception $e) {}
 }
-// URL-driven filter/view params (from sidebar deep-links)
-$url_filter = in_array($_GET['filter'] ?? '', ['low','critical']) ? ($_GET['filter']) : '';
-$url_view   = ($_GET['view'] ?? '') === 'movement' ? 'movement' : '';
 
-// â”€â”€ NEW: Stock Added Today & Stock Deducted Today (for dashboard cards) â”€â”€
-$stock_added_today    = 0;
-$stock_deducted_today = 0;
-try {
-    $s = $pdo->prepare("SELECT COALESCE(SUM(qty_received),0) FROM merchandise_stock_in WHERE station_id=? AND DATE(encoded_at)=CURDATE()");
-    $s->execute([$station_id]);
-    $stock_added_today = (int)$s->fetchColumn();
-} catch (Exception $e) {}
-try {
-    $s = $pdo->prepare("
-        SELECT COALESCE(SUM(ti.quantity),0)
-        FROM merchandise_transaction_items ti
-        JOIN merchandise_transactions t ON t.id = ti.transaction_id
-        WHERE t.station_id=? AND DATE(t.created_at)=CURDATE()
-          AND t.workflow_status NOT IN ('voided','void','cancelled')
-    ");
-    $s->execute([$station_id]);
-    $stock_deducted_today = (int)$s->fetchColumn();
-} catch (Exception $e) {}
-
-// â”€â”€ NEW: Stock-In list (manager full view with PO No., Status) â”€â”€
+// Stock-In list (manager full view with PO No., Status)
 $mgr_stock_in_list = [];
-try {
-    $s = $pdo->prepare("
-        SELECT
-            msi.id,
-            CONCAT('SI-', LPAD(msi.id, 5, '0')) AS stock_in_no,
-            COALESCE(NULLIF(msi.po_number,''), '—') AS po_no,
-            m
-            COALESCE(NULLIF(msi.batch_ref,''), CONCAT('BATCH-', LPAD(msi.id, 4, '0'))) AS batch_no,
-            msi.qty_received,
-            msi.unit_cost,
-            msi.selling_price,
-            msi.encoded_at AS date_received,
-            COALESCE(msi.condition_flag, 'Good') AS status_flag,
-            COALESCE(u.name, u.username, 'Staff') AS received_by
-        FROM merchandise_stock_in msi
-        LEFT JOIN users u ON msi.encoded_by = u.id
-        WHERE msi.station_id = ?
-        ORDER BY msi.encoded_at DESC, msi.id DESC
-        LIMIT 300
-    ");
-    $s->execute([$station_id]);
-    $mgr_stock_in_list = $s->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'stockin') {
+    try {
+        $s = $pdo->prepare("
+            SELECT
+                msi.id,
+                CONCAT('SI-', LPAD(msi.id, 5, '0')) AS stock_in_no,
+                COALESCE(NULLIF(msi.po_number,''), '—') AS po_no,
+                COALESCE(NULLIF(msi.batch_ref,''), CONCAT('BATCH-', LPAD(msi.id, 4, '0'))) AS batch_no,
+                msi.qty_received,
+                msi.unit_cost,
+                msi.selling_price,
+                msi.encoded_at AS date_received,
+                COALESCE(msi.condition_flag, 'Good') AS status_flag,
+                COALESCE(u.name, u.username, 'Staff') AS received_by
+            FROM merchandise_stock_in msi
+            LEFT JOIN users u ON msi.encoded_by = u.id
+            WHERE msi.station_id = ?
+            ORDER BY msi.encoded_at DESC, msi.id DESC
+            LIMIT 300
+        ");
+        $s->execute([$station_id]);
+        $mgr_stock_in_list = $s->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
-// â”€â”€ NEW: Stock-Out list (from merchandise_transaction_items + transactions) â”€â”€
+// Stock-Out list (from merchandise_transaction_items + transactions)
 $mgr_stock_out_list = [];
-try {
-    $s = $pdo->prepare("
-        SELECT
-            CONCAT('SO-', LPAD(t.id, 5, '0')) AS ref_no,
-            ti.product_name,
-            COALESCE(mb.batch_number, CONCAT('BATCH-', LPAD(COALESCE(ti.batch_id,0), 4, '0'))) AS batch_no,
-            ABS(ti.quantity) AS qty_out,
-            COALESCE(NULLIF(t.transaction_type,''), 'Sales') AS transaction_type,
-            COALESCE(t.transaction_date, t.created_at) AS date_out,
-            COALESCE(u.name, u.username, 'Staff') AS released_by
-        FROM merchandise_transaction_items ti
-        JOIN merchandise_transactions t ON t.id = ti.transaction_id
-        LEFT JOIN merchandise_batches mb ON mb.id = ti.batch_id
-        LEFT JOIN users u ON t.staff_id = u.id
-        WHERE t.station_id = ?
-          AND (t.workflow_status IS NULL OR LOWER(t.workflow_status) NOT IN ('voided','void','cancelled'))
-        ORDER BY t.created_at DESC, t.id DESC
-        LIMIT 300
-    ");
-    $s->execute([$station_id]);
-    $mgr_stock_out_list = $s->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'stockout') {
+    try {
+        $s = $pdo->prepare("
+            SELECT
+                CONCAT('SO-', LPAD(t.id, 5, '0')) AS ref_no,
+                ti.product_name,
+                COALESCE(mb.batch_number, CONCAT('BATCH-', LPAD(COALESCE(ti.batch_id,0), 4, '0'))) AS batch_no,
+                ABS(ti.quantity) AS qty_out,
+                COALESCE(NULLIF(t.transaction_type,''), 'Sales') AS transaction_type,
+                COALESCE(t.transaction_date, t.created_at) AS date_out,
+                COALESCE(u.name, u.username, 'Staff') AS released_by
+            FROM merchandise_transaction_items ti
+            JOIN merchandise_transactions t ON t.id = ti.transaction_id
+            LEFT JOIN merchandise_batches mb ON mb.id = ti.batch_id
+            LEFT JOIN users u ON t.staff_id = u.id
+            WHERE t.station_id = ?
+              AND (t.workflow_status IS NULL OR LOWER(t.workflow_status) NOT IN ('voided','void','cancelled'))
+            ORDER BY t.created_at DESC, t.id DESC
+            LIMIT 300
+        ");
+        $s->execute([$station_id]);
+        $mgr_stock_out_list = $s->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
-// â”€â”€ NEW: Transfer Records (from inventory_logs where action='transfer', or merchandise_deliveries) â”€â”€
+// Transfer Records (from inventory_logs where action='transfer', or merchandise_deliveries)
 $mgr_transfers_list = [];
-try {
-    $s = $pdo->prepare("
-        SELECT
-            CONCAT('TR-', LPAD(il.id, 5, '0')) AS transfer_no,
-            COALESCE(ip.product_name, p.name, il.notes, 'Merchandise Product') AS product_name,
-            COALESCE(il.notes, '—') AS notes,
-            ABS(il.quantity_change) AS qty,
-            il.created_at AS date_transferred,
-            COALESCE(u.name, u.username, 'Staff') AS processed_by
-        FROM inventory_logs il
-        LEFT JOIN inventory_products ip ON ip.id = il.product_id
-        LEFT JOIN products p ON p.id = il.product_id
-        LEFT JOIN users u ON il.user_id = u.id
-        WHERE il.station_id = ? 
-          AND (LOWER(il.action) LIKE '%transfer%' OR LOWER(il.notes) LIKE '%transfer%')
-        ORDER BY il.created_at DESC
-        LIMIT 200
-    ");
-    $s->execute([$station_id]);
-    $mgr_transfers_list = $s->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'transfers') {
+    try {
+        $s = $pdo->prepare("
+            SELECT
+                CONCAT('TR-', LPAD(il.id, 5, '0')) AS transfer_no,
+                COALESCE(ip.product_name, p.name, il.notes, 'Merchandise Product') AS product_name,
+                COALESCE(il.notes, '—') AS notes,
+                ABS(il.quantity_change) AS qty,
+                il.created_at AS date_transferred,
+                COALESCE(u.name, u.username, 'Staff') AS processed_by
+            FROM inventory_logs il
+            LEFT JOIN inventory_products ip ON ip.id = il.product_id
+            LEFT JOIN products p ON p.id = il.product_id
+            LEFT JOIN users u ON il.user_id = u.id
+            WHERE il.station_id = ? 
+              AND (LOWER(il.action) LIKE '%transfer%' OR LOWER(il.notes) LIKE '%transfer%')
+            ORDER BY il.created_at DESC
+            LIMIT 200
+        ");
+        $s->execute([$station_id]);
+        $mgr_transfers_list = $s->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
-// â”€â”€ NEW: Damaged Items (from inventory_logs where action='damage' or condition_flag='Damaged' in stock_in) â”€â”€
+// Damaged Items (from inventory_logs where action='damage' or condition_flag='Damaged' in stock_in)
 $mgr_damaged_list = [];
-try {
-    $s = $pdo->prepare("
-        SELECT
-            CONCAT('DMG-', LPAD(il.id, 5, '0')) AS damage_no,
-            COALESCE(ip.product_name, p.name, il.notes, '—') AS product_name,
-            '—' AS batch_no,
-            ABS(il.quantity_change) AS qty,
-            COALESCE(il.notes, 'Damage recorded') AS reason,
-            il.created_at AS date_recorded,
-            COALESCE(u.name, u.username, 'Staff') AS recorded_by
-        FROM inventory_logs il
-        LEFT JOIN inventory_products ip ON ip.id = il.product_id
-        LEFT JOIN products p ON p.id = il.product_id
-        LEFT JOIN users u ON il.user_id = u.id
-        WHERE il.station_id = ? 
-          AND (LOWER(il.action) LIKE '%damage%' OR LOWER(il.action) LIKE '%write_off%')
-        ORDER BY il.created_at DESC
-        LIMIT 200
-    ");
-    $s->execute([$station_id]);
-    $mgr_damaged_list = $s->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'damaged') {
+    try {
+        $s = $pdo->prepare("
+            SELECT
+                CONCAT('DMG-', LPAD(il.id, 5, '0')) AS damage_no,
+                COALESCE(ip.product_name, p.name, il.notes, '—') AS product_name,
+                '—' AS batch_no,
+                ABS(il.quantity_change) AS qty,
+                COALESCE(il.notes, 'Damage recorded') AS reason,
+                il.created_at AS date_recorded,
+                COALESCE(u.name, u.username, 'Staff') AS recorded_by
+            FROM inventory_logs il
+            LEFT JOIN inventory_products ip ON ip.id = il.product_id
+            LEFT JOIN products p ON p.id = il.product_id
+            LEFT JOIN users u ON il.user_id = u.id
+            WHERE il.station_id = ? 
+              AND (LOWER(il.action) LIKE '%damage%' OR LOWER(il.action) LIKE '%write_off%')
+            ORDER BY il.created_at DESC
+            LIMIT 200
+        ");
+        $s->execute([$station_id]);
+        $mgr_damaged_list = $s->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
 
-// Also pull damaged from merchandise_stock_in condition_flag='Damaged'
-try {
-    $s = $pdo->prepare("
-        SELECT
-            CONCAT('DMG-SI-', LPAD(msi.id, 4, '0')) AS damage_no,
-            m
-            COALESCE(NULLIF(msi.batch_ref,''), CONCAT('BATCH-', LPAD(msi.id, 4, '0'))) AS batch_no,
-            msi.qty_received AS qty,
-            CONCAT('Damaged on delivery - ', COALESCE(msi.remarks, 'No remarks')) AS reason,
-            msi.encoded_at AS date_recorded,
-            COALESCE(u.name, u.username, 'Staff') AS recorded_by
-        FROM merchandise_stock_in msi
-        LEFT JOIN users u ON msi.encoded_by = u.id
-        WHERE msi.station_id = ? 
-          AND msi.condition_flag = 'Damaged'
-        ORDER BY msi.encoded_at DESC
-        LIMIT 100
-    ");
-    $s->execute([$station_id]);
-    $damaged_from_si = $s->fetchAll(PDO::FETCH_ASSOC);
-    $mgr_damaged_list = array_merge($mgr_damaged_list, $damaged_from_si);
-} catch (Exception $e) {}
+    // Also pull damaged from merchandise_stock_in condition_flag='Damaged'
+    try {
+        $s = $pdo->prepare("
+            SELECT
+                CONCAT('DMG-SI-', LPAD(msi.id, 4, '0')) AS damage_no,
+                COALESCE(NULLIF(msi.batch_ref,''), CONCAT('BATCH-', LPAD(msi.id, 4, '0'))) AS batch_no,
+                msi.qty_received AS qty,
+                CONCAT('Damaged on delivery - ', COALESCE(msi.remarks, 'No remarks')) AS reason,
+                msi.encoded_at AS date_recorded,
+                COALESCE(u.name, u.username, 'Staff') AS recorded_by
+            FROM merchandise_stock_in msi
+            LEFT JOIN users u ON msi.encoded_by = u.id
+            WHERE msi.station_id = ? 
+              AND msi.condition_flag = 'Damaged'
+            ORDER BY msi.encoded_at DESC
+            LIMIT 100
+        ");
+        $s->execute([$station_id]);
+        $damaged_from_si = $s->fetchAll(PDO::FETCH_ASSOC);
+        $mgr_damaged_list = array_merge($mgr_damaged_list, $damaged_from_si);
+    } catch (Exception $e) {}
+}
 
-// â”€â”€ NEW: Expired Products (from merchandise_batches where status='expired' or expiry logic) â”€â”€
+// Expired Products (from merchandise_batches where status='expired' or expiry logic)
 $mgr_expired_list = [];
-try {
-    $s = $pdo->prepare("
-        SELECT
-            COALESCE(ip.product_name, p.name, 'Product') AS product_name,
-            COALESCE(mb.batch_number, CONCAT('BATCH-', LPAD(mb.id,4,'0'))) AS batch_no,
-            COALESCE(mb.date_received, mb.created_at) AS expiry_date,
-            mb.remaining_qty AS qty,
-            COALESCE(mb.status, 'Expired') AS status
-        FROM merchandise_batches mb
-        LEFT JOIN inventory_products ip ON ip.id = mb.product_id
-        LEFT JOIN products p ON p.id = mb.product_id
-        WHERE mb.station_id = ? 
-          AND LOWER(mb.status) IN ('expired', 'damage')
-        ORDER BY mb.date_received ASC
-        LIMIT 200
-    ");
-    $s->execute([$station_id]);
-    $mgr_expired_list = $s->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'expired') {
+    try {
+        $s = $pdo->prepare("
+            SELECT
+                COALESCE(ip.product_name, p.name, 'Product') AS product_name,
+                COALESCE(mb.batch_number, CONCAT('BATCH-', LPAD(mb.id,4,'0'))) AS batch_no,
+                COALESCE(mb.date_received, mb.created_at) AS expiry_date,
+                mb.remaining_qty AS qty,
+                COALESCE(mb.status, 'Expired') AS status
+            FROM merchandise_batches mb
+            LEFT JOIN inventory_products ip ON ip.id = mb.product_id
+            LEFT JOIN products p ON p.id = mb.product_id
+            WHERE mb.station_id = ? 
+              AND LOWER(mb.status) IN ('expired', 'damage')
+            ORDER BY mb.date_received ASC
+            LIMIT 200
+        ");
+        $s->execute([$station_id]);
+        $mgr_expired_list = $s->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
-// â”€â”€ NEW: Full Inventory Movement History (already exists as $movement_history but we need a richer version) â”€â”€
+// Full Inventory Movement History
 $mgr_movement_history = [];
-try {
-    $s = $pdo->prepare("
-        SELECT
-            il.created_at AS date,
-            COALESCE(ip.product_name, '—') AS product_name,
-            il.action AS movement_type,
-            COALESCE(il.reference_type, il.action, '—') AS reference,
-            CASE WHEN il.quantity_change > 0 THEN il.quantity_change ELSE 0 END AS qty_in,
-            CASE WHEN il.quantity_change < 0 THEN ABS(il.quantity_change) ELSE 0 END AS qty_out,
-            COALESCE(il.quantity_after, 0) AS balance,
-            COALESCE(u.name, u.username, 'System') AS user_name
-        FROM inventory_logs il
-        LEFT JOIN inventory_products ip ON ip.id = il.product_id
-        LEFT JOIN users u ON il.user_id = u.id
-        WHERE il.station_id = ?
-        ORDER BY il.created_at DESC
-        LIMIT 500
-    ");
-    $s->execute([$station_id]);
-    $mgr_movement_history = $s->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'movement') {
+    try {
+        $s = $pdo->prepare("
+            SELECT
+                il.created_at AS date,
+                COALESCE(ip.product_name, '—') AS product_name,
+                il.action AS movement_type,
+                COALESCE(il.reference_type, il.action, '—') AS reference,
+                CASE WHEN il.quantity_change > 0 THEN il.quantity_change ELSE 0 END AS qty_in,
+                CASE WHEN il.quantity_change < 0 THEN ABS(il.quantity_change) ELSE 0 END AS qty_out,
+                COALESCE(il.quantity_after, 0) AS balance,
+                COALESCE(u.name, u.username, 'System') AS user_name
+            FROM inventory_logs il
+            LEFT JOIN inventory_products ip ON ip.id = il.product_id
+            LEFT JOIN users u ON il.user_id = u.id
+            WHERE il.station_id = ?
+            ORDER BY il.created_at DESC
+            LIMIT 500
+        ");
+        $s->execute([$station_id]);
+        $mgr_movement_history = $s->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
 include __DIR__ . '/../partials/header.php';
 ?>
@@ -4906,7 +4931,7 @@ function mgrAlertChangePerPage() {
 document.addEventListener('DOMContentLoaded', function() {
     /* Run the relevant paginator for the current tab */
     var activeTab = '<?= htmlspecialchars($active_tab) ?>';
-    if (activeTab === 'overview') {
+    if (activeTab === 'overview' || activeTab === 'inventory') {
         mgrMerchRender();
         /* Wire inventory search inputs to reset page on input */
         ['invSearch','invCatFilter','invStockFilter'].forEach(function(id) {
@@ -4938,7 +4963,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     /* Keep setupTablePagination for category-header visibility (harmless) */
     if (typeof setupTablePagination === 'function') {
-        if (activeTab === 'overview') setupTablePagination('mgrMerchTable', null, 'mgrMerchPagination', 25);
+        if (activeTab === 'overview' || activeTab === 'inventory') setupTablePagination('mgrMerchTable', null, 'mgrMerchPagination', 25);
         if (activeTab === 'movement' || activeTab === 'stockin' || activeTab === 'stockout' ||
             activeTab === 'transfers' || activeTab === 'damaged' || activeTab === 'expired')
             setupTablePagination('mgrMerchMovTable', null, 'mgrMerchMovPagination', 25);

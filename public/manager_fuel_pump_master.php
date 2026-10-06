@@ -112,7 +112,7 @@ if (!function_exists('is_preceding_shift_validated')) {
         $exists = (int)$stmt_exists->fetchColumn() > 0;
         
         if (!$exists) {
-            return false;
+            return true;
         }
         
         $stmt_unverified = $pdo->prepare("
@@ -267,20 +267,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $export === '') {
 
             if ($tx['pump_id'] > 0) {
                 $tx_date_str = date('Y-m-d', strtotime($tx['transaction_date']));
+                $is_admin_user = in_array(strtolower(trim($role)), ['admin', 'superadmin', 'manager', 'developer', 'owner']) || in_array(strtolower(trim($me['role'] ?? '')), ['admin', 'superadmin', 'manager', 'developer', 'owner']);
                 
-                // Shift validation gate check
-                if (!is_preceding_shift_validated($pdo, $station_id, $tx['pump_id'], $tx['shift_period'], $tx_date_str)) {
+                // Shift validation gate check - Admin & Manager bypass strict sequence requirement
+                if (!$is_admin_user && !is_preceding_shift_validated($pdo, $station_id, $tx['pump_id'], $tx['shift_period'], $tx_date_str)) {
                     $preceding = get_preceding_shift_and_date($pdo, $tx['shift_period'], $tx_date_str);
                     throw new Exception("Cannot validate this transaction. The transaction for the preceding shift (" . formatShiftLabel($preceding['shift_key']) . " on " . $preceding['date'] . ") for this fuel line must be verified or adjusted first.");
                 }
 
-                // Programmatically set Beginning Reading to match preceding shift's validated Ending Reading
-                $prev_reading = get_preceding_shift_validated_ending($pdo, $station_id, $tx['pump_id'], $tx['shift_period'], $tx_date_str);
+                // Set Beginning Reading to match preceding shift's validated Ending Reading if available; otherwise retain recorded previous reading
+                $prec_ending = get_preceding_shift_validated_ending($pdo, $station_id, $tx['pump_id'], $tx['shift_period'], $tx_date_str);
+                if ($prec_ending > 0) {
+                    $prev_reading = $prec_ending;
+                } else {
+                    $prev_reading = (float)$tx['previous_reading'];
+                }
                 $present_reading = (float)$tx['present_reading'];
                 $calibration = (float)$tx['calibration'];
                 
-                if ($present_reading < $prev_reading) {
-                    throw new Exception("Ending reading (" . number_format($present_reading, 2) . ") cannot be less than the preceding shift's validated ending reading (" . number_format($prev_reading, 2) . ").");
+                if ($prev_reading > 0 && $present_reading < $prev_reading) {
+                    throw new Exception("Ending reading (" . number_format($present_reading, 2) . ") cannot be less than beginning reading (" . number_format($prev_reading, 2) . ").");
                 }
                 
                 $liters_sold = max(0.00, $present_reading - $prev_reading - $calibration);
@@ -321,15 +327,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $export === '') {
             if ($ending !== null && $calibration !== null) {
                 $tx_date_str = date('Y-m-d', strtotime($tx['transaction_date']));
                 $beginning = (float)$tx['previous_reading'];
+                $is_admin_user = in_array(strtolower(trim($role)), ['admin', 'superadmin', 'manager', 'developer', 'owner']) || in_array(strtolower(trim($me['role'] ?? '')), ['admin', 'superadmin', 'manager', 'developer', 'owner']);
 
                 if ($tx['pump_id'] > 0) {
-                    // Shift validation gate check
-                    if (!is_preceding_shift_validated($pdo, $station_id, $tx['pump_id'], $tx['shift_period'], $tx_date_str)) {
+                    // Shift validation gate check - Admin & Manager bypass strict sequence requirement
+                    if (!$is_admin_user && !is_preceding_shift_validated($pdo, $station_id, $tx['pump_id'], $tx['shift_period'], $tx_date_str)) {
                         $preceding = get_preceding_shift_and_date($pdo, $tx['shift_period'], $tx_date_str);
                         throw new Exception("Cannot adjust this transaction. The transaction for the preceding shift (" . formatShiftLabel($preceding['shift_key']) . " on " . $preceding['date'] . ") for this fuel line must be verified or adjusted first.");
                     }
 
-                    $beginning = get_preceding_shift_validated_ending($pdo, $station_id, $tx['pump_id'], $tx['shift_period'], $tx_date_str);
+                    $prec_ending = get_preceding_shift_validated_ending($pdo, $station_id, $tx['pump_id'], $tx['shift_period'], $tx_date_str);
+                    if (isset($_POST['beginning']) && is_numeric($_POST['beginning']) && (float)$_POST['beginning'] > 0) {
+                        $beginning = (float)$_POST['beginning'];
+                    } elseif ($prec_ending > 0) {
+                        $beginning = $prec_ending;
+                    } else {
+                        $beginning = (float)$tx['previous_reading'];
+                    }
                 }
 
                 $liters_sold = $ending - $beginning - $calibration;
@@ -1070,17 +1084,38 @@ require_once __DIR__ . '/../partials/header.php'; require_once __DIR__ . '/../pa
                         <?php foreach ($records as $r): 
                             $status = strtolower($r['status'] ?? 'pending validation');
                             $tx_date = date('Y-m-d', strtotime($r['transaction_date']));
+                            $is_admin_user = in_array(strtolower(trim($role)), ['admin', 'superadmin', 'manager', 'developer', 'owner']) || in_array(strtolower(trim($me['role'] ?? '')), ['admin', 'superadmin', 'manager', 'developer', 'owner']);
                             $preceding_ok = true;
                             
                             $is_pending_action = str_contains($status, 'pending') || in_array($status, ['closing_completed', 'submitted', 'readings_submitted', 'adjusted']);
                             
-                            // Check sequence validation for active validation actions
-                            if ($is_pending_action && $r['pump_id'] > 0) {
+                            // Check sequence validation: Admin and Managers are never locked out
+                            if (!$is_admin_user && $is_pending_action && $r['pump_id'] > 0) {
                                 $preceding_ok = is_preceding_shift_validated($pdo, $station_id, $r['pump_id'], $r['shift_period'], $tx_date);
                             }
                             
                             $shift_lbl = formatShiftLabel($r['shift_period']);
                             $pump_lbl = $r['pump_number'] ?: $r['fuel_type'];
+
+                            $prec_end_calc = get_preceding_shift_validated_ending($pdo, $station_id, $r['pump_id'], $r['shift_period'], $tx_date);
+                            $calc_beginning = $prec_end_calc > 0 ? $prec_end_calc : (float)$r['previous_reading'];
+
+                            $view_modal_payload = [
+                                'txn_id' => $r['transaction_id'],
+                                'pump' => $pump_lbl,
+                                'fuel_type' => $r['fuel_type'],
+                                'beginning' => number_format($r['previous_reading'], 2),
+                                'ending' => number_format($r['present_reading'], 2),
+                                'staff_cal' => number_format($r['staff_calibration'], 2) . ' L',
+                                'mgr_cal' => number_format($r['calibration'], 2) . ' L',
+                                'liters_sold' => number_format($r['liters_sold'], 2) . ' L',
+                                'total_amount' => '₱' . number_format($r['total_amount'], 2),
+                                'staff' => $r['staff_name'],
+                                'status' => getStatusLabel($r['status']),
+                                'validator' => $r['validator_name'] ?: '—',
+                                'validated_at' => $r['validated_at'] ? date('M d, Y h:i A', strtotime($r['validated_at'])) : '—',
+                                'remarks' => $r['reject_reason'] ?: '—'
+                            ];
                         ?>
                             <tr>
                                 <td style="font-weight:700; color:#1e293b; font-size:13px; white-space:nowrap;"><?= date('M d, Y', strtotime($r['transaction_date'])) ?></td>
@@ -1105,6 +1140,9 @@ require_once __DIR__ . '/../partials/header.php'; require_once __DIR__ . '/../pa
                                 </td>
                                 <td style="text-align:center; padding: 6px 4px !important; vertical-align:middle;">
                                     <div style="display:flex; flex-direction:column; gap:4px; align-items:stretch; width:100%; min-width:0;">
+                                        <!-- View Details (Always available for all statuses and roles) -->
+                                        <button type="button" class="act-btn act-btn-view" onclick="openViewModal(<?= htmlspecialchars(json_encode($view_modal_payload)) ?>)" title="View Details"><i class="fas fa-eye"></i> View</button>
+
                                     <?php if ($is_pending_action): ?>
                                         <?php if ($preceding_ok): ?>
                                             <!-- Verify -->
@@ -1114,43 +1152,26 @@ require_once __DIR__ . '/../partials/header.php'; require_once __DIR__ . '/../pa
                                                 <button type="submit" class="act-btn act-btn-verify" title="Verify Readings"><i class="fas fa-check"></i> Verify</button>
                                             </form>
                                             <!-- Edit/Adjust -->
-                                            <button class="act-btn act-btn-edit" onclick="openAdjustModal(<?= htmlspecialchars(json_encode([
+                                            <button type="button" class="act-btn act-btn-edit" onclick="openAdjustModal(<?= htmlspecialchars(json_encode([
                                                 'id' => $r['id'],
                                                 'txn_id' => $r['transaction_id'],
                                                 'pump' => $pump_lbl,
                                                 'fuel_type' => $r['fuel_type'],
-                                                'beginning' => get_preceding_shift_validated_ending($pdo, $station_id, $r['pump_id'], $r['shift_period'], $tx_date),
+                                                'beginning' => $calc_beginning,
                                                 'ending' => $r['present_reading'],
                                                 'calibration' => $r['calibration'],
                                                 'price' => $r['price_per_liter']
                                             ])) ?>)" title="Adjust Readings"><i class="fas fa-edit"></i> Edit</button>
                                             <!-- Reject -->
-                                            <button class="act-btn act-btn-reject" onclick="openRejectModal(<?= $r['id'] ?>, '<?= $r['transaction_id'] ?>')" title="Reject"><i class="fas fa-times"></i> Reject</button>
+                                            <button type="button" class="act-btn act-btn-reject" onclick="openRejectModal(<?= $r['id'] ?>, '<?= $r['transaction_id'] ?>')" title="Reject"><i class="fas fa-times"></i> Reject</button>
                                         <?php else: ?>
                                             <?php 
                                                 $preceding = get_preceding_shift_and_date($pdo, $r['shift_period'], $tx_date);
                                                 $prec_lbl = $preceding ? (formatShiftLabel($preceding['shift_key']) . ' on ' . $preceding['date']) : 'Shift 1';
                                             ?>
-                                            <button class="act-btn disabled" disabled title="Waiting for preceding shift (<?= $prec_lbl ?>) validation"><i class="fas fa-lock"></i> Locked</button>
+                                            <button type="button" class="act-btn disabled" disabled title="Waiting for preceding shift (<?= $prec_lbl ?>) validation"><i class="fas fa-lock"></i> Locked</button>
                                             <span style="font-size:11px; font-weight:700; color:#dc2626; text-align:center; display:block; margin-top:2px;">Check preceding shift</span>
                                         <?php endif; ?>
-                                    <?php else: ?>
-                                        <button class="act-btn act-btn-view" onclick="openViewModal(<?= htmlspecialchars(json_encode([
-                                            'txn_id' => $r['transaction_id'],
-                                            'pump' => $pump_lbl,
-                                            'fuel_type' => $r['fuel_type'],
-                                            'beginning' => number_format($r['previous_reading'], 2),
-                                            'ending' => number_format($r['present_reading'], 2),
-                                            'staff_cal' => number_format($r['staff_calibration'], 2) . ' L',
-                                            'mgr_cal' => number_format($r['calibration'], 2) . ' L',
-                                            'liters_sold' => number_format($r['liters_sold'], 2) . ' L',
-                                            'total_amount' => '₱' . number_format($r['total_amount'], 2),
-                                            'staff' => $r['staff_name'],
-                                            'status' => getStatusLabel($r['status']),
-                                            'validator' => $r['validator_name'],
-                                            'validated_at' => $r['validated_at'] ? date('M d, Y h:i A', strtotime($r['validated_at'])) : '—',
-                                            'remarks' => $r['reject_reason'] ?: '—'
-                                        ])) ?>)"><i class="fas fa-eye"></i> View</button>
                                     <?php endif; ?>
                                     </div>
                                 </td>
@@ -1222,7 +1243,7 @@ require_once __DIR__ . '/../partials/header.php'; require_once __DIR__ . '/../pa
 
                 <div class="modal-fg">
                     <label>Beginning Reading (Preceding Ending)</label>
-                    <input type="number" step="0.01" id="adj_beginning" name="beginning" readonly>
+                    <input type="number" step="0.01" id="adj_beginning" name="beginning" <?= in_array(strtolower(trim($role)), ['admin', 'superadmin', 'manager', 'developer', 'owner']) ? '' : 'readonly' ?> oninput="calculateAdjustedLiters()">
                 </div>
                 <div class="modal-fg">
                     <label>Ending Reading</label>

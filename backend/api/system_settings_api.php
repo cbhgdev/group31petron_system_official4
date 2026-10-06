@@ -155,6 +155,7 @@ try {
                 'color_button'                 => 'appearance',
                 'sidebar_mode'                 => 'appearance',
                 'dashboard_auto_refresh'       => 'appearance',
+                'auto_refresh_interval'        => 'appearance',
                 'session_timeout'              => 'security',
                 'min_password_length'          => 'security',
                 'max_login_attempts'           => 'security',
@@ -179,6 +180,13 @@ try {
             foreach ($settings as $key => $value) {
                 $category = $categoryMap[$key] ?? 'general';
                 $valStr   = is_bool($value) ? ($value ? '1' : '0') : (string)$value;
+                if ($key === 'dashboard_auto_refresh' || $key === 'auto_refresh_interval') {
+                    $sec = max(5, min(300, (int)$value));
+                    $valStr = (string)$sec;
+                    upsertSetting($pdo, 'dashboard_auto_refresh', $valStr, 'appearance', $station_id, $me['id']);
+                    upsertSetting($pdo, 'auto_refresh_interval', $valStr, 'appearance', $station_id, $me['id']);
+                    continue;
+                }
                 if ($key === 'system_status' && $valStr !== 'Maintenance') {
                     $valStr = 'Online';
                 }
@@ -200,9 +208,10 @@ try {
                 upsertSetting($pdo, $key, $valStr, $category, $station_id, $me['id']);
             }
 
-            // Sync global security, notification, and report settings across all stations when updated globally
+            // Sync global security, notification, appearance, and report settings across all stations when updated globally
             if ($station_id === 0) {
                 $globalSyncKeys = [
+                    'dashboard_auto_refresh', 'auto_refresh_interval',
                     'session_timeout', 'min_password_length', 'max_login_attempts',
                     'require_uppercase', 'require_numbers', 'require_special_chars',
                     'banner_duration', 'enable_system_notifications', 'enable_error_notifications',
@@ -211,6 +220,7 @@ try {
                 foreach ($globalSyncKeys as $sk) {
                     if (isset($settings[$sk])) {
                         $sVal = is_bool($settings[$sk]) ? ($settings[$sk] ? '1' : '0') : (string)$settings[$sk];
+                        if ($sk === 'dashboard_auto_refresh' || $sk === 'auto_refresh_interval') $sVal = (string)max(5, min(300, (int)$sVal));
                         if ($sk === 'session_timeout') $sVal = (string)max(1, (int)$sVal);
                         if ($sk === 'min_password_length') $sVal = (string)max(4, (int)$sVal);
                         if ($sk === 'max_login_attempts') $sVal = (string)max(1, (int)$sVal);

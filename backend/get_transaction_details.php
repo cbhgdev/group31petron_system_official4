@@ -105,27 +105,32 @@ try {
             exit;
         }
 
-        // Fetch detailed items and real SKUs from products table
+        // Fetch detailed items and real SKUs from products table (checking both id and transaction_id)
         $items_stmt = $pdo->prepare("
             SELECT mti.product_id, mti.product_name, mti.category, mti.size_variant,
                    mti.quantity, mti.unit_price, mti.subtotal,
                    COALESCE(p.sku, '') AS real_sku
             FROM merchandise_transaction_items mti
             LEFT JOIN products p ON p.id = mti.product_id
-            WHERE mti.transaction_id = ?
+            WHERE (mti.transaction_id = ? OR mti.transaction_id = ?)
+            ORDER BY mti.id ASC
         ");
-        $items_stmt->execute([$row['id']]);
+        $items_stmt->execute([$row['id'], $row['transaction_id']]);
         $items_rows = $items_stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $sku_list = [];
         $items_breakdown = [];
         if (!empty($items_rows)) {
             foreach ($items_rows as $it) {
+                $pname = trim((string)($it['product_name'] ?? ''));
+                if (in_array($pname, ['', '—', '-', 'N/A', 'n/a', 'none', 'None'], true)) {
+                    $pname = 'Merchandise Item';
+                }
                 $item_sku_code = !empty($it['real_sku']) ? $it['real_sku'] : ('SKU-' . $it['product_id']);
                 $sku_list[] = $item_sku_code;
                 $items_breakdown[] = [
                     'sku'          => $item_sku_code,
-                    'product_name' => $it['product_name'],
+                    'product_name' => $pname,
                     'category'     => $it['category'] ?: 'Merchandise',
                     'quantity'     => (float)$it['quantity'],
                     'unit_price'   => number_format((float)$it['unit_price'], 2),
@@ -133,6 +138,71 @@ try {
                 ];
             }
         }
+
+        // Fallback: build items_breakdown from merchandise_transactions fields if empty
+        $txn_type_for_fb = strtolower(trim((string)($row['transaction_type'] ?? '')));
+        $jo_svc_for_fb   = trim((string)($row['job_order_service'] ?? ''));
+        $is_jo_for_fb    = in_array($txn_type_for_fb, ['job_order', 'combined'], true)
+                           || ($jo_svc_for_fb !== '' && !in_array($jo_svc_for_fb, ['—', '-', 'N/A', 'n/a', 'none', 'None', 'null', 'NULL'], true));
+
+        if (empty($items_breakdown)) {
+            // For job order type transactions: use service info as the breakdown row
+            if ($is_jo_for_fb && $jo_svc_for_fb !== '' && !in_array($jo_svc_for_fb, ['—', '-', 'N/A', 'n/a', 'none', 'None', 'null', 'NULL'], true)) {
+                $svc_total = (float)($row['total_amount'] ?? 0);
+                $items_breakdown[] = [
+                    'sku'          => 'SVC',
+                    'product_name' => $jo_svc_for_fb,
+                    'category'     => 'Service',
+                    'quantity'     => 1,
+                    'unit_price'   => number_format($svc_total, 2),
+                    'subtotal'     => number_format($svc_total, 2),
+                ];
+                $sku_list[] = 'SVC';
+            } else {
+                $raw_sku = trim((string)($row['item_sku'] ?? ''));
+                $prod_name = '';
+                if ($raw_sku !== '' && !in_array($raw_sku, ['—', '-', 'N/A', 'n/a'], true)) {
+                    try {
+                        $pst = $pdo->prepare("SELECT product_name FROM products WHERE sku = ? OR name = ? OR id = ? LIMIT 1");
+                        $pst->execute([$raw_sku, $raw_sku, $raw_sku]);
+                        $pn = $pst->fetchColumn();
+                        if ($pn) $prod_name = $pn;
+                    } catch (Throwable $e) {}
+
+                    if (!$prod_name) {
+                        try {
+                            $ip_st = $pdo->prepare("SELECT product_name FROM inventory_products WHERE product_name = ? OR sku = ? OR id = ? LIMIT 1");
+                            $ip_st->execute([$raw_sku, $raw_sku, $raw_sku]);
+                            $pn2 = $ip_st->fetchColumn();
+                            if ($pn2) $prod_name = $pn2;
+                        } catch (Throwable $e) {}
+                    }
+                    if (!$prod_name) $prod_name = $raw_sku;
+                }
+                if (!$prod_name || in_array($prod_name, ['—', '-', 'N/A', 'n/a'], true)) {
+                    $prod_name = 'Merchandise Item';
+                }
+
+                $fb_qty = (float)($row['quantity'] ?? 1);
+                if ($fb_qty <= 0) $fb_qty = 1;
+                $fb_tot = (float)($row['total_amount'] ?? 0);
+                $fb_price = (float)($row['unit_price'] ?? 0);
+                if ($fb_price <= 0 && $fb_qty > 0 && $fb_tot > 0) {
+                    $fb_price = round($fb_tot / $fb_qty, 2);
+                }
+
+                $items_breakdown[] = [
+                    'sku'          => $raw_sku ?: 'N/A',
+                    'product_name' => $prod_name,
+                    'category'     => 'Merchandise',
+                    'quantity'     => $fb_qty,
+                    'unit_price'   => number_format($fb_price, 2),
+                    'subtotal'     => number_format($fb_tot > 0 ? $fb_tot : ($fb_qty * $fb_price), 2),
+                ];
+                $sku_list[] = $raw_sku ?: 'N/A';
+            }
+        }
+
         $formatted_item_sku = !empty($sku_list) ? implode(', ', array_unique($sku_list)) : ($row['item_sku'] ?: 'N/A');
 
         // Intelligent fallbacks for Change, Validated By, and Validated At
@@ -177,7 +247,10 @@ try {
             : ($pending_void_req['remarks'] ?? ($row['remarks'] ?? ''));
 
         // Format response for merchandise transaction
-        $is_jo_type = (in_array(strtolower($row['transaction_type'] ?? ''), ['job_order', 'combined']) || !empty(trim($row['job_order_service'] ?? '')));
+        $jo_svc = trim((string)($row['job_order_service'] ?? ''));
+        $is_real_jo_svc = ($jo_svc !== '' && !in_array($jo_svc, ['', '—', '-', 'N/A', 'n/a', 'none', 'None', 'null', 'NULL', '— (x1)'], true));
+        $txn_type_str = strtolower(trim((string)($row['transaction_type'] ?? '')));
+        $is_jo_type = (in_array($txn_type_str, ['job_order', 'combined'], true) || ($is_real_jo_svc && $txn_type_str !== 'merchandise'));
         $pay_info = function_exists('format_payment_for_record') ? format_payment_for_record($row) : [
             'payment_type' => $row['payment_method'],
             'provider' => $row['ewallet_provider'] ?? '',
@@ -374,6 +447,44 @@ try {
             'display_inline' => $row['payment_method']
         ];
 
+        // Build items_breakdown for job order (service as a line item)
+        $jo_items_breakdown = [];
+        $svc_price_details = [];
+        if (!empty($row['service_price_details'])) {
+            $svc_price_details = json_decode($row['service_price_details'], true) ?: [];
+        }
+
+        if (!empty($svc_price_details) && is_array($svc_price_details)) {
+            foreach ($svc_price_details as $svc) {
+                $svc_name = $svc['name'] ?? $svc['service_type'] ?? ($row['service_type'] ?: 'Service');
+                $svc_qty  = (float)($svc['qty'] ?? $svc['quantity'] ?? 1);
+                if ($svc_qty <= 0) $svc_qty = 1;
+                $svc_price = (float)($svc['price'] ?? $svc['unit_price'] ?? $svc['cost'] ?? 0);
+                $jo_items_breakdown[] = [
+                    'sku'          => 'SVC',
+                    'product_name' => $svc_name,
+                    'category'     => 'Service',
+                    'quantity'     => $svc_qty,
+                    'unit_price'   => number_format($svc_price, 2),
+                    'subtotal'     => number_format($svc_qty * $svc_price, 2),
+                ];
+            }
+        }
+
+        // Fallback: single service row from main fields
+        if (empty($jo_items_breakdown)) {
+            $svc_name  = $row['service_type'] ?: 'Service';
+            $svc_total = $jo_total > 0 ? $jo_total : (float)($row['estimated_cost'] ?? 0);
+            $jo_items_breakdown[] = [
+                'sku'          => 'SVC',
+                'product_name' => $svc_name,
+                'category'     => 'Service',
+                'quantity'     => 1,
+                'unit_price'   => number_format($svc_total, 2),
+                'subtotal'     => number_format($svc_total, 2),
+            ];
+        }
+
         // Format response for job order
         echo json_encode([
             'success' => true,
@@ -411,6 +522,7 @@ try {
             'staff_name' => $row['staff_name'] ?: 'Unknown',
             'validated_by' => $jo_validated_by,
             'mechanic_name' => $row['mechanic_name'] ?: 'Not assigned',
+            'items_breakdown' => $jo_items_breakdown,
             'audit_trail' => (function() use ($pdo, $row, $id) {
                 try {
                     $jo_no = $row['job_order_number'] ?? 'JO-'.$id;

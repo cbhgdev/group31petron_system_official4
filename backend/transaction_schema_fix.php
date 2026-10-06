@@ -7,6 +7,11 @@
  */
 if (!isset($pdo)) return;
 
+// Fast-path: Skip 38 DDL queries if already provisioned in this session
+if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['transaction_schema_fixed'])) {
+    return;
+}
+
 $fixes = [
     // ── merchandise_transactions columns ─────────────────────────────────────
     "ALTER TABLE merchandise_transactions ADD COLUMN IF NOT EXISTS customer_id        INT          DEFAULT NULL",
@@ -178,3 +183,7 @@ try {
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ");
 } catch (Exception $e) {}
+
+if (session_status() === PHP_SESSION_ACTIVE) {
+    $_SESSION['transaction_schema_fixed'] = true;
+}

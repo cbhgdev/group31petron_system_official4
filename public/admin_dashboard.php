@@ -3038,7 +3038,10 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    setInterval(autoRefreshAdminDashboard, 10000);
+    const adminRefreshMs = (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000)
+        ? window.PETRON_AUTO_REFRESH_MS
+        : 10000;
+    setInterval(autoRefreshAdminDashboard, adminRefreshMs);
 });
 </script>
 

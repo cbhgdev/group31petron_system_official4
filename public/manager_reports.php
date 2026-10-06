@@ -293,12 +293,9 @@ require_once __DIR__ . '/../partials/header.php';
 // ── LOAD DYNAMIC REPORT SETTINGS FROM SYSTEM SETTINGS ──
 $rpt_paper_size   = $station_settings['default_paper_size'] ?? 'A4';
 $rpt_orientation  = strtolower($station_settings['default_orientation'] ?? 'portrait');
-$rpt_show_logo    = (isset($station_settings['show_company_logo_reports']) && ($station_settings['show_company_logo_reports'] === '0' || $station_settings['show_company_logo_reports'] === 0)) ? false : true;
+$rpt_show_logo    = false; // Logo removed from reports per user request
 $rpt_show_footer  = (isset($station_settings['show_report_footer']) && ($station_settings['show_report_footer'] === '0' || $station_settings['show_report_footer'] === 0)) ? false : true;
-$rpt_logo_url     = $station_settings['company_logo'] ?? $station_settings['logo'] ?? '../assets/img/Petron Logo.png';
-if ($rpt_logo_url === 'none' || empty($rpt_logo_url)) {
-    $rpt_show_logo = false;
-}
+$rpt_logo_url     = '';
 ?>
 
 <style>
@@ -1451,11 +1448,6 @@ table.rpt-table.rpt-table-fixed .badge {
         <div class="rpt-printable-area" id="adminReportPrintable">
             <!-- Manager-Style Centered Header Title -->
             <div class="rpt-header-title text-center py-2 mb-4" style="text-align: center !important;">
-                <?php if ($rpt_show_logo && !empty($rpt_logo_url)): ?>
-                    <div style="text-align: center; margin-bottom: 10px;" data-report-logo="1">
-                        <img src="<?= htmlspecialchars($rpt_logo_url) ?>" alt="Company Logo" class="rpt-company-logo" style="max-height: 52px; max-width: 180px; object-fit: contain; display: inline-block;">
-                    </div>
-                <?php endif; ?>
                 <h2 style="font-size: 22px !important; font-weight: 800 !important; color: #00264D !important; text-transform: uppercase !important; margin: 0 0 2px !important; letter-spacing: 0.5px !important; text-align: center !important;">
                     <?= htmlspecialchars($main_title) ?>
                 </h2>

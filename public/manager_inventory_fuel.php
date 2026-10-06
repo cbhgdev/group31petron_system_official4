@@ -567,51 +567,55 @@ if ($active_tab === 'movement') {
     $mov_total = count($mov_rows);
 }
 
-// â”€â”€ Fetch Deliveries Tab Data â”€â”€
+// ── Fetch Deliveries Tab Data ──
 $deliveries_tab_list = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT
-            CONCAT('DEL-', LPAD(fd.id, 5, '0')) AS delivery_no,
-            COALESCE(NULLIF(fd.invoice_no,''), '—') AS po_no,
-            COALESCE(NULLIF(fd.supplier,''), 'Petron Corporation') AS supplier,
-            fd.delivery_liters AS liters,
-            COALESCE(fp.price_per_liter, 0) AS cost_per_liter,
-            fd.delivery_date AS date,
-            fd.fuel_type
-        FROM fuel_deliveries fd
-        LEFT JOIN fuel_pricing fp ON LOWER(fp.fuel_type_id) = LOWER(fd.fuel_type) AND fp.station_id = fd.station_id
-        WHERE fd.station_id = ?
-        ORDER BY fd.delivery_date DESC, fd.id DESC
-        LIMIT 200
-    ");
-    $stmt->execute([$station_id]);
-    $deliveries_tab_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'deliveries') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                CONCAT('DEL-', LPAD(fd.id, 5, '0')) AS delivery_no,
+                COALESCE(NULLIF(fd.invoice_no,''), '—') AS po_no,
+                COALESCE(NULLIF(fd.supplier,''), 'Petron Corporation') AS supplier,
+                fd.delivery_liters AS liters,
+                COALESCE(fp.price_per_liter, 0) AS cost_per_liter,
+                fd.delivery_date AS date,
+                fd.fuel_type
+            FROM fuel_deliveries fd
+            LEFT JOIN fuel_pricing fp ON LOWER(fp.fuel_type_id) = LOWER(fd.fuel_type) AND fp.station_id = fd.station_id
+            WHERE fd.station_id = ?
+            ORDER BY fd.delivery_date DESC, fd.id DESC
+            LIMIT 200
+        ");
+        $stmt->execute([$station_id]);
+        $deliveries_tab_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
-// â”€â”€ Fetch Meter Readings Tab Data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Fetch Meter Readings Tab Data ──
 $meter_readings_list = [];
-try {
-    $stmt = $pdo->prepare("
-        SELECT
-            fa.id,
-            fa.adjustment_date AS date,
-            COALESCE(fa.fuel_type, '—') AS fuel_type,
-            'UGT-01' AS ugt_no,
-            fa.previous_value AS dip_reading,
-            fa.new_value AS meter_reading,
-            (fa.new_value - fa.previous_value) AS variance,
-            COALESCE(u.name, 'Manager') AS adjusted_by,
-            COALESCE(NULLIF(fa.reason,''), NULLIF(fa.notes,''), 'Routine Meter Calibration') AS remarks
-        FROM fuel_adjustments fa
-        LEFT JOIN users u ON fa.user_id = u.id
-        WHERE fa.station_id = ?
-        ORDER BY fa.adjustment_date DESC, fa.id DESC
-        LIMIT 200
-    ");
-    $stmt->execute([$station_id]);
-    $meter_readings_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
+if ($active_tab === 'readings') {
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                fa.id,
+                fa.adjustment_date AS date,
+                COALESCE(fa.fuel_type, '—') AS fuel_type,
+                'UGT-01' AS ugt_no,
+                fa.previous_value AS dip_reading,
+                fa.new_value AS meter_reading,
+                (fa.new_value - fa.previous_value) AS variance,
+                COALESCE(u.name, 'Manager') AS adjusted_by,
+                COALESCE(NULLIF(fa.reason,''), NULLIF(fa.notes,''), 'Routine Meter Calibration') AS remarks
+            FROM fuel_adjustments fa
+            LEFT JOIN users u ON fa.user_id = u.id
+            WHERE fa.station_id = ?
+            ORDER BY fa.adjustment_date DESC, fa.id DESC
+            LIMIT 200
+        ");
+        $stmt->execute([$station_id]);
+        $meter_readings_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {}
+}
 
 // â”€â”€ Fetch Remaining Fuel Volume Tab Data â”€â”€
 $fuel_types_grouped = [];

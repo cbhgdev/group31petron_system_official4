@@ -60,34 +60,7 @@ if (!in_array($role, ['staff', 'cashier', 'pump_attendant', 'admin', 'manager', 
     exit;
 }
 
-// ── Schema safety: widen columns that are too narrow (idempotent) ─────────────
-foreach ([
-    "ALTER TABLE fuel_transactions MODIFY COLUMN `shift_period` VARCHAR(50) NOT NULL DEFAULT 'general'",
-    "ALTER TABLE fuel_transactions MODIFY COLUMN `payment_method` VARCHAR(50) NOT NULL DEFAULT 'Internal'",
-    "ALTER TABLE fuel_deliveries MODIFY COLUMN `status` VARCHAR(60) NOT NULL DEFAULT 'Pending'",
-    "ALTER TABLE fuel_deliveries MODIFY COLUMN `fuel_type` VARCHAR(100) DEFAULT NULL",
-] as $_fix) {
-    try { $pdo->exec($_fix); } catch (Exception $_e) {}
-}
-unset($_fix, $_e);
-
-// ── Job Order Tracker enhancements — idempotent column additions ──────────────
-// Adds: due_date, balance_due on job_orders; staff_remarks, manager_notes,
-//       due_date, inventory_deducted on merchandise_transactions.
-// Uses try/catch so existing columns are ignored silently.
-foreach ([
-    "ALTER TABLE `job_orders` ADD COLUMN `due_date` DATE DEFAULT NULL COMMENT 'Payment due date for receivables'",
-    "ALTER TABLE `job_orders` ADD COLUMN `balance_due` DECIMAL(12,2) NOT NULL DEFAULT 0.00 COMMENT 'Outstanding balance'",
-    "ALTER TABLE `merchandise_transactions` ADD COLUMN `staff_remarks` TEXT DEFAULT NULL COMMENT 'Staff-entered notes (separate from legacy remarks)'",
-    "ALTER TABLE `merchandise_transactions` ADD COLUMN `manager_notes` TEXT DEFAULT NULL COMMENT 'Manager validation / approval notes'",
-    "ALTER TABLE `merchandise_transactions` ADD COLUMN `due_date` DATE DEFAULT NULL COMMENT 'Payment due date for receivables'",
-    "ALTER TABLE `merchandise_transactions` ADD COLUMN `inventory_deducted` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=stock deducted from station_inventory on approval'",
-] as $_col_fix) {
-    try { $pdo->exec($_col_fix); } catch (Exception $_ce) {
-        // Column already exists — ignore Duplicate column error (1060)
-    }
-}
-unset($_col_fix, $_ce);
+// ── Schema safety: columns already permanently provisioned ───────────────────
 
 // Fetch Loyalty Program settings
 require_once __DIR__ . '/../backend/loyalty_schema_fix.php';
@@ -1538,6 +1511,13 @@ if ($section === 'merchandise') {
                             $pdo->prepare("UPDATE merchandise_transactions SET $sets WHERE id=? AND (station_id=? OR ?=0)")->execute(array_merge($params, [$jo_id, $station_id, $station_id]));
 
                             try {
+                                $jo_sync_sets = "payment_status=?, amount_paid=?, balance_due=?, payment_method=?, updated_at=NOW()";
+                                if ($mark_complete || $new_balance <= 0.009) { $jo_sync_sets .= ", status='Completed'"; }
+                                $pdo->prepare("UPDATE job_orders SET $jo_sync_sets WHERE (id = (SELECT job_order_db_id FROM merchandise_transactions WHERE id = ?) OR job_order_id = ?) AND (station_id=? OR ?=0)")
+                                    ->execute(array_merge([$new_status, $new_paid, $new_balance, $pay_method], [$jo_id, $jo_id, $station_id, $station_id]));
+                            } catch (Exception $j_sync) {}
+
+                            try {
                                 $pdo->prepare("
                                     UPDATE customer_accounts_receivable 
                                     SET amount_paid = amount_paid + ?, 
@@ -1563,8 +1543,14 @@ if ($section === 'merchandise') {
                             $new_status  = $new_balance <= 0.009 ? 'Paid' : 'Partially Paid';
                             $sets = "payment_status=?, amount_paid=?, balance_due=?, payment_method=?, updated_at=NOW()";
                             $params = [$new_status, $new_paid, $new_balance, $pay_method];
-                            if ($mark_complete) { $sets .= ", status='Completed'"; }
+                            if ($mark_complete || $new_balance <= 0.009) { $sets .= ", status='Completed'"; }
                             $pdo->prepare("UPDATE job_orders SET $sets WHERE id=? AND (station_id=? OR ?=0)")->execute(array_merge($params, [$jo_id, $station_id, $station_id]));
+                            try {
+                                $mt_sync_sets = "payment_status=?, amount_paid=?, balance_due=?, payment_method=?, updated_at=NOW()";
+                                if ($mark_complete || $new_balance <= 0.009) { $mt_sync_sets .= ", workflow_status='Completed'"; }
+                                $pdo->prepare("UPDATE merchandise_transactions SET $mt_sync_sets WHERE (job_order_db_id = ? OR id = ?) AND (station_id=? OR ?=0)")
+                                    ->execute(array_merge([$new_status, $new_paid, $new_balance, $pay_method], [$jo_id, $jo_id, $station_id, $station_id]));
+                            } catch (Exception $mt_sync) {}
                             try { $pdo->prepare("INSERT INTO payment_audit_log (record_id, record_source, staff_id, station_id, amount_paid, payment_method, balance_due, payment_status, remarks, logged_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())")->execute([$jo_id,'job_orders',$me['id'],$station_id,$amount_now,$pay_method,$new_balance,$new_status,$remarks]); } catch(Exception $ae){}
                             $_SESSION['success'] = $new_status === 'Paid' ? 'Payment fully settled. Balance: ₱0.00.' : 'Partial payment recorded. Balance due: ₱' . number_format($new_balance, 2) . '.';
                         }
@@ -1585,11 +1571,11 @@ if ($section === 'merchandise') {
                         } catch (Exception $je) {}
                         $_SESSION['success'] = 'Job Order marked as In Progress.';
                     } elseif ($jo_action === 'set_completed') {
-                        $pdo->prepare("UPDATE merchandise_transactions SET workflow_status='Completed', updated_at=NOW() WHERE id=? AND (station_id=? OR ?=0)")
+                        $pdo->prepare("UPDATE merchandise_transactions SET workflow_status='Completed', payment_status=IF(payment_method='Cash','Paid',payment_status), amount_paid=IF(payment_method='Cash',total_amount,amount_paid), balance_due=IF(payment_method='Cash',0,balance_due), updated_at=NOW() WHERE id=? AND (station_id=? OR ?=0)")
                             ->execute([$jo_id, $station_id, $station_id]);
                         try {
-                            $pdo->prepare("UPDATE job_orders SET status='Completed', updated_at=NOW() WHERE (job_order_id = ? OR id = (SELECT job_order_db_id FROM merchandise_transactions WHERE id = ?)) AND (station_id=? OR ?=0)")
-                                ->execute([$jo_id, $jo_id, $station_id, $station_id]);
+                            $pdo->prepare("UPDATE job_orders SET status='Completed', payment_status=IF(payment_method='Cash','Paid',payment_status), amount_paid=IF(payment_method='Cash',COALESCE(total_cost,estimated_cost,0),amount_paid), balance_due=IF(payment_method='Cash',0,balance_due), updated_at=NOW() WHERE (id = ? OR job_order_id = ? OR id = (SELECT job_order_db_id FROM merchandise_transactions WHERE id = ?)) AND (station_id=? OR ?=0)")
+                                ->execute([$jo_id, $jo_id, $jo_id, $station_id, $station_id]);
                         } catch (Exception $je) {}
                         $_SESSION['success'] = 'Job Order marked as Completed.';
                     } elseif ($jo_action === 'release_job_order' || $jo_action === 'set_released') {
@@ -1699,10 +1685,10 @@ if ($section === 'merchandise') {
                         } catch (Exception $mte) {}
                         $_SESSION['success'] = 'Job Order marked as In Progress.';
                     } elseif ($jo_action === 'set_completed') {
-                        $pdo->prepare("UPDATE job_orders SET status='Completed', updated_at=NOW() WHERE id=? AND (station_id=? OR ?=0)")
+                        $pdo->prepare("UPDATE job_orders SET status='Completed', payment_status=IF(payment_method='Cash','Paid',payment_status), amount_paid=IF(payment_method='Cash',COALESCE(total_cost,estimated_cost,0),amount_paid), balance_due=IF(payment_method='Cash',0,balance_due), updated_at=NOW() WHERE id=? AND (station_id=? OR ?=0)")
                             ->execute([$jo_id, $station_id, $station_id]);
                         try {
-                            $pdo->prepare("UPDATE merchandise_transactions SET workflow_status='Completed', updated_at=NOW() WHERE (job_order_db_id = ? OR id = ?) AND (station_id=? OR ?=0)")
+                            $pdo->prepare("UPDATE merchandise_transactions SET workflow_status='Completed', payment_status=IF(payment_method='Cash','Paid',payment_status), amount_paid=IF(payment_method='Cash',total_amount,amount_paid), balance_due=IF(payment_method='Cash',0,balance_due), updated_at=NOW() WHERE (job_order_db_id = ? OR id = ?) AND (station_id=? OR ?=0)")
                                 ->execute([$jo_id, $jo_id, $station_id, $station_id]);
                         } catch (Exception $mte) {}
                         $_SESSION['success'] = 'Job Order marked as Completed.';
@@ -1908,8 +1894,8 @@ if ($section === 'merchandise') {
                         'Service'
                     ) AS service_type,
                     COALESCE(jo_ref.service_description, '') AS service_description,
-                    COALESCE(mt.workflow_status, mt.validation_status, 'Pending') AS status,
-                    COALESCE(mt.validation_status, 'Pending') AS validation_status,
+                    COALESCE(NULLIF(TRIM(mt.workflow_status), ''), jo_ref.status, NULLIF(TRIM(mt.validation_status), ''), 'Pending') AS status,
+                    COALESCE(NULLIF(TRIM(mt.validation_status), ''), 'Pending') AS validation_status,
                     COALESCE(
                         (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category != 'Labor' AND product_name NOT LIKE '%Labor%'),
                         mt.total_amount
@@ -12453,6 +12439,13 @@ setTimeout(function() {
             if (s) s.textContent = '₱' + fmtNum(subtotal);
             if (v) v.textContent = '₱' + fmtNum(vat);
             if (g) g.textContent = '₱' + fmtNum(grand);
+            const method = document.getElementById('paymentMethod')?.value || 'Cash';
+            if (method === 'Cash') {
+                const at = document.getElementById('amountTendered');
+                if (at && (!at.value || parseFloat(at.value) === 0)) {
+                    at.value = grand > 0 ? grand.toFixed(2) : '';
+                }
+            }
             computeChange();
             updateLoyaltyPointsEarned(grand);
         }
@@ -12518,6 +12511,7 @@ setTimeout(function() {
 
             const grand = getGrandTotal();
             const prefillMap = {
+                'Cash': 'amountTendered',
                 'Card': 'cardAmount', 'Credit Card': 'cardAmount', 'Debit Card': 'cardAmount',
                 'E-Wallet': 'ewAmount', 'GCash': 'ewAmount', 'Maya': 'ewAmount',
                 'Petron Fleet Card': 'fcAmount', 'Petron Loyalty Points': 'lpAmount'
@@ -12580,6 +12574,10 @@ setTimeout(function() {
             if (!val && (method === 'Card' || method === 'Credit Card' || method === 'Debit Card')) {
                 val = parseFloat(document.getElementById('cardAmount')?.value || document.getElementById('ccAmount')?.value || document.getElementById('dcAmount')?.value || 0);
             }
+            if ((!val || val <= 0) && method === 'Cash') {
+                const grand = getGrandTotal();
+                if (grand > 0) return grand;
+            }
             return isNaN(val) ? 0 : val;
         }
 
@@ -12597,8 +12595,13 @@ setTimeout(function() {
         }
 
         window.computeChange = function computeChange() {
-            const grand    = getGrandTotal();
-            const tendered = parseFloat(document.getElementById('amountTendered')?.value || 0);
+            const grand       = getGrandTotal();
+            const tenderedInp = document.getElementById('amountTendered');
+            let tendered      = parseFloat(tenderedInp?.value || 0);
+            const method      = document.getElementById('paymentMethod')?.value || 'Cash';
+            if (method === 'Cash' && (!tendered || tendered <= 0) && grand > 0 && tenderedInp && !tenderedInp.value) {
+                tendered = grand;
+            }
             const changeWrap = document.getElementById('changeWrap');
             const changeEl   = document.getElementById('changeAmount');
             const balWrap    = document.getElementById('cashBalanceWrap');
@@ -12780,7 +12783,10 @@ setTimeout(function() {
                 };
             }
 
-            const amountPaid = _getAmountPaid(method);
+            let amountPaid = _getAmountPaid(method);
+            if (method === 'Cash' && (!amountPaid || amountPaid <= 0)) {
+                amountPaid = grand;
+            }
             let paymentStatus;
             if (method === 'Credit Account') {
                 paymentStatus = 'Pending';
@@ -12838,8 +12844,8 @@ setTimeout(function() {
                 customer_contact:    contactNumber || null,
                 customer_name:       fullName,
                 payment_method:      canonicalPaymentMethod,
-                amount_paid:         amountPaid > 0 ? amountPaid : null,
-                amount_tendered:     method === 'Cash' ? (amountPaid > 0 ? amountPaid : null) : null,
+                amount_paid:         amountPaid > 0 ? amountPaid : (method === 'Cash' ? grand : null),
+                amount_tendered:     method === 'Cash' ? (amountPaid > 0 ? amountPaid : grand) : null,
                 change_amount:       method === 'Cash' && amountPaid >= grand ? parseFloat((amountPaid - grand).toFixed(2)) : null,
                 balance_due:         balanceDue > 0 ? parseFloat(balanceDue.toFixed(2)) : null,
                 payment_status:      paymentStatus,
@@ -13205,9 +13211,9 @@ setTimeout(function() {
                             $wf_color='#991b1b'; $wf_bg='#fee2e2'; $wf_label='Voided'; $row_filter='voided';
                         } elseif ($wf_status === 'Released') {
                             $wf_color='#475569'; $wf_bg='#f1f5f9'; $wf_label='Released'; $row_filter='released';
-                        } elseif ($wf_status === 'Completed' || $val_status === 'Completed') {
+                        } elseif (in_array(strtolower($wf_status), ['completed', 'finished', 'done', 'paid'], true) || in_array(strtolower($val_status), ['completed', 'finished', 'approved', 'official'], true)) {
                             $wf_color='#16a34a'; $wf_bg='#dcfce7'; $wf_label='Completed'; $row_filter='completed';
-                        } elseif ($wf_status === 'In Progress' || $val_status === 'In Progress') {
+                        } elseif (in_array(strtolower($wf_status), ['in progress', 'inprogress', 'active', 'ongoing'], true) || in_array(strtolower($val_status), ['in progress', 'inprogress'], true)) {
                             $wf_color='#8b5cf6'; $wf_bg='#ede9fe'; $wf_label='In Progress'; $row_filter='inprogress';
                         } elseif ($wf_status === 'Waiting for Parts' || $wf_status === 'Waiting For Parts') {
                             $wf_color='#2563eb'; $wf_bg='#dbeafe'; $wf_label='Waiting for Parts'; $row_filter='waiting_for_parts';
@@ -13669,6 +13675,33 @@ setTimeout(function() {
                                     <?php endif; ?>
 
                                 <?php else: ?>
+                                    <?php if ($pay_status === 'Paid'): ?>
+                                        <form method="POST" action="staff_transactions_hub.php?section=merchandise&active_tab=tracker" style="margin:0;width:100%;">
+                                            <input type="hidden" name="jo_action" value="set_completed">
+                                            <input type="hidden" name="jo_id" value="<?= (int)$job['id'] ?>">
+                                            <input type="hidden" name="jo_source" value="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>">
+                                            <button type="submit" 
+                                                    class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
+                                                <i class="fas fa-check"></i> Mark Complete
+                                            </button>
+                                        </form>
+                                    <?php else: ?>
+                                        <button type="button"
+                                                onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',true,'tracker')"
+                                                class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
+                                            <i class="fas fa-check"></i> Complete & Settle
+                                        </button>
+                                        <form method="POST" action="staff_transactions_hub.php?section=merchandise&active_tab=tracker" style="margin:0;width:100%;" onsubmit="return confirm('Mark this Job Order as Completed?');">
+                                            <input type="hidden" name="jo_action" value="set_completed">
+                                            <input type="hidden" name="jo_id" value="<?= (int)$job['id'] ?>">
+                                            <input type="hidden" name="jo_source" value="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>">
+                                            <button type="submit" 
+                                                    class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#f0fdf4 !important;color:#16a34a !important;border:1px solid #86efac !important;">
+                                                <i class="fas fa-check-circle"></i> Mark Complete
+                                            </button>
+                                        </form>
+                                    <?php endif; ?>
+
                                     <?php if ($wf_status !== 'In Progress' && $val_status !== 'Pending Validation'): ?>
                                         <form method="POST" action="staff_transactions_hub.php?section=merchandise&active_tab=tracker" style="margin:0;width:100%;">
                                             <input type="hidden" name="jo_action" value="set_in_progress">

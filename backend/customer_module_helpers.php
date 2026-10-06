@@ -37,6 +37,9 @@ if (!function_exists('customer_has_column')) {
 
 if (!function_exists('customer_ensure_optional_columns')) {
     function customer_ensure_optional_columns(PDO $pdo): void {
+        if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['customer_cols_ensured'])) {
+            return;
+        }
         static $done = false;
         if ($done) {
             return;
@@ -127,11 +130,17 @@ if (!function_exists('customer_ensure_optional_columns')) {
 
         customer_table_columns($pdo, true);
         $done = true;
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            $_SESSION['customer_cols_ensured'] = true;
+        }
     }
 }
 
 if (!function_exists('customer_ensure_request_table')) {
     function customer_ensure_request_table(PDO $pdo): void {
+        if (session_status() === PHP_SESSION_ACTIVE && !empty($_SESSION['customer_req_table_ensured'])) {
+            return;
+        }
         static $done = false;
         if ($done) {
             return;
@@ -170,6 +179,9 @@ if (!function_exists('customer_ensure_request_table')) {
         }
 
         $done = true;
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            $_SESSION['customer_req_table_ensured'] = true;
+        }
     }
 }
 

@@ -609,9 +609,11 @@ table.merch-tbl td:nth-child(4) {
   .inv-card-body{padding:8px;}
   #merchTable thead th, #merchTable tbody td{font-size:11px!important;padding:6px 3px!important;}
 }
-.mi-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:13000;align-items:center;justify-content:center;padding:24px 16px;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+.mi-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:13000;align-items:center;justify-content:center;padding-top:96px;padding-bottom:66px;padding-left:270px;padding-right:20px;box-sizing:border-box;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+body.sidebar-collapsed .mi-overlay{padding-left:90px!important;}
+@media(max-width:991px){.mi-overlay{padding-left:16px!important;padding-right:16px!important;padding-top:85px!important;padding-bottom:60px!important;}}
 .mi-overlay.open{display:flex !important;}
-.mi-box{background:#fff;border-radius:14px;padding:0;width:720px;max-width:calc(100vw - 32px);display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,.3);animation:miIn .2s ease;overflow:hidden;position:relative;max-height:calc(100vh - 150px) !important;}
+.mi-box{background:#fff;border-radius:14px;padding:0;width:720px;max-width:calc(100vw - 32px);display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,.3);animation:miIn .2s ease;overflow:hidden;position:relative;max-height:calc(100vh - 170px) !important;margin:auto!important;}
 .mi-box.wide{width:880px;max-width:calc(100vw - 32px);}
 @keyframes miIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
 .mi-head{display:flex;justify-content:space-between;align-items:center;padding:16px 24px;border-bottom:1.5px solid #e9ecef;flex-shrink:0;background:#fff;position:relative;z-index:1;}
@@ -2465,13 +2467,48 @@ function submitAdjustmentForm(e) {
 
 <!-- ══ INVENTORY ADJUSTMENT MODAL ══ -->
 <style>
+#staffAdjustmentModal {
+    display: none;
+    position: fixed !important;
+    inset: 0 !important;
+    background: rgba(0, 0, 0, 0.6) !important;
+    z-index: 15000 !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding-top: 96px !important;    /* 70px top header + 26px equal space */
+    padding-bottom: 66px !important; /* 40px fixed footer + 26px equal space */
+    padding-left: 270px !important;  /* 250px sidebar + 20px space */
+    padding-right: 20px !important;
+    box-sizing: border-box !important;
+    overflow-y: auto !important;
+}
+body.sidebar-collapsed #staffAdjustmentModal {
+    padding-left: 90px !important;
+}
+@media (max-width: 991px) {
+    #staffAdjustmentModal {
+        padding-left: 16px !important;
+        padding-right: 16px !important;
+        padding-top: 85px !important;
+        padding-bottom: 60px !important;
+    }
+}
 #staffAdjustmentModal .modal-box {
+    background: #fff;
+    border-radius: 14px;
     width: 92% !important;
     max-width: 520px !important;
+    max-height: calc(100vh - 170px) !important;
+    margin: auto !important;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35) !important;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    position: relative;
 }
 </style>
-<div class="modal-overlay" id="staffAdjustmentModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:15000; align-items:center; justify-content:center; box-sizing:border-box; overflow-y:auto;">
-    <div class="modal-box" style="background:#fff; border-radius:14px; width:92% !important; max-width:520px !important; max-height:calc(100vh - 120px) !important; margin:auto; box-shadow:0 20px 50px rgba(0,0,0,0.35); overflow:hidden; display:flex; flex-direction:column; position:relative;">
+<div class="modal-overlay" id="staffAdjustmentModal" onclick="if(event.target===this)closeAdjustmentModal()">
+    <div class="modal-box">
         <div style="background:linear-gradient(135deg,#002F70,#001838); padding:14px 20px; color:#fff; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
             <div style="font-size:15px; font-weight:700; display:flex; align-items:center; gap:10px;"><i class="fas fa-edit" style="color:#fd7e14;"></i> Request Inventory Adjustment</div>
             <button type="button" onclick="closeAdjustmentModal()" style="background:transparent; border:none; color:rgba(255,255,255,0.7); font-size:18px; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center; transition:color 0.2s;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='rgba(255,255,255,0.7)'" title="Close"><i class="fas fa-times"></i></button>

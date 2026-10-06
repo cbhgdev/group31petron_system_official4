@@ -2559,12 +2559,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'excel') {
 if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     $pdf_paper_size  = petron_report_paper_size($station_id);
     $pdf_orientation = strtolower(petron_report_orientation($station_id));
-    $pdf_show_logo   = petron_report_show_logo($station_id);
+    $pdf_show_logo   = false; // Logo removed from reports per user request
     $pdf_show_footer = petron_report_show_footer($station_id);
-    $pdf_logo_url    = petron_get_setting_value('company_logo', $station_id, '../assets/img/Petron Logo.png');
-    if ($pdf_logo_url === 'none' || empty($pdf_logo_url)) {
-        $pdf_show_logo = false;
-    }
+    $pdf_logo_url    = '';
     ?>
     <!DOCTYPE html>
     <html>
@@ -2735,11 +2732,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'pdf') {
     <body>
         <!-- Report Header -->
         <div class="report-header">
-            <?php if ($pdf_show_logo && !empty($pdf_logo_url)): ?>
-                <div style="text-align: center; margin-bottom: 8px;" data-report-logo="1">
-                    <img src="<?= htmlspecialchars($pdf_logo_url) ?>" alt="Company Logo" class="rpt-company-logo" style="max-height: 48px; max-width: 160px; object-fit: contain; display: inline-block;">
-                </div>
-            <?php endif; ?>
             <div class="report-title">DAILY FUEL SALES REPORT</div>
             <div class="report-title" style="font-size: 11pt; margin-top: 5px;"><?= $summary_title_suffix ?></div>
             <table>

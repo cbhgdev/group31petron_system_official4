@@ -64,7 +64,7 @@ $myStationId = user_station_id();
 $header_notifications = [];
 $header_unread_count = 0;
 $header_time_ago = function($datetime) {
-    $ts = strtotime((string)$datetime);
+    $ts = strtotime(trim((string)$datetime) . ' UTC');
     if (!$ts) return '';
     $diff = max(0, time() - $ts);
     if ($diff < 60) return 'Just now';
@@ -324,229 +324,6 @@ try {
     }
 } catch (Exception $e) { /* Tables might not exist yet */ }
 
-$header_notif_url = function($url) use ($app_base_path, $public_base_url) {
-    $url = trim((string)$url);
-    if ($url === '' || $url === '#') return '#';
-    if (preg_match('/^https?:\/\//i', $url)) return $url;
-    if (strpos($url, '/public/') === 0) return $app_base_path . $url;
-    if (strpos($url, 'public/') === 0) return $app_base_path . '/' . $url;
-    if (preg_match('/^[a-zA-Z0-9_-]+\.php/', $url)) return $public_base_url . '/' . $url;
-    return $url;
-};
-if (in_array($role, ['staff','admin','manager','superadmin','developer'])) {
-    try {
-        if (function_exists('ensure_notifications_table')) {
-            ensure_notifications_table($pdo);
-        }
-        $hn_stmt = $pdo->prepare(
-            "SELECT id, type, title, message, event_type, severity, redirect_url, status, created_at
-             FROM notifications
-             WHERE user_id = ?
-             ORDER BY created_at DESC
-             LIMIT 15"
-        );
-        $hn_stmt->execute([(int)($user['id'] ?? 0)]);
-        $header_notifications = $hn_stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        $hc_stmt = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND status = 'unread'");
-        $hc_stmt->execute([(int)($user['id'] ?? 0)]);
-        $header_unread_count = (int)$hc_stmt->fetchColumn();
-    } catch (Exception $e) {
-        $header_notifications = [];
-        $header_unread_count = 0;
-    }
-}
-
-// --- FETCH ALERTS FOR DROPDOWN ---
-$header_alerts = [];
-if(in_array($role, ['superadmin','admin','manager'])){
-    // 1. Failed Logins (Super Admin only)
-    if($role === 'superadmin'){
-        try {
-            $failed_stmt = $pdo->prepare("SELECT user_id, details, created_at FROM activity_logs WHERE action = 'Login Failed' AND created_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR) AND (user_id IS NULL OR user_id <> ?) ORDER BY created_at DESC LIMIT 5");
-            $failed_stmt->execute([(int)($user['id'] ?? 0)]);
-            $failed_logins = $failed_stmt->fetchAll();
-            foreach($failed_logins as $fl) {
-                $details = (string)($fl['details'] ?? '');
-                $searchUser = '';
-                if (preg_match('/username\s*:\s*([^\s]+)/i', $details, $matches)) {
-                    $searchUser = trim($matches[1]);
-                }
-
-                $failedLink = $public_base_url . '/audit_logs.php?date=today&event=' . urlencode('Login Failed');
-                if ($searchUser !== '') {
-                    $failedLink .= '&q=' . urlencode($searchUser);
-                }
-
-                $header_alerts[] = [
-                    'msg' => "Failed Login: " . htmlspecialchars($fl['details']),
-                    'time' => $fl['created_at'],
-                    'link' => $failedLink
-                ];
-            }
-        } catch(Exception $e){}
-    }
-    // 2. Password Expirations
-    try {
-        $expiring_passwords = $pdo->query("SELECT username FROM users WHERE password_expires_at < NOW() AND status = 'Active' LIMIT 5")->fetchAll();
-        foreach($expiring_passwords as $ep) $header_alerts[] = ['msg'=>"Password Expired: {$ep['username']}", 'time'=>'Now', 'link'=>'users.php'];
-    } catch(Exception $e){}
-    // 3. Reconciliation Delays (Super Admin only)
-    // 4. Anomalies Detected
-    $sales_data = read_json('sales.json', []);
-    foreach($sales_data as $s){
-        if(($s['total'] > 10000 || $s['total'] == 0)) $header_alerts[] = ['msg'=>"Anomaly Detected: ₱".number_format($s['total']), 'time'=>$s['date']??'', 'link'=>'transactions.php'];
-    }
-    // 5. Inventory (keep existing)
-    try {
-        $inv = $pdo->query("SELECT product_name FROM inventory WHERE stock_level <= 20 LIMIT 5")->fetchAll();
-        foreach($inv as $i) $header_alerts[] = ['msg'=>"Low Stock: {$i['product_name']}", 'time'=>'Now', 'link'=>'oversight.php'];
-    } catch(Exception $e){}
-    // 6. Pending Jobs (keep existing)
-    try {
-        $pjobs = $pdo->query("SELECT id FROM job_orders WHERE status='Pending' LIMIT 5")->fetchAll();
-        foreach($pjobs as $j) $header_alerts[] = ['msg'=>"Pending Job #{$j['id']}", 'time'=>'Now', 'link'=>'joborder_stats.php'];
-    } catch(Exception $e){}
-    // 8. Pending Deliveries
-    try {
-        $pending_deliveries = $pdo->query("SELECT id FROM receiving WHERE status = 'pending' LIMIT 5")->fetchAll();
-        foreach($pending_deliveries as $d) $header_alerts[] = ['msg'=>"Pending Delivery #{$d['id']}", 'time'=>'Now', 'link'=>'supplier_confirmation.php'];
-    } catch(Exception $e){}
-    // 9. Credit Warnings
-    try {
-        $credit_warnings = $pdo->query("SELECT name FROM customers WHERE credit_balance > 0 LIMIT 5")->fetchAll();
-        foreach($credit_warnings as $cw) $header_alerts[] = ['msg'=>"Credit Warning: {$cw['name']}", 'time'=>'Now', 'link'=>'customer_credit.php'];
-    } catch(Exception $e){}
-    // 10. Fuel Variance (keep existing)
-    $fuel_readings = read_json('fuel_readings.json', []);
-    foreach($fuel_readings as $fr) {
-        if(($fr['computed_liters'] ?? 0) < 0) {
-             if($role !== 'superadmin' && ($fr['station_id']??'') != $myStationId) continue;
-             $header_alerts[] = ['msg'=>"Fuel Variance: Station " . ($fr['station_id']??'?'), 'time'=>$fr['date']??'', 'link'=>'oversight.php'];
-        }
-    }
-}
-$header_alerts = array_slice($header_alerts, 0, 5);
-$unread_alerts = count($header_alerts);
-
-// --- BADGE LOGIC ---
-$badges = [];
-$station_name = '';
-$current_date = date('Y-m-d');
-$hour = (int)date('H');
-$header_shift = ($hour >= 6 && $hour < 14) ? 'First Shift' : 'Second Shift';
-
-// Get station name for all non-superadmin users
-if ($myStationId && in_array($role, ['admin', 'manager', 'staff'])) {
-    try {
-        $stmt = $pdo->prepare("SELECT name FROM stations WHERE id = ?");
-        $stmt->execute([$myStationId]);
-        $station_name = $stmt->fetchColumn() ?: 'Unknown Station';
-    } catch (Exception $e) {
-        $station_name = 'Unknown Station';
-    }
-}
-
-// 1. Transactions / Anomalies (JSON)
-if (in_array($role, ['superadmin','admin','manager'])) {
-    $sales_data = read_json('sales.json', []);
-    $anomalies_count = 0;
-    $station_anomalies = 0;
-    foreach ($sales_data as $s) {
-        $amt = (float)($s['total'] ?? 0);
-        if ($amt > 10000 || $amt == 0) {
-            $anomalies_count++;
-            if (($s['station_id'] ?? '') == $myStationId) {
-                $station_anomalies++;
-            }
-        }
-    }
-    if ($role === 'superadmin') {
-        $badges['transactions'] = $anomalies_count;
-    } elseif ($role === 'admin' || $role === 'manager') {
-        $badges['pos'] = $station_anomalies;
-    }
-}
-
-// 2. Job Orders & Users (DB)
-try {
-    if ($role === 'superadmin') {
-        $badges['joborder_stats'] = $pdo->query("SELECT COUNT(*) FROM job_orders WHERE status = 'Pending'")->fetchColumn();
-        $badges['users'] = $pdo->query("SELECT COUNT(*) FROM users WHERE status = 'Disabled'")->fetchColumn();
-        
-        // Inventory Shortages (Oversight)
-        $shortages_count = $pdo->query("SELECT COUNT(*) FROM inventory WHERE stock_level <= 20")->fetchColumn();
-        $badges['oversight'] = $shortages_count;
-
-        // Reports aggregates all anomalies/action items
-        $badges['reports'] = ($badges['transactions'] ?? 0) + $badges['joborder_stats'] + $shortages_count;
-    } elseif ($role === 'admin' || $role === 'manager') {
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM job_orders WHERE station_id = ? AND status = 'Pending'");
-        $stmt->execute([$myStationId]);
-        $pending_jo_count = (int)$stmt->fetchColumn();
-        $badges['joborder'] = $pending_jo_count; // manager
-
-        // Inventory Shortages
-        $stmtInv = $pdo->prepare("SELECT COUNT(*) FROM inventory WHERE station_id = ? AND stock_level <= 20");
-        $stmtInv->execute([$myStationId]);
-        $badges['inventory'] = (int)$stmtInv->fetchColumn();
-
-        if ($role === 'admin') {
-            // Admin-specific badge keys matching sidebar item IDs
-            try {
-                $s = $pdo->prepare("SELECT COUNT(*) FROM merchandise_transactions WHERE station_id=? AND validation_status='Pending'");
-                $s->execute([$myStationId]);
-                $pending_tx = (int)$s->fetchColumn();
-            } catch (Exception $e) { $pending_tx = 0; }
-            try {
-                $s = $pdo->prepare("SELECT COUNT(*) FROM purchase_orders WHERE station_id=? AND status IN ('Pending','Pending Approval','Pending Admin Validation') AND type='merch'");
-                $s->execute([$myStationId]);
-                $pending_po = (int)$s->fetchColumn();
-            } catch (Exception $e) { $pending_po = 0; }
-            $badges['admin_transactions_oversight'] = $pending_tx + $pending_jo_count;
-            $badges['purchase_orders_admin']        = $pending_po;
-            // Badge for Stock-In: POs admin-finalized AND manager-validated, awaiting stock-in
-            try {
-                $s2 = $pdo->prepare("SELECT COUNT(*) FROM purchase_orders WHERE station_id=? AND admin_finalized=1 AND delivery_validated=1 AND stock_in_done=0 AND type='merch'");
-                $s2->execute([$myStationId]);
-                $badges['admin_stock_in'] = (int)$s2->fetchColumn();
-            } catch (Exception $e) { $badges['admin_stock_in'] = 0; }
-            $badges['reports_admin']                = $pending_tx + $pending_jo_count + ($badges['inventory'] ?? 0);
-        } else {
-            // Reports Aggregate for manager
-            $badges['reports'] = ($badges['pos'] ?? 0) + $pending_jo_count + ($badges['inventory'] ?? 0);
-        }
-    } elseif ($role === 'staff') {
-        // Legacy individual badge assignments removed — now handled by the newer
-        // $__badge_add() system below (lines ~2900+) to avoid double-counting.
-        // No legacy badge keys added here for staff.
-    }
-
-    // Deliveries Oversight pending badge (admin)
-    if ($role === 'admin' || $role === 'superadmin') {
-        try {
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM deliveries_oversight WHERE station_id = ? AND status IN ('Pending Validation','Pending Manager Approval','Confirmed')");
-            $stmt->execute([$myStationId]);
-            $badges['deliveries_oversight'] = (int)$stmt->fetchColumn();
-        } catch (Exception $e) { $badges['deliveries_oversight'] = 0; }
-    }
-    // Manager deliveries pending badge
-    if ($role === 'manager') {
-        try {
-            $stmt = $pdo->prepare("SELECT COUNT(*) FROM deliveries_oversight WHERE station_id = ? AND status = 'Pending Manager Approval'");
-            $stmt->execute([$myStationId]);
-            $badges['manager_deliveries'] = (int)$stmt->fetchColumn();
-        } catch (Exception $e) { $badges['manager_deliveries'] = 0; }
-    }
-
-    // Fetch Stations for Header Filter (Super Admin)
-    $header_stations = [];
-    if ($role === 'superadmin') {
-        try {
-            $header_stations = $pdo->query("SELECT id, name FROM stations ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {}
-    }
-} catch (Exception $e) { /* Tables might not exist yet */ }
 
 // --- SYSTEM STATUS CHECK ---
 $db_connection_status = 'OK';
@@ -711,6 +488,7 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
     ];
     $header_session_timeout_min = max(1, (int)round($header_session_timeout_seconds / 60)); // from DB (top of file)
     $header_session_timeout_sec = (int)$header_session_timeout_seconds;
+    $header_auto_refresh_seconds = function_exists('petron_auto_refresh_interval') ? petron_auto_refresh_interval((int)$myStationId) : 10;
   ?>
   <script>
     window.PETRON_BASE_PATH = <?php echo json_encode(rtrim($app_base_path, '/')); ?>;
@@ -720,6 +498,10 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
     window.pageData = window.pageData || {};
     window.pageData.appBasePath = <?php echo json_encode(rtrim($app_base_path, '/')); ?>;
     window.pageData.publicBasePath = <?php echo json_encode(rtrim($public_base_url, '/')); ?>;
+
+    // ── Global Petron Auto-Refresh Configuration ──
+    window.PETRON_AUTO_REFRESH_SECONDS = <?php echo (int)$header_auto_refresh_seconds; ?>;
+    window.PETRON_AUTO_REFRESH_MS      = <?php echo (int)($header_auto_refresh_seconds * 1000); ?>;
 
     // ── Global Petron Security Settings ──
     window.PETRON_SESSION_TIMEOUT_SEC = <?php echo (int)$header_session_timeout_sec; ?>; // from DB system_settings
@@ -1269,9 +1051,7 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
     a.tbl-btn,
     .tbl-btn,
     .btn-filter-submit,
-    .btn-filter-reset,
-    .notif-header-actions button,
-    #markAllReadBtn {
+    .btn-filter-reset {
         background: transparent !important;
         background-color: transparent !important;
         border: 1px solid #cbd5e1 !important;
@@ -2435,33 +2215,79 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
     
     .notif-header-actions {
         display: flex;
-        gap: 12px;
+        gap: 8px;
         align-items: center;
+        position: relative;
+        z-index: 20;
+        pointer-events: auto !important;
     }
     
-    .notif-header-actions button {
-        font-size: 12px;
-        color: #002f70 !important;
-        background: none !important;
-        border: none !important;
+    .notif-header-actions button,
+    #markAllReadBtn,
+    #refreshNotificationsBtn {
+        font-size: 11px;
+        color: #002F6C !important;
+        background: #ffffff !important;
+        border: 1px solid #cbd5e1 !important;
         box-shadow: none !important;
-        cursor: pointer;
-        padding: 6px 10px;
+        cursor: pointer !important;
+        pointer-events: auto !important;
         border-radius: 6px;
         transition: all 0.2s ease;
-        font-weight: 600;
+        font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.4px;
+        position: relative;
+        z-index: 25;
+        outline: none;
     }
-    
-    .notif-header-actions button:hover {
-        background: rgba(0, 47, 112, 0.1) !important;
-        color: #00449e !important;
+
+    #markAllReadBtn {
+        padding: 5px 10px;
+    }
+
+    #markAllReadBtn:hover {
+        background: #f1f5f9 !important;
+        color: #001A3D !important;
+        border-color: #94a3b8 !important;
         transform: translateY(-1px);
     }
     
-    .notif-header-actions button i {
-        font-size: 14px;
+    #refreshNotificationsBtn {
+        width: 32px;
+        height: 30px;
+        padding: 0;
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        background: #eff6ff !important;
+        border: 1px solid #bfdbfe !important;
+        color: #002F6C !important;
+    }
+    
+    #refreshNotificationsBtn:hover {
+        background: #dbeafe !important;
+        color: #001A3D !important;
+        border-color: #93c5fd !important;
+        transform: translateY(-1px);
+    }
+
+    .notif-header-actions button:active,
+    #markAllReadBtn:active,
+    #refreshNotificationsBtn:active {
+        transform: translateY(1px) scale(0.96);
+    }
+    
+    .notif-header-actions button i,
+    #refreshNotificationsBtn i {
+        font-size: 13px;
+        pointer-events: none !important;
+        line-height: 1;
+    }
+
+    #refreshNotificationsBtn.is-refreshing i,
+    #refreshNotificationsBtn i.fa-spin {
+        animation: fa-spin 0.8s infinite linear !important;
     }
     
     .notif-dropdown-footer {
@@ -3413,12 +3239,12 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
         -webkit-tap-highlight-color: transparent !important;
     }
     
-    /* Ensure dropdowns appear above everything */
+    /* Ensure dropdowns appear above page content but below system toasts */
     #notificationDropdown,
     #profileDropdown,
     .notif-dropdown,
     .profile-dropdown {
-        z-index: 999999 !important;
+        z-index: 2147483000 !important;
         pointer-events: auto !important;
     }
     
@@ -3690,12 +3516,23 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
 ?>
 <!-- Dynamic Print Styles Enforcing Report Settings (Paper Size, Orientation, Logo, Footer) -->
 <style id="globalPetronReportSettingsPrint">
+.rpt-company-logo,
+.report-logo,
+.print-report-logo,
+.rpt-centered-header .rpt-company-logo,
+.rpt-header-title .rpt-company-logo,
+.header .rpt-company-logo,
+[data-report-logo] {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0 !important;
+    width: 0 !important;
+}
 @media print {
     @page {
         size: <?php echo $hdr_paper_size; ?> <?php echo $hdr_orientation; ?>;
         margin: 10mm 12mm;
     }
-    <?php if (!$hdr_show_logo): ?>
     .rpt-company-logo,
     .report-logo,
     .print-report-logo,
@@ -3709,7 +3546,6 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         height: 0 !important;
         width: 0 !important;
     }
-    <?php endif; ?>
     <?php if (!$hdr_show_footer): ?>
     .print-only-sig,
     .sfss-print-only .print-only-sig,
@@ -3946,8 +3782,8 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         .mi-overlay,
         .modal-backdrop-custom {
             padding-left: 270px !important; /* Offset by 250px sidebar width + 20px padding */
-            padding-top: 75px !important;
-            padding-bottom: 75px !important; /* EQUAL spacing at footer matching top */
+            padding-top: 96px !important;   /* 70px header + 26px equal space */
+            padding-bottom: 66px !important;/* 40px footer + 26px equal space matching top */
             padding-right: 20px !important;
             box-sizing: border-box !important;
             align-items: center !important;
@@ -3969,9 +3805,8 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         .modal-card-wide,
         .modal-card-xl {
             max-width: min(1100px, calc(100vw - 310px)) !important;
-            max-height: calc(100vh - 150px) !important;
-            margin-left: auto !important;
-            margin-right: auto !important;
+            max-height: calc(100vh - 170px) !important;
+            margin: auto !important;
             display: flex !important;
             flex-direction: column !important;
         }
@@ -3982,7 +3817,7 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         body.sidebar-collapsed .modal-dialog,
         body.sidebar-collapsed .modal-card {
             max-width: min(1100px, calc(100vw - 110px)) !important;
-            max-height: calc(100vh - 150px) !important;
+            max-height: calc(100vh - 170px) !important;
         }
     }
 
@@ -3993,8 +3828,8 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         .modal-backdrop-custom {
             padding-left: 16px !important;
             padding-right: 16px !important;
-            padding-top: 65px !important;
-            padding-bottom: 65px !important; /* EQUAL spacing at footer matching top */
+            padding-top: 85px !important;   /* 65px header + 20px equal space */
+            padding-bottom: 60px !important;/* 40px footer + 20px equal space matching top */
             box-sizing: border-box !important;
             align-items: center !important;
             justify-content: center !important;
@@ -4005,7 +3840,7 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         .mi-box,
         .modal-dialog,
         .modal-card {
-            max-height: calc(100vh - 130px) !important;
+            max-height: calc(100vh - 155px) !important;
             margin: auto !important;
             display: flex !important;
             flex-direction: column !important;
@@ -4062,7 +3897,7 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
             var el = document.getElementById(id);
             if(!el) return null;
             if(el.dataset.moved === '1') {
-                el.style.zIndex = '2147483647';
+                el.style.zIndex = '2147483000';
                 el.style.pointerEvents = 'auto';
                 return el;
             }
@@ -4073,7 +3908,7 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
             el.style.left = '0px';
             el.style.top = '0px';
             el.style.margin = '0';
-            el.style.zIndex = '2147483647';
+            el.style.zIndex = '2147483000';
             el.style.pointerEvents = 'auto';
             el.dataset.moved = '1';
             return el;
@@ -4120,7 +3955,7 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
 
             d.style.left = left + 'px';
             d.style.top = top + 'px';
-            d.style.zIndex = '2147483647';
+            d.style.zIndex = '2147483000';
             d.style.pointerEvents = 'auto';
             d.style.visibility = '';
             if(wasHidden && !d.classList.contains('show')) d.style.display = 'none';
@@ -4132,7 +3967,7 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         if(!trigger) return;
         var d = moveToBody(dropdownId) || document.getElementById(dropdownId);
         if(!d) return;
-        d.style.zIndex = '2147483647';
+        d.style.zIndex = '2147483000';
         d.style.pointerEvents = 'auto';
         var showing = d.classList.contains('show') || d.style.display === 'block';
         if(!showing){
@@ -4144,6 +3979,9 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         } else {
             d.classList.remove('show');
             d.style.display = 'none';
+        }
+        if (typeof window.syncGlobalToastPosition === 'function') {
+            window.syncGlobalToastPosition();
         }
     }
 
@@ -4168,6 +4006,9 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
             if(ss && exceptId !== 'searchSuggestions') {
                 ss.style.display = 'none';
             }
+            if (typeof window.syncGlobalToastPosition === 'function') {
+                window.syncGlobalToastPosition();
+            }
         }catch(e){ console && console.warn && console.warn('closeAllHeaderDropdowns err', e); }
     }
     window.closeAllHeaderDropdowns = closeAllHeaderDropdowns;
@@ -4181,11 +4022,14 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         var nd = document.getElementById('notificationDropdown');
         var nb = document.getElementById('notificationBell');
         if(nd && (nd.classList.contains('show') || nd.style.display === 'block')){
-            var inNotif = nd.contains(target);
-            var inBell  = nb && (nb === target || nb.contains(target));
+            var inNotif = nd.contains(target) || (target.closest && !!target.closest('#notificationDropdown'));
+            var inBell  = nb && (nb === target || nb.contains(target) || (target.closest && !!target.closest('#notificationBell')));
             if(!inNotif && !inBell){
                 nd.classList.remove('show');
                 nd.style.display = 'none';
+                if (typeof window.syncGlobalToastPosition === 'function') {
+                    window.syncGlobalToastPosition();
+                }
             }
         }
 
@@ -4237,17 +4081,205 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
     // Replace existing toggle handlers with safe wrappers
     window.petronToggleNotif = function(e){
         try{ 
+            if(e && e.target && e.target.closest('#notificationDropdown')) return;
+            if(e && typeof e.stopPropagation === 'function') e.stopPropagation();
             toggleDropdown('notificationDropdown', '#notificationBell'); 
             if(e && e.preventDefault) e.preventDefault(); 
             var nd = document.getElementById('notificationDropdown');
             if (nd && (nd.classList.contains('show') || nd.style.display === 'block')) {
                 if (typeof window.loadStaffNotifications === 'function') window.loadStaffNotifications();
                 else if (typeof window.saLoadNotifications === 'function') window.saLoadNotifications();
+                else if (typeof window.petronLoadNotifications === 'function') window.petronLoadNotifications();
             }
         }catch(err){}
     };
+    window.petronRefreshNotifications = async function(e){
+        if(e){
+            if(typeof e.preventDefault === 'function') e.preventDefault();
+            if(typeof e.stopPropagation === 'function') e.stopPropagation();
+        }
+        var btn = document.getElementById('refreshNotificationsBtn');
+        var icon = document.getElementById('refreshNotifIcon') || (btn ? btn.querySelector('i') : null);
+        if(btn && (btn.dataset.busy === '1' || btn.classList.contains('is-refreshing'))) return; // Debounce rapid clicks
+
+        if(btn) {
+            btn.dataset.busy = '1';
+            btn.classList.add('is-refreshing');
+        }
+        if(icon) {
+            icon.classList.add('fa-spin');
+        }
+
+        var list = document.getElementById('notificationList');
+        var hasExisting = list && list.children && list.children.length > 0 && !list.querySelector('.fa-spinner');
+        if(list){
+            if (hasExisting) {
+                // Keep existing items visible while refreshing, dim subtly so there is no jarring jump or second spinner popup
+                list.style.transition = 'opacity 0.2s ease';
+                list.style.opacity = '0.45';
+                list.style.pointerEvents = 'none';
+            } else {
+                // If list was empty, show one single clean spinner
+                list.innerHTML = '<div style="padding:28px 16px;text-align:center;color:#64748b;font-size:12.5px;"><i class="fas fa-spinner fa-spin" style="font-size:20px;color:#002F6C;margin-bottom:8px;display:block;"></i>Refreshing notifications...</div>';
+            }
+        }
+
+        try{
+            if(typeof window.loadStaffNotifications === 'function'){
+                await window.loadStaffNotifications(true);
+            } else if(typeof window.saLoadNotifications === 'function'){
+                await window.saLoadNotifications(true);
+            } else if(typeof window.petronLoadNotifications === 'function'){
+                await window.petronLoadNotifications(true);
+            }
+
+            var toastMsg = 'Notifications refreshed';
+            if(typeof window.showToast === 'function'){
+                window.showToast(toastMsg, 'info', 2500);
+            } else if(typeof window.showGlobalToast === 'function'){
+                window.showGlobalToast(toastMsg, 'info');
+            }
+        }catch(err){
+            console.warn('petronRefreshNotifications err', err);
+        }finally{
+            setTimeout(function(){
+                if(list){
+                    list.style.opacity = '1';
+                    list.style.pointerEvents = 'auto';
+                }
+                if(icon) icon.classList.remove('fa-spin');
+                if(btn) {
+                    btn.classList.remove('is-refreshing');
+                    btn.dataset.busy = '0';
+                }
+            }, 300);
+        }
+    };
+
+    window.petronMarkAllNotificationsRead = async function(e){
+        if(e){
+            if(typeof e.preventDefault === 'function') e.preventDefault();
+            if(typeof e.stopPropagation === 'function') e.stopPropagation();
+        }
+        // 1. Instant optimistic UI: clear badges & pills immediately
+        var badge = document.getElementById('notificationBadge');
+        if(badge){
+            badge.textContent = '';
+            badge.style.display = 'none';
+            badge.setAttribute('data-server-count', '0');
+        }
+        var ddBadge = document.getElementById('notifDropdownBadge');
+        if(ddBadge){
+            ddBadge.textContent = '0 New';
+            ddBadge.style.background = '#002F6C';
+        }
+        document.querySelectorAll('#notificationList .notif-item').forEach(function(el){
+            el.classList.remove('unread');
+            el.style.backgroundColor = 'transparent';
+            var dot = el.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
+            if(dot) dot.remove();
+        });
+
+        // 2. Network call to mark all read in database with keepalive & beacon
+        var apiBase = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
+        var apiUrl = apiBase + '/backend/api/notifications_api.php?action=mark_all_read';
+
+        try {
+            if (navigator.sendBeacon) {
+                navigator.sendBeacon(apiUrl);
+            }
+        } catch(err) {}
+
+        try {
+            var res = await fetch(apiUrl, { method: 'POST', credentials: 'same-origin', keepalive: true });
+            if(res.ok){
+                var data = await res.json();
+                if(data && data.success){
+                    var toastMsg = 'All notifications marked as read';
+                    if (typeof window.showGlobalToast === 'function') {
+                        window.showGlobalToast(toastMsg, 'success');
+                    } else if (typeof window.showToast === 'function') {
+                        window.showToast(toastMsg, 'success');
+                    }
+                }
+            }
+        } catch(err) {}
+
+        if (typeof window.loadStaffNotifications === 'function') {
+            window.loadStaffNotifications(false);
+        } else if (typeof window.saLoadNotifications === 'function') {
+            window.saLoadNotifications();
+        } else if (typeof window.petronLoadNotifications === 'function') {
+            window.petronLoadNotifications(false);
+        }
+    };
+
+    window.petronMarkSingleNotificationRead = function(e, id, targetUrl){
+        if (!id) return;
+        // 1. Instant optimistic UI: decrement badge count immediately
+        var badge = document.getElementById('notificationBadge');
+        if (badge && badge.style.display !== 'none') {
+            var cur = parseInt(badge.textContent.replace(/\D/g, ''), 10) || 0;
+            cur = Math.max(0, cur - 1);
+            if (cur > 0) {
+                badge.textContent = cur > 99 ? '99+' : cur;
+                badge.style.display = 'inline-flex';
+                badge.setAttribute('data-server-count', String(cur));
+            } else {
+                badge.textContent = '';
+                badge.style.display = 'none';
+                badge.setAttribute('data-server-count', '0');
+            }
+        }
+        var ddBadge = document.getElementById('notifDropdownBadge');
+        if (ddBadge) {
+            var badgeNow = document.getElementById('notificationBadge');
+            var curNow = (badgeNow && badgeNow.style.display !== 'none') ? (parseInt(badgeNow.textContent.replace(/\D/g, ''), 10) || 0) : 0;
+            if (curNow > 0) {
+                ddBadge.textContent = curNow + ' New';
+                ddBadge.style.background = '#dc2626';
+            } else {
+                ddBadge.textContent = '0 New';
+                ddBadge.style.background = '#002F6C';
+            }
+        }
+
+        // Remove unread visual indicator on the clicked item
+        var item = (e && e.currentTarget) ? e.currentTarget : document.querySelector('[onclick*="' + id + '"]');
+        if (item) {
+            item.classList.remove('unread');
+            item.style.backgroundColor = 'transparent';
+            var dot = item.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
+            if (dot) dot.remove();
+        }
+
+        // 2. Dispatch network update with keepalive & sendBeacon so it survives page navigation
+        var apiBase = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
+        var apiUrl = apiBase + '/backend/api/notifications_api.php?action=mark_read';
+        var fd = new FormData();
+        fd.append('notification_id', id);
+
+        try {
+            if (navigator.sendBeacon) {
+                navigator.sendBeacon(apiUrl, fd);
+            }
+        } catch(err) {}
+
+        try {
+            fetch(apiUrl, { method: 'POST', body: fd, credentials: 'same-origin', keepalive: true }).catch(function(){});
+        } catch(err) {}
+    };
+
+    window.staffMarkRead = function(id) { window.petronMarkSingleNotificationRead(null, id); };
+    window.saMarkRead = function(id) { window.petronMarkSingleNotificationRead(null, id); };
+
     window.petronToggleProfile = function(e){
-        try{ toggleDropdown('profileDropdown', '#profileMenu'); if(e && e.preventDefault) e.preventDefault(); }catch(err){}
+        try{ 
+            if(e && e.target && e.target.closest('#profileDropdown')) return;
+            if(e && typeof e.stopPropagation === 'function') e.stopPropagation();
+            toggleDropdown('profileDropdown', '#profileMenu'); 
+            if(e && e.preventDefault) e.preventDefault(); 
+        }catch(err){}
     };
 
     // Reposition visible dropdowns on resize/scroll
@@ -4959,6 +4991,9 @@ require_once __DIR__ . '/rbac_menu.php';
         try { console && console.warn && console.warn('petronToggleTheme fallback'); } catch(e){}
         try { document.body.classList.toggle('dark-theme'); } catch(err){}
     };
+    window.petronMarkAllNotificationsRead = window.petronMarkAllNotificationsRead || function(e){};
+    window.petronMarkSingleNotificationRead = window.petronMarkSingleNotificationRead || function(e, id, url){};
+    window.petronRefreshNotifications = window.petronRefreshNotifications || function(e){};
     </script>
     <header class="top-header">
         <div class="header-left">
@@ -5081,7 +5116,7 @@ require_once __DIR__ . '/rbac_menu.php';
                 <i class="fas fa-bell" style="pointer-events: none !important;"></i>
                 <span class="badge" id="notificationBadge" data-server-count="<?php echo (int)$header_unread_count; ?>" style="display: <?php echo $header_unread_count > 0 ? 'inline-flex' : 'none'; ?>; background: #dc2626 !important; pointer-events: none !important;"><?php echo $header_unread_count > 99 ? '99+' : (int)$header_unread_count; ?></span>
 
-                <div class="notif-dropdown" id="notificationDropdown">
+                <div class="notif-dropdown" id="notificationDropdown" onclick="event.stopPropagation()">
                     <div class="notif-dropdown-header">
                         <div style="display:flex; align-items:center; gap:8px;">
                             <span>Notifications</span>
@@ -5090,8 +5125,8 @@ require_once __DIR__ . '/rbac_menu.php';
                             </span>
                         </div>
                         <div class="notif-header-actions">
-                            <button id="markAllReadBtn">Mark All Read</button>
-                            <button id="refreshNotificationsBtn"><i class="fas fa-sync"></i></button>
+                            <button type="button" id="markAllReadBtn" title="Mark all notifications as read" onclick="petronMarkAllNotificationsRead(event)">Mark All Read</button>
+                            <button type="button" id="refreshNotificationsBtn" title="Refresh notifications" aria-label="Refresh notifications" onclick="petronRefreshNotifications(event)"><i class="fas fa-sync-alt" id="refreshNotifIcon"></i></button>
                         </div>
                     </div>
                     <div class="notif-list" id="notificationList" style="max-height: 400px; overflow-y: auto; overflow-x: hidden;">
@@ -5126,9 +5161,7 @@ require_once __DIR__ . '/rbac_menu.php';
                                 ?>
                                 <a class="notif-item<?php echo $hn_unread ? ' unread' : ''; ?>"
                                    href="<?php echo htmlspecialchars($hn_href); ?>"
-                                   <?php if ($hn_unread): ?>
-                                   onclick="(window.staffMarkRead || window.saMarkRead)(<?php echo (int)$hn['id']; ?>);"
-                                   <?php endif; ?>
+                                   onclick="petronMarkSingleNotificationRead(event, <?php echo (int)$hn['id']; ?>, '<?php echo htmlspecialchars($hn_href, ENT_QUOTES); ?>')"
                                    style="padding:12px 16px;cursor:pointer;display:flex;align-items:flex-start;gap:12px;text-decoration:none;color:inherit;">
                                     <div style="width:48px;height:48px;border-radius:50%;background:<?php echo htmlspecialchars($hn_color); ?>15;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid <?php echo htmlspecialchars($hn_color); ?>30;">
                                         <i class="<?php echo htmlspecialchars($hn_icon); ?>" style="color:<?php echo htmlspecialchars($hn_color); ?>;font-size:20px;"></i>
@@ -6085,6 +6118,7 @@ require_once __DIR__ . '/rbac_menu.php';
         var notifBell = document.getElementById('notificationBell');
         if (notifBell) {
             notifBell.addEventListener('click', function(e) {
+                if (e.target && e.target.closest('#notificationDropdown')) return;
                 console.log('Notification bell clicked (event listener)');
                 petronToggleNotif(e);
             });
@@ -6172,11 +6206,11 @@ require_once __DIR__ . '/rbac_menu.php';
                 var sb = c.closest && c.closest('#sidebarCollapseBtn, .sidebar-collapse-btn');
                 if (sb) { petronToggleSidebar(e); return; }
                 var nb = c.closest && c.closest('#notificationBell, .notification-bell');
-                if (nb) { petronToggleNotif(e); return; }
+                if (nb && !c.closest('#notificationDropdown')) { petronToggleNotif(e); return; }
                 var tt = c.closest && c.closest('#themeToggle, .theme-toggle-btn');
                 if (tt) { petronToggleTheme(e); return; }
                 var pm = c.closest && c.closest('#profileMenu, .profile-access');
-                if (pm) { petronToggleProfile(e); return; }
+                if (pm && !c.closest('#profileDropdown')) { petronToggleProfile(e); return; }
             } catch (err) {
                 console.error('Header click listener error', err);
             }
@@ -6604,7 +6638,7 @@ require_once __DIR__ . '/rbac_menu.php';
                     const msg   = cleanMojibake(n.message || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                     return `<a href="${targetUrl}" class="${hoverClass}"
                                  style="padding:12px 16px;cursor:pointer;display:flex;align-items:flex-start;gap:12px;text-decoration:none !important;color:inherit;"
-                                 onclick="saMarkRead(${n.id})">
+                                 onclick="petronMarkSingleNotificationRead(event, ${n.id}, '${escapeJsString(targetUrl)}')">
                         <div style="width:40px;height:40px;border-radius:50%;background:${color}18;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid ${color}30;margin-top:2px;">
                             <i class="${icon}" style="color:${color};font-size:16px;"></i>
                         </div>
@@ -6663,12 +6697,16 @@ require_once __DIR__ . '/rbac_menu.php';
 
             async function loadNotifications() {
                 const el = document.getElementById('notificationList');
-                if (el) el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:12px;"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+                if (!el) return;
+                const hasExisting = el.children && el.children.length > 0 && !el.querySelector('.fa-spinner');
+                if (!hasExisting) {
+                    el.innerHTML = '<div style="padding:24px 16px;text-align:center;color:#888;font-size:12.5px;"><i class="fas fa-spinner fa-spin" style="font-size:20px;color:#002F6C;margin-bottom:8px;display:block;"></i>Loading notifications...</div>';
+                }
                 try {
                     const res  = await fetch(API_LIST + '?action=list&limit=15&status=all', { credentials: 'same-origin', cache: 'no-store' });
                     if (!res.ok) {
                         // API unreachable — show empty state instead of error
-                        if (el) el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;display:block;margin-bottom:8px;"></i>No notifications.</div>';
+                        el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;display:block;margin-bottom:8px;"></i>No notifications.</div>';
                         return;
                     }
                     const data = await res.json();
@@ -6676,10 +6714,10 @@ require_once __DIR__ . '/rbac_menu.php';
                         renderNotifications(data.notifications || []);
                         updateBadge(data.bell_unread_count ?? data.unread_count ?? 0, data.category_counts, data.total || (data.notifications ? data.notifications.length : 0));
                     } else {
-                        if (el) el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;display:block;margin-bottom:8px;"></i>No notifications.</div>';
+                        el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;display:block;margin-bottom:8px;"></i>No notifications.</div>';
                     }
                 } catch (e) {
-                    if (el) el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;display:block;margin-bottom:8px;"></i>No notifications available.</div>';
+                    el.innerHTML = '<div style="padding:20px;text-align:center;color:#888;font-size:13px;"><i class="fas fa-bell-slash" style="font-size:22px;display:block;margin-bottom:8px;"></i>No notifications available.</div>';
                 }
             }
 
@@ -6703,6 +6741,10 @@ require_once __DIR__ . '/rbac_menu.php';
             // Expose mark-read globally so onclick works
             window.saMarkRead = function(id, redirectUrl) {
                 if (!id) return;
+                if (typeof window.petronMarkSingleNotificationRead === 'function') {
+                    window.petronMarkSingleNotificationRead(null, id);
+                    return;
+                }
                 // ── Immediately decrement badge (optimistic UI) ─────────────
                 (function() {
                     const badge = document.getElementById('notificationBadge');
@@ -6718,11 +6760,19 @@ require_once __DIR__ . '/rbac_menu.php';
                             badge.style.display = 'none';
                         }
                     }
+                    const item = document.querySelector('[onclick*="' + id + '"]');
+                    if (item) {
+                        item.classList.remove('unread');
+                        item.style.backgroundColor = 'transparent';
+                        const dot = item.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
+                        if (dot) dot.remove();
+                    }
                 })();
                 try {
                     const fd = new FormData();
                     fd.append('notification_id', id);
-                    fetch(API_LIST + '?action=mark_read', { method: 'POST', body: fd, credentials: 'same-origin' })
+                    if (navigator.sendBeacon) navigator.sendBeacon(API_LIST + '?action=mark_read', fd);
+                    fetch(API_LIST + '?action=mark_read', { method: 'POST', body: fd, credentials: 'same-origin', keepalive: true })
                         .then(r => r.ok ? r.json() : null)
                         .then(data => {
                             if (data && data.success) {
@@ -6775,20 +6825,14 @@ require_once __DIR__ . '/rbac_menu.php';
                 });
             }
 
-            // Refresh button
-            const refreshBtn = document.getElementById('refreshNotificationsBtn');
-            if (refreshBtn) {
-                refreshBtn.addEventListener('click', async function (e) {
-                    e.stopPropagation();
-                    await generateAndRefresh();
-                    loadNotifications();
-                });
-            }
+            // Refresh button (handled centrally via onclick="petronRefreshNotifications(event)")
 
             // Load on bell open (Expose globally for the toggle listener)
-            window.saLoadNotifications = function() {
-                generateAndRefresh();
-                loadNotifications();
+            window.saLoadNotifications = async function() {
+                try {
+                    await generateAndRefresh();
+                } catch(e) {}
+                await loadNotifications();
             };
 
             // Direct notifications (run generator on page load)
@@ -6908,7 +6952,13 @@ require_once __DIR__ . '/rbac_menu.php';
 
             function timeAgo(dateStr) {
                 if (!dateStr) return '';
-                const diff = Math.floor((Date.now() - new Date(dateStr)) / 1000);
+                // Append ' UTC' to ensure the browser treats the DB timestamp as UTC, fixing the 8-hour offset bug
+                let parsedDate = new Date(dateStr + ' UTC');
+                if (isNaN(parsedDate)) {
+                    // Fallback for some browsers (Safari) that prefer ISO format
+                    parsedDate = new Date(dateStr.replace(' ', 'T') + 'Z');
+                }
+                const diff = Math.floor((Date.now() - parsedDate) / 1000);
                 if (diff < 60)    return diff + 's ago';
                 if (diff < 3600)  return Math.floor(diff / 60) + 'm ago';
                 if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
@@ -6955,7 +7005,7 @@ require_once __DIR__ . '/rbac_menu.php';
                 if (!el) return;
                 const hasExisting = el.children && el.children.length > 0 && !el.querySelector('.fa-spinner');
                 if (!hasExisting || showSpinner) {
-                    el.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px;"><i class="fas fa-spinner fa-spin"></i> Loading…</div>';
+                    el.innerHTML = '<div style="padding:24px 16px;text-align:center;color:#94a3b8;font-size:12.5px;"><i class="fas fa-spinner fa-spin" style="font-size:20px;color:#002F6C;margin-bottom:8px;display:block;"></i>Loading notifications...</div>';
                 }
                 try {
                     const ctrl = new AbortController();
@@ -6991,7 +7041,7 @@ require_once __DIR__ . '/rbac_menu.php';
                             const msg    = escapeHtml(cleanMojibake(n.message || ''));
                             const ago    = escapeHtml(n.time_ago || timeAgo(n.created_at));
                             const hoverClass = unread ? 'notif-item unread' : 'notif-item';
-                            const onclickAttr = unread ? `onclick="staffMarkRead(${n.id})"` : '';
+                            const onclickAttr = `onclick="petronMarkSingleNotificationRead(event, ${n.id}, '${escapeJsString(targetUrl)}')"` ;
                             html += `<a href="${targetUrl}" class="${hoverClass}" style="padding:12px 16px;cursor:pointer;display:flex;align-items:flex-start;gap:12px;text-decoration:none !important;"
                                           ${onclickAttr}>
                                         <div style="width:48px;height:48px;border-radius:50%;background:${color}15;display:flex;align-items:center;justify-content:center;flex-shrink:0;border:1px solid ${color}30;">
@@ -7028,6 +7078,10 @@ require_once __DIR__ . '/rbac_menu.php';
             // ── Mark one notification as read ─────────────────────────────────
             window.staffMarkRead = function (id) {
                 if (id) {
+                    if (typeof window.petronMarkSingleNotificationRead === 'function') {
+                        window.petronMarkSingleNotificationRead(null, id);
+                        return;
+                    }
                     // ── Immediately decrement badge (optimistic UI) ─────────
                     (function() {
                         const badge = document.getElementById('notificationBadge');
@@ -7043,22 +7097,22 @@ require_once __DIR__ . '/rbac_menu.php';
                                 badge.style.display = 'none';
                             }
                         }
-                        const item = document.querySelector('[onclick*="staffMarkRead(' + id + ')"]');
+                        const item = document.querySelector('[onclick*="' + id + '"]');
                         if (item) {
                             item.classList.remove('unread');
                             item.style.backgroundColor = 'transparent';
-                            const dot = item.querySelector('div[style*="border-radius:50%"][style*="margin-top:20px"]');
+                            const dot = item.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
                             if (dot) dot.remove();
                         }
                     })();
                     try {
                         const fd = new FormData();
                         fd.append('notification_id', id);
-                        fetch(API_LIST + '?action=mark_read', { method: 'POST', body: fd, credentials: 'same-origin' })
+                        if (navigator.sendBeacon) navigator.sendBeacon(API_LIST + '?action=mark_read', fd);
+                        fetch(API_LIST + '?action=mark_read', { method: 'POST', body: fd, credentials: 'same-origin', keepalive: true })
                             .then(r => r.ok ? r.json() : null)
                             .then(data => {
                                 if (data && data.success) {
-                                    // Sync both header bell + sidebar badges with server truth
                                     updateBadge(data.bell_unread_count ?? 0, data.category_counts, data.total_count);
                                 }
                             })
@@ -7090,7 +7144,7 @@ require_once __DIR__ . '/rbac_menu.php';
             }
 
             // ── Run generator silently in background (fire-and-forget) ────────
-            function runGeneratorBackground() {
+            function runGeneratorBackground(skipListRefresh = false) {
                 const ctrl = new AbortController();
                 const tid = setTimeout(() => ctrl.abort(), 8000);
                 return fetch(API_GEN, {
@@ -7103,7 +7157,7 @@ require_once __DIR__ . '/rbac_menu.php';
                         // Do NOT throw on non-ok (403/500 on live server) — treat generator as optional
                         if (!r.ok) {
                             fetchUnreadCount();
-                            if (isNotificationDropdownOpen()) {
+                            if (!skipListRefresh && isNotificationDropdownOpen()) {
                                 loadNotifications(false);
                             }
                             return null;
@@ -7113,14 +7167,14 @@ require_once __DIR__ . '/rbac_menu.php';
                     .then(d => {
                         if (!d) return;
                         fetchUnreadCount();
-                        if (isNotificationDropdownOpen()) {
+                        if (!skipListRefresh && isNotificationDropdownOpen()) {
                             loadNotifications(false);
                         }
                     })
                     .catch(() => {
                         clearTimeout(tid);
                         fetchUnreadCount();
-                        if (isNotificationDropdownOpen()) {
+                        if (!skipListRefresh && isNotificationDropdownOpen()) {
                             loadNotifications(false);
                         }
                     });
@@ -7168,20 +7222,14 @@ require_once __DIR__ . '/rbac_menu.php';
                 });
             }
 
-            // ── Refresh button ──────────────────────────────────────────────────
-            const refreshBtn = document.getElementById('refreshNotificationsBtn');
-            if (refreshBtn) {
-                refreshBtn.addEventListener('click', async function (e) {
-                    e.stopPropagation();
-                    await runGeneratorBackground();
-                    loadNotifications();
-                });
-            }
+            // ── Refresh button (handled centrally via onclick="petronRefreshNotifications(event)" to avoid duplicate triggers) ──
 
             // Expose globally for the toggle listener
-            window.loadStaffNotifications = function() {
-                runGeneratorBackground();
-                loadNotifications();
+            window.loadStaffNotifications = async function() {
+                try {
+                    await runGeneratorBackground(true);
+                } catch(e) {}
+                await loadNotifications(false);
             };
             window.petronLoadNotifications = window.loadStaffNotifications;
 
@@ -7274,6 +7322,19 @@ require_once __DIR__ . '/rbac_menu.php';
     pointer-events: none !important;
     max-width: 440px !important;
     width: calc(100vw - 48px) !important;
+    transition: right 0.25s cubic-bezier(0.16, 1, 0.3, 1), top 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+.global-toast-stack.notif-dropdown-active {
+    right: 410px !important;
+}
+@media (max-width: 820px) {
+    .global-toast-stack.notif-dropdown-active {
+        top: 16px !important;
+        right: 16px !important;
+        left: 16px !important;
+        max-width: calc(100vw - 32px) !important;
+        width: auto !important;
+    }
 }
 .global-toast {
     pointer-events: auto !important;
@@ -7335,8 +7396,21 @@ require_once __DIR__ . '/rbac_menu.php';
 (function() {
     let globalToastTimer = null;
 
+    // Helper: update stack position depending on notification dropdown visibility so toast is NEVER covered
+    window.syncGlobalToastPosition = function() {
+        const stack = document.getElementById('globalToastStack');
+        if (!stack) return;
+        const notifDd = document.getElementById('notificationDropdown');
+        const isNotifOpen = notifDd && (notifDd.classList.contains('show') || notifDd.style.display === 'block');
+        if (isNotifOpen) {
+            stack.classList.add('notif-dropdown-active');
+        } else {
+            stack.classList.remove('notif-dropdown-active');
+        }
+    };
+
     // ── Global Toast Notification Generator ─────────────────────────────────────
-    // Enforces single-banner display (no stacking/overlapping) positioned safely below header
+    // Enforces single-banner display positioned safely so it is NEVER covered by dropdowns
     window.showGlobalToast = function(msg, type = 'success') {
         if (!msg) return;
         let stack = document.getElementById('globalToastStack');
@@ -7345,6 +7419,11 @@ require_once __DIR__ . '/rbac_menu.php';
             stack.id = 'globalToastStack';
             stack.className = 'global-toast-stack';
             document.body.appendChild(stack);
+        }
+
+        // Always sync position before showing toast
+        if (typeof window.syncGlobalToastPosition === 'function') {
+            window.syncGlobalToastPosition();
         }
 
         // Clean up any pending timer
@@ -7379,7 +7458,12 @@ require_once __DIR__ . '/rbac_menu.php';
             if (toast.parentElement) {
                 toast.style.opacity = '0';
                 toast.style.transform = 'translateX(20px)';
-                setTimeout(() => toast.remove(), 300);
+                setTimeout(() => {
+                    toast.remove();
+                    if (stack && (!stack.children || stack.children.length === 0)) {
+                        stack.classList.remove('notif-dropdown-active');
+                    }
+                }, 300);
             }
         }, 4500);
     };

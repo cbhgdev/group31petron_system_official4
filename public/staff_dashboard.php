@@ -2787,8 +2787,11 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
-    // Auto-refresh interval every 10 seconds
-    setInterval(refreshStaffDashboard, 10000);
+    // Dynamic auto-refresh interval from system settings
+    const staffRefreshMs = (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000)
+        ? window.PETRON_AUTO_REFRESH_MS
+        : 10000;
+    setInterval(refreshStaffDashboard, staffRefreshMs);
 });
 </script>
 

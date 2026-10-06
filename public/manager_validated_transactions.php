@@ -103,16 +103,58 @@ function vt_shift_keys(string $value): array {
     return $key === '' ? [] : [$key];
 }
 
-function vt_shift_condition(string $expr, string $value, array &$params): string {
+/**
+ * Build SQL condition for shift filter.
+ * Checks explicit shift column(s) first; if all are empty/null, falls back
+ * to time-of-day derived from $date_col (expected: a DATETIME/TIMESTAMP column).
+ *
+ * Shift 1: 06:00 – 13:59  (hour >= 6 AND hour < 14)
+ * Shift 2: 14:00 – 05:59  (hour >= 14 OR hour < 6)
+ */
+function vt_shift_condition(string $expr, string $value, array &$params, string $date_col = ''): string {
     $keys = vt_shift_keys($value);
     if (!$keys) return '';
+
     $normalized = "LOWER(REPLACE(REPLACE(REPLACE(TRIM(COALESCE({$expr},'')), '-', ''), ' ', ''), '_', ''))";
     $params = array_merge($params, $keys);
-    return "{$normalized} IN (" . implode(',', array_fill(0, count($keys), '?')) . ")";
+    $in_clause = "({$normalized} IN (" . implode(',', array_fill(0, count($keys), '?')) . "))";
+
+    // Build time-of-day fallback if a date column is provided
+    if ($date_col !== '') {
+        $key0 = vt_filter_key($value);
+        if (in_array($key0, ['1', 'first', 'shift1'], true)) {
+            // Shift 1: 06:00–13:59
+            $time_fallback = "(HOUR({$date_col}) >= 6 AND HOUR({$date_col}) < 14)";
+        } elseif (in_array($key0, ['2', 'second', 'shift2'], true)) {
+            // Shift 2: 14:00–05:59
+            $time_fallback = "(HOUR({$date_col}) >= 14 OR HOUR({$date_col}) < 6)";
+        } else {
+            $time_fallback = '';
+        }
+
+        if ($time_fallback !== '') {
+            // If explicit shift data is blank/null → fall back to time-based classification
+            $expr_empty_check = "COALESCE(NULLIF(TRIM({$expr}),''), '') = ''";
+            return "({$in_clause} OR ({$expr_empty_check} AND {$time_fallback}))";
+        }
+    }
+
+    return $in_clause;
 }
 
-function vt_shift_display_case(string $expr): string {
+function vt_shift_display_case(string $expr, string $date_col = ''): string {
     $normalized = "LOWER(REPLACE(REPLACE(REPLACE(TRIM(COALESCE({$expr},'')), '-', ''), ' ', ''), '_', ''))";
+    if ($date_col !== '') {
+        // If explicit shift info is blank, derive from time-of-day
+        return "CASE
+            WHEN {$normalized} IN ('1','first','shift1') THEN 'Shift 1'
+            WHEN {$normalized} IN ('2','second','shift2') THEN 'Shift 2'
+            WHEN {$normalized} IN ('3','third','shift3') THEN 'Shift 3'
+            WHEN COALESCE(NULLIF(TRIM({$expr}),''), '') != '' THEN COALESCE(NULLIF(TRIM({$expr}),''), 'N/A')
+            WHEN HOUR({$date_col}) >= 6 AND HOUR({$date_col}) < 14 THEN 'Shift 1'
+            ELSE 'Shift 2'
+        END";
+    }
     return "CASE
         WHEN {$normalized} IN ('1','first','shift1') THEN 'Shift 1'
         WHEN {$normalized} IN ('2','second','shift2') THEN 'Shift 2'
@@ -152,7 +194,8 @@ if (vt_has($mt_cols, 'shift_name')) $mt_shift_sources[] = 'mt.shift_name';
 if (vt_has($user_cols, 'assigned_shift')) $mt_shift_sources[] = 'u.assigned_shift';
 if (vt_has($user_cols, 'shift_assignment')) $mt_shift_sources[] = 'u.shift_assignment';
 $mt_shift_expr = $mt_shift_sources ? 'COALESCE(' . implode(',', $mt_shift_sources) . ", '')" : "''";
-$mt_shift_col  = vt_shift_display_case($mt_shift_expr);
+// Pass date col so display falls back to time-of-day when shift field is blank
+$mt_shift_col  = vt_shift_display_case($mt_shift_expr, $mt_date_col);
 $mt_staff_id   = vt_has($mt_cols, 'staff_id') ? 'mt.staff_id' : 'NULL';
 $mt_validated_join = vt_has($mt_cols, 'validated_by') ? 'LEFT JOIN users v ON v.id = mt.validated_by' : '';
 
@@ -211,7 +254,7 @@ if ($staff_filter !== '') {
     $mt_params[] = $staff_filter;
 }
 if ($shift_filter !== '') {
-    $shift_sql = vt_shift_condition($mt_shift_expr, $shift_filter, $mt_params);
+    $shift_sql = vt_shift_condition($mt_shift_expr, $shift_filter, $mt_params, $mt_date_col);
     if ($shift_sql !== '') $mt_where .= " AND {$shift_sql}";
 }
 
@@ -294,13 +337,21 @@ $jo_pay_col    = vt_has($jo_cols, 'payment_method') ? "COALESCE(jo.payment_metho
 $jo_cost_col   = vt_has($jo_cols, 'total_cost') ? 'COALESCE(jo.total_cost,0)' : 'COALESCE(jo.estimated_cost,0)';
 $jo_paid_col   = vt_has($jo_cols, 'amount_paid') ? 'jo.amount_paid' : 'NULL';
 $jo_vby_col    = vt_has($jo_cols, 'validated_by') ? "COALESCE(NULLIF(CONCAT(v.first_name,' ',v.last_name),' '), v.username, 'N/A')" : "'N/A'";
-$jo_shift_sources = vt_has($jo_cols, 'shift_id') ? ['sh.name'] : [];
-if (vt_has($user_cols, 'assigned_shift')) $jo_shift_sources[] = 'u.assigned_shift';
+// Build job order shift expression
+// shift_id stores numeric 1 or 2 → CAST as CHAR so it can match '1'/'2' in the normalized CASE
+$jo_shift_sources = [];
+if (vt_has($jo_cols, 'shift_period'))  $jo_shift_sources[] = 'jo.shift_period';
+if (vt_has($jo_cols, 'shift_name'))    $jo_shift_sources[] = 'jo.shift_name';
+if (vt_has($jo_cols, 'shift'))         $jo_shift_sources[] = 'jo.shift';
+if (vt_has($jo_cols, 'shift_id'))      $jo_shift_sources[] = 'CAST(jo.shift_id AS CHAR)';
+if (vt_has($user_cols, 'assigned_shift'))   $jo_shift_sources[] = 'u.assigned_shift';
 if (vt_has($user_cols, 'shift_assignment')) $jo_shift_sources[] = 'u.shift_assignment';
 $jo_shift_expr = $jo_shift_sources ? 'COALESCE(' . implode(',', $jo_shift_sources) . ", '')" : "''";
-$jo_shift_col  = vt_shift_display_case($jo_shift_expr);
+// Pass jo.created_at so display falls back to time-of-day when shift info is blank
+$jo_shift_col  = vt_shift_display_case($jo_shift_expr, 'jo.created_at');
 $jo_staff_id   = vt_has($jo_cols, 'created_by') ? 'COALESCE(jo.created_by, jo.user_id)' : 'jo.user_id';
-$jo_shift_join = vt_has($jo_cols, 'shift_id') ? 'LEFT JOIN shifts sh ON sh.id = jo.shift_id' : '';
+// No need to JOIN shifts table for the shift name — we use CAST(shift_id AS CHAR) directly
+$jo_shift_join = '';
 $jo_validated_join = vt_has($jo_cols, 'validated_by') ? 'LEFT JOIN users v ON v.id = jo.validated_by' : '';
 
 $jo_where  = "WHERE jo.station_id = ?";
@@ -338,7 +389,7 @@ if ($staff_filter !== '') {
     $jo_params[] = $staff_filter;
 }
 if ($shift_filter !== '') {
-    $shift_sql = vt_shift_condition($jo_shift_expr, $shift_filter, $jo_params);
+    $shift_sql = vt_shift_condition($jo_shift_expr, $shift_filter, $jo_params, 'jo.created_at');
     if ($shift_sql !== '') $jo_where .= " AND {$shift_sql}";
 }
 
@@ -566,26 +617,72 @@ if ($payment_status !== '') {
 }
 
 
+// Apply in-PHP shift filter as secondary guarantee (aligns with $r['shift'])
+if ($shift_filter !== '') {
+    $norm_sf = vt_filter_key($shift_filter);
+    $target_shift = in_array($norm_sf, ['1', 'first', 'shift1'], true) ? 'Shift 1' : (in_array($norm_sf, ['2', 'second', 'shift2'], true) ? 'Shift 2' : (in_array($norm_sf, ['3', 'third', 'shift3'], true) ? 'Shift 3' : ''));
+    if ($target_shift !== '') {
+        $all_rows = array_filter($all_rows, function($r) use ($target_shift) {
+            $row_shift = trim($r['shift'] ?? '');
+            return strcasecmp($row_shift, $target_shift) === 0;
+        });
+    }
+}
+
 // Apply validation status filter
 if ($status_filter !== '') {
     $all_rows = array_filter($all_rows, function($r) use ($status_filter, $pending_txn_requests) {
         $vs = strtolower(trim($r['validation_status'] ?? ''));
         $ws = strtolower(trim($r['workflow_status'] ?? ''));
+        $norm_vs = preg_replace('/[^a-z0-9]+/', '', $vs);
+        $norm_ws = preg_replace('/[^a-z0-9]+/', '', $ws);
+
         $src_key = ($r['_source'] ?? '') . '_' . ($r['row_id'] ?? '');
         $txn_key = ($r['_source'] ?? '') . '_' . ($r['txn_id'] ?? '');
         $pr = $pending_txn_requests[$src_key] ?? ($pending_txn_requests[$txn_key] ?? null);
         $req_type = $pr ? ($pr['request_type'] ?? '') : '';
 
-        if ($status_filter === 'Voided')               return $vs === 'voided';
-        if ($status_filter === 'Adjusted')             return $vs === 'adjusted';
+        // Strict In Progress check (matches 'in_progress', 'in progress', 'inprogress', 'active', 'ongoing')
+        $is_in_progress = in_array($norm_ws, ['inprogress', 'active', 'ongoing'], true)
+                       || ($norm_ws === '' && in_array($norm_vs, ['inprogress', 'active', 'ongoing'], true));
+
+        $is_voided = in_array($norm_vs, ['voided', 'void', 'cancelled', 'canceled'], true)
+                  || in_array($norm_ws, ['voided', 'void', 'cancelled', 'canceled'], true);
+        $is_adjusted = ($norm_vs === 'adjusted' || $norm_ws === 'adjusted');
+        $is_released = ($norm_ws === 'released' || $norm_vs === 'released');
+
+        // Explicitly completed workflow or valid standard transaction
+        $is_completed_ws = in_array($norm_ws, ['completed', 'finished', 'done', 'approved', 'paid'], true)
+                        || in_array($norm_vs, ['completed', 'finished', 'approved', 'official'], true);
+
+        // Strict Pending check: ONLY true if workflow is explicitly pending and not completed/in-progress/released/voided/adjusted
+        $is_pending = !$is_completed_ws && !$is_in_progress && !$is_released && !$is_voided && !$is_adjusted && (
+            in_array($norm_ws, ['pending', 'awaitingpayment', 'draft'], true)
+            || ($norm_ws === '' && in_array($norm_vs, ['unvalidated', 'pendingvalidation'], true) && ($r['_source'] ?? '') === 'job_orders')
+        );
+
+        if ($status_filter === 'Voided')               return $is_voided;
+        if ($status_filter === 'Adjusted')             return $is_adjusted;
         if ($status_filter === 'Adjustment Requested') return $req_type === 'Adjustment';
         if ($status_filter === 'Void Requested')       return $req_type === 'Void';
-        if ($status_filter === 'Pending')              return in_array($ws, ['pending', 'awaiting_payment', 'draft']) || in_array($vs, ['pending', 'unvalidated']);
-        if ($status_filter === 'In Progress')          return in_array($ws, ['in_progress', 'in progress']);
-        if ($status_filter === 'Released')             return $ws === 'released';
-        if ($status_filter === 'Completed')            return in_array($ws, ['completed', 'finished']) || (!in_array($vs, ['voided', 'adjusted'], true) && !$req_type && $ws !== 'released' && $ws !== 'in_progress' && $ws !== 'pending');
+        if ($status_filter === 'Pending')              return $is_pending;
+        if ($status_filter === 'In Progress')          return $is_in_progress;
+        if ($status_filter === 'Released')             return $is_released;
+
+        if ($status_filter === 'Completed') {
+            // NEVER include In Progress, Pending, Released, Voided, Adjusted, or rows with pending requests
+            if ($is_in_progress) return false;
+            if ($is_pending) return false;
+            if ($is_released) return false;
+            if ($is_voided) return false;
+            if ($is_adjusted) return false;
+            if ($req_type !== '') return false;
+
+            return true;
+        }
+
         // Default fallback
-        return !in_array($vs, ['voided', 'adjusted'], true) && !$req_type;
+        return !in_array($norm_vs, ['voided', 'adjusted'], true) && !$req_type;
     });
 }
 $rows = array_values($all_rows);
@@ -650,27 +747,9 @@ try {
     $stmt = $pdo->prepare("SELECT id, COALESCE(NULLIF(CONCAT(first_name,' ',last_name),' '), username) AS name FROM users WHERE station_id = ? AND role != 'admin' ORDER BY name");
     $stmt->execute([$station_id]);
     $staff_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) { // ── AJAX JSON POLLING ENDPOINT FOR ALL TRANSACTIONS ──────────────────────
-if (isset($_GET['ajax_vt']) && $_GET['ajax_vt'] == '1') {
-    header('Content-Type: application/json');
-    echo json_encode([
-        'success' => true,
-        'kpis' => [
-            'total_txns'   => $kpi_total_txns,
-            'merch_count'  => $kpi_merch_count,
-            'jo_count'     => $kpi_jo_count,
-            'comb_count'   => $kpi_comb_count,
-            'paid_count'   => $kpi_paid_count,
-            'unpaid_count' => $kpi_unpaid_count,
-            'ar_count'     => $kpi_ar_count,
-            'total_sales'  => '₱' . number_format($kpi_total_sales, 2)
-        ],
-        'rows_count' => count($rows)
-    ]);
-    exit;
+} catch (Exception $e) {
+    $staff_list = [];
 }
-
-$staff_list = []; }
 
 // â”€â”€ Server-Side Exports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $export_type = $_GET['export'] ?? '';
@@ -1507,11 +1586,13 @@ try {
                         <?php 
                         $s_raw = trim($r['shift'] ?? '');
                         $s_val = strtolower($s_raw);
+                        $s_hour = !empty($r['txn_date']) ? (int)date('G', strtotime($r['txn_date'])) : 12;
+                        $time_fallback_shift = ($s_hour >= 6 && $s_hour < 14) ? 'Shift 1' : 'Shift 2';
                         $shift_lbl = match($s_val) {
                             'first', 'shift 1', '1', 'shift1' => 'Shift 1',
                             'second', 'shift 2', '2', 'shift2' => 'Shift 2',
                             'third', 'shift 3', '3', 'shift3' => 'Shift 3',
-                            default => ($s_raw !== '' && $s_raw !== 'N/A') ? $s_raw : 'Shift 1'
+                            default => ($s_raw !== '' && $s_raw !== 'N/A') ? $s_raw : $time_fallback_shift
                         };
                         ?>
                         <div style="font-size:11.5px;color:#334155;margin-top:4px;font-weight:700;white-space:nowrap;">
@@ -1591,21 +1672,34 @@ try {
                         
                         $vst = strtolower(trim($r['validation_status'] ?? 'completed'));
                         $wst = strtolower(trim($r['workflow_status'] ?? ''));
-                        
-                        $has_adj_req  = ($pending_req && ($pending_req['request_type'] ?? '') === 'Adjustment' && $vst !== 'adjusted' && $vst !== 'voided');
-                        $has_void_req = ($pending_req && ($pending_req['request_type'] ?? '') === 'Void' && $vst !== 'voided');
-                        
-                        if ($vst === 'voided' || $vst === 'void' || $vst === 'cancelled') {
+                        $norm_vst = preg_replace('/[^a-z0-9]+/', '', $vst);
+                        $norm_wst = preg_replace('/[^a-z0-9]+/', '', $wst);
+
+                        $has_adj_req  = ($pending_req && ($pending_req['request_type'] ?? '') === 'Adjustment' && $norm_vst !== 'adjusted' && !in_array($norm_vst, ['voided', 'void'], true));
+                        $has_void_req = ($pending_req && ($pending_req['request_type'] ?? '') === 'Void' && !in_array($norm_vst, ['voided', 'void'], true));
+
+                        $is_in_prog = in_array($norm_wst, ['inprogress', 'active', 'ongoing'], true)
+                                   || ($norm_wst === '' && in_array($norm_vst, ['inprogress', 'active', 'ongoing'], true));
+                        $is_comp_ws = in_array($norm_wst, ['completed', 'finished', 'done', 'approved', 'paid'], true)
+                                   || in_array($norm_vst, ['completed', 'finished', 'approved', 'official'], true);
+                        $is_pend    = !$is_comp_ws && !$is_in_prog && (
+                            in_array($norm_wst, ['pending', 'awaitingpayment', 'draft'], true)
+                            || ($norm_wst === '' && in_array($norm_vst, ['unvalidated', 'pendingvalidation'], true) && ($r['_source'] ?? '') === 'job_orders')
+                        );
+
+                        if (in_array($norm_vst, ['voided', 'void', 'cancelled', 'canceled'], true)) {
                             echo '<span class="badge badge-red" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-ban" style="margin-right:3px;"></i> Voided</span>';
-                        } elseif ($vst === 'adjusted') {
+                        } elseif ($norm_vst === 'adjusted') {
                             echo '<span class="badge badge-gray" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-sliders-h" style="margin-right:3px;"></i> Adjusted</span>';
                         } elseif ($has_void_req) {
                             echo '<span class="badge badge-red" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;" title="Void Requested"><i class="fas fa-clock" style="margin-right:3px;"></i> Void Req.</span>';
                         } elseif ($has_adj_req) {
                             echo '<span class="badge badge-orange" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;" title="Adjustment Requested"><i class="fas fa-clock" style="margin-right:3px;"></i> Adj. Req.</span>';
-                        } elseif ($wst === 'in_progress' || $wst === 'in progress') {
+                        } elseif ($is_in_prog) {
                             echo '<span class="badge badge-blue" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-spinner fa-spin" style="margin-right:3px;"></i> In Progress</span>';
-                        } elseif ($wst === 'released' || $vst === 'released') {
+                        } elseif ($is_pend) {
+                            echo '<span class="badge badge-amber" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-clock" style="margin-right:3px;"></i> Pending</span>';
+                        } elseif ($norm_wst === 'released' || $norm_vst === 'released') {
                             echo '<span class="badge badge-green" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-check" style="margin-right:3px;"></i> Released</span>';
                         } else {
                             echo '<span class="badge badge-green" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-check-circle" style="margin-right:3px;"></i> Completed</span>';
@@ -1799,7 +1893,7 @@ try {
 <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• VOID MODAL -->
 <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• VOID MODAL -->
 <div class="vt-modal-overlay" id="voidModal">
-  <div class="vt-modal" style="max-width:750px; width:95%;">
+  <div class="vt-modal" style="max-width:820px; width:95%;">
     <!-- Normal Modal Content -->
     <div id="voidModalMainContent" style="display:flex; flex-direction:column; max-height:calc(100vh - 130px); width:100%; overflow:hidden;">
       <div class="vt-modal-header" style="background:#fff3f3; border-bottom:1px solid #fee2e2;">
@@ -1813,7 +1907,7 @@ try {
       <div class="vt-modal-body" style="padding:20px; overflow-y:auto; flex:1; min-height:0;">
         
         <!-- Two Column Layout for info -->
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px;">
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:16px; min-width:0;">
           
           <!-- Column 1: Read-Only Info -->
           <div>
@@ -1821,16 +1915,16 @@ try {
               <i class="fas fa-info-circle"></i> Transaction Information
             </div>
             <div style="display:grid;grid-template-columns:repeat(2, 1fr);gap:8px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;font-size:11px;">
-              <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Transaction ID</span><strong id="voidInfoTxnId" style="font-family:monospace;font-size:11px;color:#0f172a;">-</strong></div>
-              <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Transaction Type</span><span id="voidInfoTxnType" style="font-weight:600;color:#0f172a;">-</span></div>
-              <div style="grid-column: span 2;"><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Customer Name</span><span id="voidInfoCustomer" style="color:#0f172a;">-</span></div>
+              <div style="grid-column: span 2;"><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Transaction ID</span><strong id="voidInfoTxnId" style="font-family:monospace;font-size:12px;color:#0f172a;word-break:break-all;display:block;">-</strong></div>
+              <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Transaction Type</span><span id="voidInfoTxnType" style="font-weight:700;color:#0f172a;">-</span></div>
+              <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Customer Name</span><span id="voidInfoCustomer" style="color:#0f172a;font-weight:600;">-</span></div>
               <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Processed By</span><span id="voidInfoStaff" style="color:#0f172a;">-</span></div>
               <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Shift</span><span id="voidInfoShift" style="color:#0f172a;">-</span></div>
               <div style="grid-column: span 2;"><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Date & Time</span><span id="voidInfoDateTime" style="color:#0f172a;">-</span></div>
               <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Payment Method</span><span id="voidInfoPayMethod" style="color:#0f172a;">-</span></div>
               <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Payment Status</span><span id="voidInfoPayStatus" style="color:#0f172a;">-</span></div>
               <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Transaction Status</span><span id="voidInfoStatus" style="color:#0f172a;">-</span></div>
-              <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Total Amount</span><strong id="voidInfoTotalAmount" style="color:#002F70;font-size:12px;">-</strong></div>
+              <div><span style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;display:block;">Total Amount</span><strong id="voidInfoTotalAmount" style="color:#002F70;font-size:13px;">-</strong></div>
             </div>
           </div>
           
@@ -1839,7 +1933,7 @@ try {
             <div style="font-size:11px;font-weight:800;color:#475569;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">
               <i class="fas fa-shopping-cart"></i> Purchased Items / Services
             </div>
-            <div id="voidItemsContainer" style="border:1px solid #cbd5e1;border-radius:8px;overflow-y:auto;max-height:165px;background:#fff;padding:8px;font-size:11px;">
+            <div id="voidItemsContainer" style="border:1px solid #cbd5e1;border-radius:8px;overflow-y:auto;overflow-x:hidden;max-height:220px;min-height:165px;background:#fff;padding:10px;font-size:11px;box-sizing:border-box;width:100%;">
               <!-- Dynamic content -->
             </div>
           </div>
@@ -2275,9 +2369,12 @@ function viewValidatedTransaction(source, id, orNo, txnIdStr) {
 
             /* ── STATUS BANNER ── */
             const vs = (data.validation_status || '').toLowerCase();
-            let bannerBg='#f0fdf4', bannerClr='#166534', bannerIcon='fa-check-circle', bannerLabel=data.validation_status||'Completed';
-            if (vs.includes('void'))   { bannerBg='#fef2f2'; bannerClr='#dc2626'; bannerIcon='fa-ban'; }
-            else if (vs.includes('adjust')) { bannerBg='#f1f5f9'; bannerClr='#475569'; bannerIcon='fa-sliders-h'; }
+            const js = (data.job_status || '').toLowerCase();
+            let bannerBg='#f0fdf4', bannerClr='#166534', bannerIcon='fa-check-circle', bannerLabel='Completed';
+            if (vs.includes('void') || js.includes('void'))   { bannerBg='#fef2f2'; bannerClr='#dc2626'; bannerIcon='fa-ban'; bannerLabel = 'Voided'; }
+            else if (vs.includes('adjust') || js.includes('adjust')) { bannerBg='#f1f5f9'; bannerClr='#475569'; bannerIcon='fa-sliders-h'; bannerLabel = 'Adjusted'; }
+            else if (js === 'in_progress' || js === 'in progress' || js === 'in-progress') { bannerBg='#eff6ff'; bannerClr='#2563eb'; bannerIcon='fa-spinner fa-spin'; bannerLabel = 'In Progress'; }
+            else if (vs === 'pending' || js === 'pending' || js === 'awaiting_payment') { bannerBg='#fef3c7'; bannerClr='#d97706'; bannerIcon='fa-clock'; bannerLabel = 'Pending'; }
             const txnTypeLbl = data.type === 'job_order' ? 'Job Order' : 'Merchandise';
             html += `<div style="background:${bannerBg};border:1px solid ${bannerClr}33;border-radius:8px;padding:10px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px;">
                 <i class="fas ${bannerIcon}" style="color:${bannerClr};font-size:18px;flex-shrink:0;"></i>
@@ -2335,7 +2432,7 @@ function viewValidatedTransaction(source, id, orNo, txnIdStr) {
                 }
                 html += `<div class="vt-detail-label">Payment Method:</div><div class="vt-detail-value">${pmHtmlJ}</div>`;
                 html += `<div class="vt-detail-label">Payment Status:</div><div class="vt-detail-value">${data.payment_status}</div>`;
-                html += `<div class="vt-detail-label">Job Status:</div><div class="vt-detail-value">${data.job_status}</div>`;
+                html += `<div class="vt-detail-label">Job Status:</div><div class="vt-detail-value"><span style="background:${bannerBg};color:${bannerClr};padding:3px 10px;border-radius:4px;font-size:13px;font-weight:700;">${bannerLabel}</span></div>`;
                 html += `<div class="vt-detail-label">Staff Encoder:</div><div class="vt-detail-value">${data.staff_name}</div>`;
                 html += `<div class="vt-detail-label">Created Date:</div><div class="vt-detail-value">${data.transaction_date}</div>`;
                 html += `<div class="vt-detail-label">Validated By:</div><div class="vt-detail-value">${data.validated_by}</div>`;
@@ -2827,10 +2924,42 @@ function openVoidModal(rowId, txnId, customer, source) {
         }
         
         const details = detailsRes;
-        const items = itemsRes.items || [];
+        let items = itemsRes.items || [];
         
+        // Helper to check for dummy/placeholder item names
+        const isPlaceholderItem = (it) => !it || !it.product_name || ['—', '-', 'N/A', 'n/a', 'none', 'None', 'null'].includes(it.product_name.trim());
+        
+        // If items from itemsRes is empty or only has placeholder dashes, fallback to details.items_breakdown
+        if ((!items || items.length === 0 || (items.length === 1 && isPlaceholderItem(items[0]))) && details.items_breakdown && details.items_breakdown.length > 0) {
+            items = details.items_breakdown.map(ib => ({
+                product_name: ib.product_name,
+                item_type: 'merchandise',
+                quantity: parseFloat(ib.quantity) || 1,
+                unit_price: parseFloat(String(ib.unit_price).replace(/[^0-9.]/g, '')) || 0,
+                subtotal: parseFloat(String(ib.subtotal).replace(/[^0-9.]/g, '')) || 0
+            }));
+        }
+
+        const grandTotal = parseFloat(String(itemsRes.total_amount || details.total_amount || 0).replace(/[^0-9.]/g, '')) || 0;
+
+        // If items are still empty, build fallback item from transaction details
+        if (!items || items.length === 0 || (items.length === 1 && isPlaceholderItem(items[0]))) {
+            const rawSku = (details.item_sku && !['—','-','N/A','n/a'].includes(details.item_sku.trim())) ? details.item_sku : 'Merchandise Item';
+            const fQty = parseFloat(details.quantity) || 1;
+            const fTot = grandTotal;
+            const fPrice = parseFloat(String(details.unit_price).replace(/[^0-9.]/g, '')) || (fQty > 0 ? fTot / fQty : fTot);
+            items = [{
+                product_name: rawSku,
+                item_type: 'merchandise',
+                quantity: fQty,
+                unit_price: fPrice,
+                subtotal: fTot > 0 ? fTot : fQty * fPrice
+            }];
+        }
+
         // Populate header fields
-        document.getElementById('voidInfoTxnType').innerText = _voidSource === 'job_orders' ? 'Job Order' : (details.type === 'combined' ? 'Combined' : 'Merchandise');
+        const displayType = _voidSource === 'job_orders' ? 'Job Order' : (details.type === 'combined' ? 'Combined' : (details.type === 'job_order' ? 'Job Order' : 'Merchandise'));
+        document.getElementById('voidInfoTxnType').innerText = displayType;
         document.getElementById('voidInfoCustomer').innerText = details.customer_name || 'Walk-in';
         document.getElementById('voidInfoStaff').innerText = details.staff_name || 'Staff';
         document.getElementById('voidInfoShift').innerText = details.shift || 'N/A';
@@ -2838,84 +2967,126 @@ function openVoidModal(rowId, txnId, customer, source) {
         document.getElementById('voidInfoPayMethod').innerText = details.payment_method || 'N/A';
         document.getElementById('voidInfoPayStatus').innerText = details.payment_status || details.validation_status || 'N/A';
         document.getElementById('voidInfoStatus').innerText = details.validation_status || details.job_status || 'Completed';
-        
-        const grandTotal = parseFloat(itemsRes.total_amount || details.total_amount || 0);
         document.getElementById('voidInfoTotalAmount').innerText = '₱' + grandTotal.toFixed(2);
+        
+        // Filter valid merchandise vs services
+        const services = items.filter(i => i.item_type === 'service' && !isPlaceholderItem(i));
+        const merchandise = items.filter(i => i.item_type !== 'service' && !isPlaceholderItem(i));
+
+        // Fallback if filtering left both arrays empty
+        if (services.length === 0 && merchandise.length === 0) {
+            merchandise.push({
+                product_name: (details.item_sku && !['—','-','N/A','n/a'].includes(details.item_sku.trim())) ? details.item_sku : 'Merchandise Item',
+                item_type: 'merchandise',
+                quantity: parseFloat(details.quantity) || 1,
+                unit_price: grandTotal,
+                subtotal: grandTotal
+            });
+        }
         
         // Render items breakdown inside voidItemsContainer
         let itemsHtml = '';
-        const services = items.filter(i => i.item_type === 'service');
-        const merchandise = items.filter(i => i.item_type !== 'service');
         
         if (merchandise.length > 0) {
-            itemsHtml += `<div style="font-weight:700;color:#15803d;margin-bottom:4px;">Merchandise</div>
-            <table class="report-table no-min-width print-table" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+            itemsHtml += `
+            <div style="font-weight:700;color:#15803d;font-size:11px;text-transform:uppercase;letter-spacing:.3px;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+                <i class="fas fa-boxes" style="color:#16a34a;"></i> Merchandise Items (${merchandise.length})
+            </div>
+            <table style="width:100% !important;table-layout:fixed;border-collapse:collapse;margin-bottom:10px;font-size:11px;box-sizing:border-box;">
+                <colgroup>
+                    <col style="width:48%;">
+                    <col style="width:14%;">
+                    <col style="width:18%;">
+                    <col style="width:20%;">
+                </colgroup>
                 <thead>
-                    <tr style="background:#f1f5f9;text-align:left;font-size:10px;">
-                        <th style="padding:4px;border-bottom:1px solid #cbd5e1;">Product</th>
-                        <th style="padding:4px;border-bottom:1px solid #cbd5e1;text-align:center;">Qty</th>
-                        <th style="padding:4px;border-bottom:1px solid #cbd5e1;text-align:right;">Unit Price</th>
-                        <th style="padding:4px;border-bottom:1px solid #cbd5e1;text-align:right;">Total</th>
+                    <tr style="background:#f1f5f9;text-align:left;font-size:10.5px;color:#475569;">
+                        <th style="padding:6px 8px;border-bottom:1px solid #cbd5e1;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Product</th>
+                        <th style="padding:6px 4px;border-bottom:1px solid #cbd5e1;text-align:center;font-weight:700;white-space:nowrap;">Qty</th>
+                        <th style="padding:6px 6px;border-bottom:1px solid #cbd5e1;text-align:right;font-weight:700;white-space:nowrap;">Price</th>
+                        <th style="padding:6px 8px;border-bottom:1px solid #cbd5e1;text-align:right;font-weight:700;white-space:nowrap;">Total</th>
                     </tr>
                 </thead>
                 <tbody>`;
-            merchandise.forEach(item => {
+            merchandise.forEach((item, idx) => {
+                const bg = idx % 2 === 1 ? '#f8fafc' : '#ffffff';
+                const qtyVal = parseFloat(item.quantity) || 1;
+                const qtyDisp = qtyVal % 1 === 0 ? qtyVal.toFixed(0) : qtyVal.toFixed(2);
+                const unitP = parseFloat(item.unit_price) || 0;
+                const subT = parseFloat(item.subtotal) || (qtyVal * unitP);
                 itemsHtml += `
-                    <tr>
-                        <td style="padding:4px;border-bottom:1px solid #f1f5f9;font-weight:600;">${item.product_name}</td>
-                        <td style="padding:4px;border-bottom:1px solid #f1f5f9;text-align:center;">${parseInt(item.quantity)}</td>
-                        <td style="padding:4px;border-bottom:1px solid #f1f5f9;text-align:right;">₱${parseFloat(item.unit_price).toFixed(2)}</td>
-                        <td style="padding:4px;border-bottom:1px solid #f1f5f9;text-align:right;font-weight:700;color:#002F70;">₱${parseFloat(item.subtotal).toFixed(2)}</td>
+                    <tr style="background:${bg};">
+                        <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9;font-weight:600;color:#1e293b;word-break:break-word;overflow:hidden;">${item.product_name}</td>
+                        <td style="padding:6px 4px;border-bottom:1px solid #f1f5f9;text-align:center;color:#475569;font-weight:700;">${qtyDisp}</td>
+                        <td style="padding:6px 6px;border-bottom:1px solid #f1f5f9;text-align:right;color:#64748b;white-space:nowrap;">₱${unitP.toFixed(2)}</td>
+                        <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9;text-align:right;font-weight:700;color:#002F70;white-space:nowrap;">₱${subT.toFixed(2)}</td>
                     </tr>`;
             });
-            
-            // Subtotal, Discount, VAT, Grand Total
-            const subtotal = details.subtotal_amount && details.subtotal_amount !== 'N/A' ? parseFloat(details.subtotal_amount) : grandTotal / 1.12;
-            const vat = details.vat_amount && details.vat_amount !== 'N/A' ? parseFloat(details.vat_amount) : grandTotal - subtotal;
-            
             itemsHtml += `
                 </tbody>
-            </table>
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:10px;color:#475569;margin-bottom:8px;padding-right:4px;">
-                <div>Subtotal: <strong>₱${subtotal.toFixed(2)}</strong></div>
-                <div>Discount: <strong>₱0.00</strong></div>
-                <div>VAT (12%): <strong>₱${vat.toFixed(2)}</strong></div>
-                <div style="font-size:11px;color:#002F70;margin-top:2px;">Grand Total: <strong>₱${grandTotal.toFixed(2)}</strong></div>
-            </div>`;
+            </table>`;
         }
         
         if (services.length > 0) {
-            itemsHtml += `<div style="font-weight:700;color:#b45309;margin-top:8px;margin-bottom:4px;">Job Order</div>
-            <table class="report-table no-min-width print-table" style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+            itemsHtml += `
+            <div style="font-weight:700;color:#b45309;font-size:11px;text-transform:uppercase;letter-spacing:.3px;margin-top:6px;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+                <i class="fas fa-wrench" style="color:#d97706;"></i> Job Order Services (${services.length})
+            </div>
+            <table style="width:100% !important;table-layout:fixed;border-collapse:collapse;margin-bottom:10px;font-size:11px;box-sizing:border-box;">
+                <colgroup>
+                    <col style="width:65%;">
+                    <col style="width:35%;">
+                </colgroup>
                 <thead>
-                    <tr style="background:#fffbeb;text-align:left;font-size:10px;">
-                        <th style="padding:4px;border-bottom:1px solid #fde68a;">Service</th>
-                        <th style="padding:4px;border-bottom:1px solid #fde68a;text-align:right;">Amount</th>
+                    <tr style="background:#fffbeb;text-align:left;font-size:10.5px;color:#92400e;">
+                        <th style="padding:6px 8px;border-bottom:1px solid #fde68a;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Service / Job</th>
+                        <th style="padding:6px 8px;border-bottom:1px solid #fde68a;text-align:right;font-weight:700;white-space:nowrap;">Amount</th>
                     </tr>
                 </thead>
                 <tbody>`;
-            services.forEach(item => {
+            services.forEach((item, idx) => {
+                const bg = idx % 2 === 1 ? '#fffdf7' : '#ffffff';
+                const subT = parseFloat(item.subtotal || item.unit_price || 0);
                 itemsHtml += `
-                    <tr>
-                        <td style="padding:4px;border-bottom:1px solid #fef3c7;font-weight:600;">${item.product_name}</td>
-                        <td style="padding:4px;border-bottom:1px solid #fef3c7;text-align:right;font-weight:700;color:#002F70;">₱${parseFloat(item.subtotal).toFixed(2)}</td>
+                    <tr style="background:${bg};">
+                        <td style="padding:6px 8px;border-bottom:1px solid #fef3c7;font-weight:600;color:#1e293b;word-break:break-word;overflow:hidden;">${item.product_name}</td>
+                        <td style="padding:6px 8px;border-bottom:1px solid #fef3c7;text-align:right;font-weight:700;color:#002F70;white-space:nowrap;">₱${subT.toFixed(2)}</td>
                     </tr>`;
             });
             itemsHtml += `
                 </tbody>
-            </table>
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-size:10px;color:#475569;margin-bottom:8px;padding-right:4px;">
-                <div style="font-size:11px;color:#002F70;margin-top:2px;">Grand Total: <strong>₱${grandTotal.toFixed(2)}</strong></div>
-            </div>`;
+            </table>`;
         }
         
-        document.getElementById('voidItemsContainer').innerHTML = itemsHtml || '<div style="color:#94a3b8;">No items in transaction.</div>';
+        // Subtotal, Discount, VAT, Grand Total summary box
+        const subtotal = details.subtotal_amount && details.subtotal_amount !== 'N/A' ? parseFloat(String(details.subtotal_amount).replace(/[^0-9.]/g, '')) : (grandTotal > 0 ? grandTotal / 1.12 : 0);
+        const vat = details.vat_amount && details.vat_amount !== 'N/A' ? parseFloat(String(details.vat_amount).replace(/[^0-9.]/g, '')) : Math.max(0, grandTotal - subtotal);
+        
+        itemsHtml += `
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-top:6px;display:flex;flex-direction:column;align-items:flex-end;gap:3px;font-size:11px;color:#475569;">
+            <div style="display:flex;justify-content:space-between;width:100%;max-width:200px;">
+                <span>Subtotal:</span>
+                <strong>₱${subtotal.toFixed(2)}</strong>
+            </div>
+            <div style="display:flex;justify-content:space-between;width:100%;max-width:200px;">
+                <span>VAT (12%):</span>
+                <strong>₱${vat.toFixed(2)}</strong>
+            </div>
+            <div style="display:flex;justify-content:space-between;width:100%;max-width:200px;border-top:1px solid #cbd5e1;padding-top:4px;margin-top:2px;font-size:12px;color:#002F70;">
+                <span style="font-weight:800;">Grand Total:</span>
+                <strong style="font-size:13px;">₱${grandTotal.toFixed(2)}</strong>
+            </div>
+        </div>`;
+        
+        document.getElementById('voidItemsContainer').innerHTML = itemsHtml || '<div style="color:#94a3b8;padding:12px;text-align:center;">No items in transaction.</div>';
         
         // Render Inventory Restore Impact Preview list
         let invHtml = '';
         if (merchandise.length > 0) {
             merchandise.forEach(item => {
-                invHtml += `<div><i class="fas fa-check" style="color:#16a34a;margin-right:4px;"></i> ${item.product_name} (+${parseInt(item.quantity)})</div>`;
+                const qtyVal = parseFloat(item.quantity) || 1;
+                const qtyDisp = qtyVal % 1 === 0 ? qtyVal.toFixed(0) : qtyVal.toFixed(2);
+                invHtml += `<div><i class="fas fa-check" style="color:#16a34a;margin-right:4px;"></i> ${item.product_name} (+${qtyDisp})</div>`;
             });
         } else {
             invHtml = '<div style="color:#94a3b8;">No inventory items to restore.</div>';

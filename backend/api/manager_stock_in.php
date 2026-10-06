@@ -516,7 +516,7 @@ function normalize_stock_in_items($items, string $id_key): array
 
 function pending_stock_in_status_sql(): string
 {
-    return "'Pending Stock-In','Ready for Stock-In','Validated','Verified','Partial Delivery','Damaged Items','Adjusted'";
+    return "'Pending Stock-In','Ready for Stock-In','Validated','Verified','Partial Delivery','Damaged Items','Adjusted','Pending Manager Approval','Pending Manager Confirmation','Pending Validation','Pending Verification','Pending Delivery','Pending','Expected Delivery'";
 }
 
 function fetch_pending_merchandise_rows(PDO $pdo, int $station_id, array $delivery_ids): array
@@ -1068,12 +1068,12 @@ function update_fuel_purchase_order_row(PDO $pdo, int $station_id, string $po_ke
         FROM fuel_purchase_orders fpo
         LEFT JOIN fuel_types ft ON ft.id = fpo.fuel_type_id
         WHERE fpo.station_id = ?
-          AND fpo.po_number = ?
+          AND (fpo.po_number = ? OR fpo.batch_id = ?)
           AND (fpo.fuel_type_id = ? OR LOWER(TRIM(COALESCE(ft.name, ''))) = LOWER(TRIM(?)))
         ORDER BY fpo.id DESC
         LIMIT 1
     ");
-    $stmt->execute([$station_id, $po_key, $fuel_type_id, $fuel_type]);
+    $stmt->execute([$station_id, $po_key, $po_key, $fuel_type_id, $fuel_type]);
     $id = (int)($stmt->fetchColumn() ?: 0);
     if ($id > 0) {
         $pdo->prepare("

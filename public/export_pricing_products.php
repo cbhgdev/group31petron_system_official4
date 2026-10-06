@@ -99,13 +99,13 @@ $export_rows = [];
 if ($tab === 'fuel') {
     $report_title = 'FUEL PRODUCTS & PRICING REPORT';
     $table_headers = [
-        ['label' => 'UGT NO.', 'width' => '12%', 'align' => 'left'],
-        ['label' => 'FUEL TYPE', 'width' => '20%', 'align' => 'left'],
-        ['label' => 'PRICE / LITER', 'width' => '13%', 'align' => 'right'],
-        ['label' => 'CURRENT VOL (L)', 'width' => '14%', 'align' => 'right'],
-        ['label' => 'CAPACITY (L)', 'width' => '13%', 'align' => 'right'],
-        ['label' => 'REORDER LVL (L)', 'width' => '13%', 'align' => 'right'],
-        ['label' => 'STATUS', 'width' => '15%', 'align' => 'center']
+        ['label' => 'UGT NO.', 'short_label' => 'UGT NO.', 'width' => '11%', 'align' => 'center'],
+        ['label' => 'FUEL TYPE', 'short_label' => 'FUEL TYPE', 'width' => '21%', 'align' => 'left'],
+        ['label' => 'PRICE / LITER', 'short_label' => 'PRICE /<br>LITER', 'width' => '13%', 'align' => 'right'],
+        ['label' => 'CURRENT VOL (L)', 'short_label' => 'CURRENT<br>VOL (L)', 'width' => '14%', 'align' => 'right'],
+        ['label' => 'CAPACITY (L)', 'short_label' => 'CAPACITY<br>(L)', 'width' => '13%', 'align' => 'right'],
+        ['label' => 'REORDER LVL (L)', 'short_label' => 'REORDER<br>LVL (L)', 'width' => '14%', 'align' => 'right'],
+        ['label' => 'STATUS', 'short_label' => 'STATUS', 'width' => '14%', 'align' => 'center']
     ];
 
     if ($target_sid > 0) {
@@ -227,16 +227,16 @@ if ($tab === 'fuel') {
 } elseif ($tab === 'merch') {
     $report_title = 'MERCHANDISE PRODUCTS & PRICING REPORT';
     $table_headers = [
-        ['label' => 'SKU / CODE', 'width' => '11%', 'align' => 'left'],
-        ['label' => 'PRODUCT NAME', 'width' => '22%', 'align' => 'left'],
-        ['label' => 'CATEGORY', 'width' => '12%', 'align' => 'left'],
-        ['label' => 'BRAND', 'width' => '10%', 'align' => 'left'],
-        ['label' => 'UOM', 'width' => '7%', 'align' => 'center'],
-        ['label' => 'UNIT COST', 'width' => '10%', 'align' => 'right'],
-        ['label' => 'SELLING PRICE', 'width' => '10%', 'align' => 'right'],
-        ['label' => 'STOCK', 'width' => '6%', 'align' => 'right'],
-        ['label' => 'REORDER', 'width' => '6%', 'align' => 'right'],
-        ['label' => 'STATUS', 'width' => '10%', 'align' => 'center']
+        ['label' => 'SKU / CODE', 'short_label' => 'SKU /<br>CODE', 'width' => '11%', 'align' => 'left'],
+        ['label' => 'PRODUCT NAME', 'short_label' => 'PRODUCT NAME', 'width' => '22%', 'align' => 'left'],
+        ['label' => 'CATEGORY', 'short_label' => 'CATEGORY', 'width' => '12%', 'align' => 'left'],
+        ['label' => 'BRAND', 'short_label' => 'BRAND', 'width' => '10%', 'align' => 'left'],
+        ['label' => 'UOM', 'short_label' => 'UOM', 'width' => '7%', 'align' => 'center'],
+        ['label' => 'UNIT COST', 'short_label' => 'UNIT<br>COST', 'width' => '10%', 'align' => 'right'],
+        ['label' => 'SELLING PRICE', 'short_label' => 'SELLING<br>PRICE', 'width' => '10%', 'align' => 'right'],
+        ['label' => 'STOCK', 'short_label' => 'STOCK', 'width' => '6%', 'align' => 'right'],
+        ['label' => 'REORDER', 'short_label' => 'REORDER', 'width' => '6%', 'align' => 'right'],
+        ['label' => 'STATUS', 'short_label' => 'STATUS', 'width' => '10%', 'align' => 'center']
     ];
 
     $raw_rows = ($target_sid > 0) ? load_merchandise_pricing_catalog($pdo, (int)$target_sid) : [];
@@ -313,13 +313,13 @@ if ($tab === 'fuel') {
 } elseif ($tab === 'services') {
     $report_title = 'SERVICE TYPES & PRICING REPORT';
     $table_headers = [
-        ['label' => 'CODE', 'width' => '10%', 'align' => 'left'],
-        ['label' => 'SERVICE NAME', 'width' => '28%', 'align' => 'left'],
-        ['label' => 'CATEGORY', 'width' => '16%', 'align' => 'left'],
-        ['label' => 'SERVICE FEE', 'width' => '12%', 'align' => 'right'],
-        ['label' => 'LABOR FEE', 'width' => '12%', 'align' => 'right'],
-        ['label' => 'TOTAL FEE', 'width' => '12%', 'align' => 'right'],
-        ['label' => 'STATUS', 'width' => '10%', 'align' => 'center']
+        ['label' => 'CODE', 'short_label' => 'CODE', 'width' => '10%', 'align' => 'left'],
+        ['label' => 'SERVICE NAME', 'short_label' => 'SERVICE NAME', 'width' => '28%', 'align' => 'left'],
+        ['label' => 'CATEGORY', 'short_label' => 'CATEGORY', 'width' => '16%', 'align' => 'left'],
+        ['label' => 'SERVICE FEE', 'short_label' => 'SERVICE<br>FEE', 'width' => '12%', 'align' => 'right'],
+        ['label' => 'LABOR FEE', 'short_label' => 'LABOR<br>FEE', 'width' => '12%', 'align' => 'right'],
+        ['label' => 'TOTAL FEE', 'short_label' => 'TOTAL<br>FEE', 'width' => '12%', 'align' => 'right'],
+        ['label' => 'STATUS', 'short_label' => 'STATUS', 'width' => '10%', 'align' => 'center']
     ];
 
     $raw_services = [];
@@ -498,9 +498,33 @@ ob_start();
     .hdr-box h2 { font-size: 14px; font-weight: bold; color: #00264D; text-transform: uppercase; margin: 0 0 2px 0; letter-spacing: 0.5px; }
     .hdr-box p { font-size: 9px; color: #475569; margin: 0 0 2px 0; font-weight: bold; }
     
-    .data-tbl { width: 100%; border-collapse: collapse; margin-top: 4px; table-layout: fixed; }
-    .data-tbl th { background: #00264D; color: #ffffff; padding: 5px 4px; font-size: 7.5pt; text-transform: uppercase; font-weight: bold; text-align: center; border: 1px solid #00264D; word-wrap: break-word; overflow-wrap: break-word; }
-    .data-tbl td { padding: 4px 4px; font-size: 7.5pt; border: 1px solid #cbd5e1; vertical-align: middle; word-wrap: break-word; overflow-wrap: break-word; }
+    .data-tbl { width: 100% !important; border-collapse: collapse !important; margin-top: 4px !important; table-layout: fixed !important; }
+    .data-tbl th {
+        background: #00264D !important;
+        color: #ffffff !important;
+        padding: 5px 3px !important;
+        font-size: 7.5pt !important;
+        text-transform: uppercase !important;
+        font-weight: bold !important;
+        border: 1px solid #00264D !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        white-space: normal !important;
+        line-height: 1.25 !important;
+        box-sizing: border-box !important;
+        vertical-align: middle !important;
+    }
+    .data-tbl td {
+        padding: 4px 4px !important;
+        font-size: 7.5pt !important;
+        border: 1px solid #cbd5e1 !important;
+        vertical-align: middle !important;
+        word-wrap: break-word !important;
+        overflow-wrap: break-word !important;
+        white-space: normal !important;
+        line-height: 1.25 !important;
+        box-sizing: border-box !important;
+    }
     .data-tbl tr:nth-child(even) td { background: #f8fafc; }
     
     .st-act { color: #15803d; font-weight: bold; }
@@ -521,7 +545,7 @@ ob_start();
     <thead>
         <tr>
             <?php foreach ($table_headers as $th): ?>
-            <th style="width: <?php echo $th['width']; ?>; text-align: <?php echo $th['align']; ?>;"><?php echo htmlspecialchars($th['label']); ?></th>
+            <th style="width: <?php echo $th['width']; ?>; text-align: <?php echo $th['align']; ?>;"><?php echo !empty($th['short_label']) ? $th['short_label'] : htmlspecialchars($th['label']); ?></th>
             <?php endforeach; ?>
         </tr>
     </thead>
@@ -539,7 +563,7 @@ ob_start();
         <tr>
             <?php foreach ($row as $k => $v): 
                 if ($k === '_is_active') continue;
-                $align = (strpos($k, 'price') !== false || strpos($k, 'fee') !== false || strpos($k, 'cost') !== false || strpos($k, 'vol') !== false || strpos($k, 'capacity') !== false || strpos($k, 'reorder') !== false || strpos($k, 'stock') !== false) ? 'right' : ((strpos($k, 'status') !== false || strpos($k, 'unit') !== false || strpos($k, 'duration') !== false) ? 'center' : 'left');
+                $align = ($k === 'ugt_no') ? 'center' : ((strpos($k, 'price') !== false || strpos($k, 'fee') !== false || strpos($k, 'cost') !== false || strpos($k, 'vol') !== false || strpos($k, 'capacity') !== false || strpos($k, 'reorder') !== false || strpos($k, 'stock') !== false) ? 'right' : ((strpos($k, 'status') !== false || strpos($k, 'unit') !== false || strpos($k, 'duration') !== false) ? 'center' : 'left'));
             ?>
             <td style="text-align: <?php echo $align; ?>;">
                 <?php if ($k === 'status'): ?>

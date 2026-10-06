@@ -118,30 +118,74 @@ try {
         $txn = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if ($txn) {
-            // Fetch items
+            // Fetch items matching either numeric ID or transaction_id code
             $stmt2 = $pdo->prepare("
-                SELECT mti.id, mti.product_name, mti.category, mti.size_variant,
+                SELECT mti.id,
+                       COALESCE(NULLIF(TRIM(mti.product_name), ''), 'Merchandise Item') AS product_name,
+                       mti.category, mti.size_variant,
                        mti.quantity, mti.unit_price, mti.subtotal,
                        COALESCE(mti.item_type,'merchandise') AS item_type,
                        COALESCE(mti.product_id,0) AS product_id
                 FROM merchandise_transaction_items mti
-                WHERE mti.transaction_id = ?
+                WHERE (mti.transaction_id = ? OR mti.transaction_id = ?)
                 ORDER BY mti.id ASC
             ");
-            $stmt2->execute([$txn['id']]);
-            $items = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+            $stmt2->execute([$txn['id'], $txn['transaction_id'] ?? '']);
+            $raw_items = $stmt2->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($raw_items as $it) {
+                $pname = trim((string)($it['product_name'] ?? ''));
+                if (in_array($pname, ['', '—', '-', 'N/A', 'n/a', 'none', 'None'], true)) {
+                    $it['product_name'] = 'Merchandise Item';
+                }
+                $items[] = $it;
+            }
 
             if (empty($items)) {
-                $lineName = !empty($txn['job_order_service']) ? $txn['job_order_service'] : (!empty($txn['item_sku']) ? $txn['item_sku'] : 'Item #'.$id);
-                $isSvc = !empty($txn['job_order_service']);
+                $jo_svc = trim((string)($txn['job_order_service'] ?? ''));
+                $is_placeholder = in_array($jo_svc, ['', '—', '-', 'N/A', 'n/a', 'none', 'None', 'null', 'NULL', '— (x1)'], true);
+                $isSvc = !$is_placeholder;
+
                 $total = (float)$txn['total_amount'];
+                $lineName = '';
+
+                if ($isSvc) {
+                    $lineName = $jo_svc;
+                } else {
+                    $item_sku = trim((string)($txn['item_sku'] ?? ''));
+                    if ($item_sku !== '' && !in_array($item_sku, ['—', '-', 'N/A', 'n/a'], true)) {
+                        try {
+                            $pst = $pdo->prepare("SELECT product_name FROM products WHERE sku = ? OR name = ? OR id = ? LIMIT 1");
+                            $pst->execute([$item_sku, $item_sku, $item_sku]);
+                            $pn = $pst->fetchColumn();
+                            if ($pn) $lineName = $pn;
+                        } catch (Throwable $e) {}
+
+                        if (!$lineName) {
+                            try {
+                                $ip_st = $pdo->prepare("SELECT product_name FROM inventory_products WHERE product_name = ? OR sku = ? OR id = ? LIMIT 1");
+                                $ip_st->execute([$item_sku, $item_sku, $item_sku]);
+                                $pn2 = $ip_st->fetchColumn();
+                                if ($pn2) $lineName = $pn2;
+                            } catch (Throwable $e) {}
+                        }
+
+                        if (!$lineName) $lineName = $item_sku;
+                    }
+                    if (!$lineName || in_array($lineName, ['—', '-', 'N/A', 'n/a'], true)) {
+                        $lineName = 'Merchandise Item';
+                    }
+                }
+
+                $qty = 1;
+                $unitPrice = $total;
                 $items[] = [
                     'id'           => 1,
                     'product_name' => $lineName,
                     'category'     => $isSvc ? 'Service' : 'Merchandise',
                     'size_variant' => '',
-                    'quantity'     => 1,
-                    'unit_price'   => $total,
+                    'quantity'     => $qty,
+                    'unit_price'   => $unitPrice,
                     'subtotal'     => $total,
                     'item_type'    => $isSvc ? 'service' : 'merchandise',
                     'product_id'   => 0
