@@ -20,17 +20,25 @@
 (function(window, document) {
     'use strict';
 
-    if (window.LiveSyncEngine && window.LiveSyncEngine.version === '3.0') return;
+    if (window.LiveSyncEngine && window.LiveSyncEngine.version === '3.1') return;
 
-    // ── Configuration & Intervals ──────────────────────────────────
-    const NOTIF_INTERVAL_MS   = 10000; // 10s: Notifications, alerts, badges, approval counts
-    const DATA_INTERVAL_MS    = 18000; // 18s: Dashboard KPIs, tables, history, inventory, fuel
-    const AUDIT_INTERVAL_MS   = 30000; // 30s: Audit trail, user lists, static configuration
+    // ── Configuration & Dynamic Intervals ──────────────────────────
+    function getSyncIntervalMs() {
+        if (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000) {
+            return window.PETRON_AUTO_REFRESH_MS;
+        }
+        if (typeof window.PETRON_AUTO_REFRESH_SECONDS === 'number' && window.PETRON_AUTO_REFRESH_SECONDS >= 5) {
+            return window.PETRON_AUTO_REFRESH_SECONDS * 1000;
+        }
+        return 10000; // default 10 seconds (optimal real-time rate)
+    }
 
     let isSyncingNotifs       = false;
     let isSyncingData         = false;
     let lastNotifCount        = -1;
     let lastSyncTime          = null;
+    let notifTimer            = null;
+    let dataTimer             = null;
 
     // ── App Base Path Detection ────────────────────────────────────
     function getAppBasePath() {
@@ -169,8 +177,15 @@
                     if (typeof window._petronNotifUpdateBadge === 'function') {
                         window._petronNotifUpdateBadge(newCount, null);
                     }
+                    // Refresh open notification dropdown if visible
+                    const nd = document.getElementById('notificationDropdown');
+                    if (nd && (nd.classList.contains('show') || nd.style.display === 'block')) {
+                        if (typeof window.loadStaffNotifications === 'function') window.loadStaffNotifications();
+                        else if (typeof window.petronLoadNotifications === 'function') window.petronLoadNotifications();
+                    }
                 }
                 updateSidebarBadges(data.sidebar_badges || {});
+                document.dispatchEvent(new CustomEvent('petron:live_sync', { detail: data }));
             }
         } catch (e) {
             // silent fail
@@ -231,6 +246,12 @@
                 '#usersTbody',
                 '#auditLogsTable',
                 '#auditLogsTbody',
+                '#transactionsTable',
+                '#transactionsTbody',
+                '#fuelTransactionsTable',
+                '#fuelTransactionsTbody',
+                '#backupTable',
+                '#backupHistoryTbody',
                 '#pendingApprovalsCard',
                 '#posPendingOrdersList',
                 '#recentActivitiesList',
@@ -238,6 +259,8 @@
                 '.stat-card',
                 '.kpi-card',
                 '.metric-card',
+                '.dev-card',
+                '.dev-cards-grid',
                 '.dashboard-kpi-grid',
                 '.summary-cards-row',
                 '[data-live-table]',
@@ -246,9 +269,10 @@
 
             const existingElements = [];
             targetSelectors.forEach(sel => {
-                document.querySelectorAll(sel).forEach(el => {
+                const els = document.querySelectorAll(sel);
+                els.forEach((el, idx) => {
                     if (!isContainerBeingEdited(el)) {
-                        existingElements.push({ selector: sel, element: el });
+                        existingElements.push({ selector: sel, element: el, index: idx });
                     }
                 });
             });
@@ -278,10 +302,19 @@
             const doc = parser.parseFromString(html, 'text/html');
 
             let anyTableUpdated = false;
-            existingElements.forEach(({ selector, element }) => {
+            existingElements.forEach(({ selector, element, index }) => {
                 if (isContainerBeingEdited(element)) return;
 
-                const newElement = element.id ? doc.getElementById(element.id) : doc.querySelector(selector);
+                let newElement = null;
+                if (element.id) {
+                    newElement = doc.getElementById(element.id);
+                } else {
+                    const freshEls = doc.querySelectorAll(selector);
+                    if (freshEls && freshEls[index]) {
+                        newElement = freshEls[index];
+                    }
+                }
+
                 if (newElement && element.innerHTML !== newElement.innerHTML) {
                     element.innerHTML = newElement.innerHTML;
                     anyTableUpdated = true;
@@ -346,18 +379,30 @@
         });
     }
 
+    // ── Dynamic Schedule Manager ──────────────────────────────────
+    function scheduleIntervals() {
+        if (notifTimer) clearInterval(notifTimer);
+        if (dataTimer)  clearInterval(dataTimer);
+
+        const intervalMs = getSyncIntervalMs();
+
+        // 1. Fast background loop: Notifications, security alerts, badges, backup trigger
+        notifTimer = setInterval(syncNotificationsAndBadges, intervalMs);
+
+        // 2. Medium loop: Tables, KPIs, inventory, transactions, history
+        dataTimer = setInterval(refreshDynamicPageFragments, Math.max(intervalMs, 8000));
+    }
+
     // ── Start Engine & Schedule Periodic Timers ────────────────────
     function startEngine() {
         // Initial fast sync on page load
         syncNotificationsAndBadges();
         interceptRefreshButtons();
 
-        // 1. Direct notifications: No interval polling loop
+        // Schedule periodic sync timers using configured interval
+        scheduleIntervals();
 
-        // 2. Medium loop: Tables, KPIs, inventory, transactions, history (18s)
-        setInterval(refreshDynamicPageFragments, DATA_INTERVAL_MS);
-
-        // 3. Visibility change: Sync immediately when user switches back to tab
+        // Visibility change: Sync immediately when user switches back to tab
         document.addEventListener('visibilitychange', function() {
             if (!document.hidden) {
                 syncNotificationsAndBadges();
@@ -374,12 +419,19 @@
 
     // ── Expose Global API ──────────────────────────────────────────
     window.LiveSyncEngine = {
-        version          : '3.0',
+        version          : '3.1',
         triggerSync      : syncNotificationsAndBadges,
         refreshFragments : refreshDynamicPageFragments,
         isUserBusy       : isUserBusy,
         getLastSyncTime  : () => lastSyncTime,
         getBasePath      : () => basePath,
+        getIntervalMs    : getSyncIntervalMs,
+        updateInterval   : function(seconds) {
+            const sec = Math.max(5, Math.min(300, parseInt(seconds, 10) || 10));
+            window.PETRON_AUTO_REFRESH_SECONDS = sec;
+            window.PETRON_AUTO_REFRESH_MS = sec * 1000;
+            scheduleIntervals();
+        }
     };
 
 })(window, document);

@@ -1688,20 +1688,28 @@ try {
                         );
 
                         if (in_array($norm_vst, ['voided', 'void', 'cancelled', 'canceled'], true)) {
+                            $row_status_label = 'Voided';
                             echo '<span class="badge badge-red" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-ban" style="margin-right:3px;"></i> Voided</span>';
                         } elseif ($norm_vst === 'adjusted') {
+                            $row_status_label = 'Adjusted';
                             echo '<span class="badge badge-gray" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-sliders-h" style="margin-right:3px;"></i> Adjusted</span>';
                         } elseif ($has_void_req) {
+                            $row_status_label = 'Void Requested';
                             echo '<span class="badge badge-red" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;" title="Void Requested"><i class="fas fa-clock" style="margin-right:3px;"></i> Void Req.</span>';
                         } elseif ($has_adj_req) {
+                            $row_status_label = 'Adjustment Requested';
                             echo '<span class="badge badge-orange" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;" title="Adjustment Requested"><i class="fas fa-clock" style="margin-right:3px;"></i> Adj. Req.</span>';
                         } elseif ($is_in_prog) {
+                            $row_status_label = 'In Progress';
                             echo '<span class="badge badge-blue" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-spinner fa-spin" style="margin-right:3px;"></i> In Progress</span>';
                         } elseif ($is_pend) {
+                            $row_status_label = 'Pending';
                             echo '<span class="badge badge-amber" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-clock" style="margin-right:3px;"></i> Pending</span>';
                         } elseif ($norm_wst === 'released' || $norm_vst === 'released') {
+                            $row_status_label = 'Released';
                             echo '<span class="badge badge-green" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-check" style="margin-right:3px;"></i> Released</span>';
                         } else {
+                            $row_status_label = 'Completed';
                             echo '<span class="badge badge-green" style="font-size:10px;font-weight:800;padding:3px 5px;display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;line-height:1.2;border-radius:6px;box-sizing:border-box;"><i class="fas fa-check-circle" style="margin-right:3px;"></i> Completed</span>';
                         }
                         ?>
@@ -1714,7 +1722,7 @@ try {
                             <!-- 1. View Details (Blue Outline Button) -->
                             <button type="button" class="vt-btn-act-sm"
                                     style="color:#002F70;border:1.5px solid #93c5fd;background:#eff6ff !important;cursor:pointer;font-weight:700;padding:6px 6px;font-size:11.5px;border-radius:6px;width:100%;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:4px;"
-                                    onclick="viewTransactionDetails('<?php echo htmlspecialchars($r['_source']); ?>', <?php echo (int)$r['row_id']; ?>)"
+                                    onclick="viewTransactionDetails('<?php echo htmlspecialchars($r['_source']); ?>', <?php echo (int)$r['row_id']; ?>, '<?php echo htmlspecialchars(addslashes($or_no)); ?>', '<?php echo htmlspecialchars(addslashes($r['txn_id'])); ?>', '<?php echo htmlspecialchars(addslashes($row_status_label)); ?>')"
                                     title="View Transaction Details">
                                 <i class="fas fa-eye" style="font-size:11px;margin-right:2px;"></i> View
                             </button>
@@ -2328,16 +2336,20 @@ body { overflow-x:hidden !important; max-width:100vw !important; }
 </style>
 
 <script>
-function viewTransactionDetails(source, id) {
-    return viewValidatedTransaction(source, id);
+function viewTransactionDetails(source, id, orNo, txnIdStr, statusText) {
+    return viewValidatedTransaction(source, id, orNo, txnIdStr, statusText);
 }
 
-function viewValidatedTransaction(source, id, orNo, txnIdStr) {
+function viewValidatedTransaction(source, id, orNo, txnIdStr, statusText) {
     // Set header badges
     const orBadge = document.getElementById('mgr-modal-or-badge');
     const txnIdEl = document.getElementById('mgr-modal-txn-id');
-    if (orNo && orBadge) { orBadge.textContent = orNo; orBadge.style.display = ''; }
-    else if (orBadge) { orBadge.style.display = 'none'; }
+    if (orNo && orNo !== 'N/A' && orBadge) { 
+        orBadge.textContent = orNo; 
+        orBadge.style.display = ''; 
+    } else if (orBadge) { 
+        orBadge.style.display = 'none'; 
+    }
     if (txnIdEl) txnIdEl.textContent = txnIdStr ? 'ID: ' + txnIdStr : '';
 
     // Set receipt button link (will be updated after fetch)
@@ -2347,16 +2359,28 @@ function viewValidatedTransaction(source, id, orNo, txnIdStr) {
     // Open modal with spinner
     document.getElementById('viewTransactionModal').classList.add('active');
     document.getElementById('viewTransactionContent').innerHTML =
-        '<div style="text-align:center;padding:40px;"><i class="fas fa-spinner fa-spin" style="font-size:32px;color:#003d82;"></i><div style="margin-top:12px;color:#64748b;">Loading...</div></div>';
+        '<div style="text-align:center;padding:40px;"><i class="fas fa-spinner fa-spin" style="font-size:32px;color:#003d82;"></i><div style="margin-top:12px;color:#64748b;">Loading transaction details...</div></div>';
 
     // Fetch transaction details
-    fetch('../backend/get_transaction_details.php?type=' + source + '&id=' + id)
+    fetch('../backend/get_transaction_details.php?type=' + encodeURIComponent(source) + '&id=' + encodeURIComponent(id))
         .then(response => response.json())
         .then(data => {
             if (!data.success) {
                 document.getElementById('viewTransactionContent').innerHTML =
                     '<div style="text-align:center;padding:40px;color:#dc2626;"><i class="fas fa-exclamation-circle" style="font-size:32px;display:block;margin-bottom:12px;"></i>' + (data.error || 'Unable to load details') + '</div>';
                 return;
+            }
+
+            // Fallback for header badges from data if not passed in click
+            if ((!orNo || orNo === 'N/A' || orNo === '') && (data.or_no || data.or_number)) {
+                const fetchedOr = data.or_no || data.or_number;
+                if (fetchedOr && fetchedOr !== 'N/A' && orBadge) {
+                    orBadge.textContent = fetchedOr;
+                    orBadge.style.display = '';
+                }
+            }
+            if ((!txnIdStr || txnIdStr === '') && data.transaction_id && txnIdEl) {
+                txnIdEl.textContent = 'ID: ' + data.transaction_id;
             }
 
             // Set receipt btn href
@@ -2367,20 +2391,51 @@ function viewValidatedTransaction(source, id, orNo, txnIdStr) {
 
             let html = '';
 
-            /* ── STATUS BANNER ── */
-            const vs = (data.validation_status || '').toLowerCase();
-            const js = (data.job_status || '').toLowerCase();
-            let bannerBg='#f0fdf4', bannerClr='#166534', bannerIcon='fa-check-circle', bannerLabel='Completed';
-            if (vs.includes('void') || js.includes('void'))   { bannerBg='#fef2f2'; bannerClr='#dc2626'; bannerIcon='fa-ban'; bannerLabel = 'Voided'; }
-            else if (vs.includes('adjust') || js.includes('adjust')) { bannerBg='#f1f5f9'; bannerClr='#475569'; bannerIcon='fa-sliders-h'; bannerLabel = 'Adjusted'; }
-            else if (js === 'in_progress' || js === 'in progress' || js === 'in-progress') { bannerBg='#eff6ff'; bannerClr='#2563eb'; bannerIcon='fa-spinner fa-spin'; bannerLabel = 'In Progress'; }
-            else if (vs === 'pending' || js === 'pending' || js === 'awaiting_payment') { bannerBg='#fef3c7'; bannerClr='#d97706'; bannerIcon='fa-clock'; bannerLabel = 'Pending'; }
+            /* ── AUTHORITATIVE STATUS RESOLUTION ── */
+            const activeRawStatus = (statusText || data.status || data.computed_status || data.workflow_status || data.job_status || data.validation_status || 'Completed').toString().trim();
+            const norm = activeRawStatus.toLowerCase().replace(/[\-_]/g, ' ');
+
+            let bannerBg = '#f0fdf4', bannerClr = '#166534', bannerBorder = '#bbf7d0', bannerIcon = 'fa-check-circle', bannerLabel = 'Completed';
+            if (norm.includes('void req') || norm.includes('void_req')) {
+                bannerBg = '#fef2f2'; bannerClr = '#dc2626'; bannerBorder = '#fecaca'; bannerIcon = 'fa-clock'; bannerLabel = 'Void Requested';
+            } else if (norm.includes('adj req') || norm.includes('adjust req') || norm.includes('adjustment req')) {
+                bannerBg = '#fff7ed'; bannerClr = '#ea580c'; bannerBorder = '#ffedd5'; bannerIcon = 'fa-clock'; bannerLabel = 'Adjustment Requested';
+            } else if (norm.includes('void') || norm.includes('cancel')) {
+                bannerBg = '#fef2f2'; bannerClr = '#dc2626'; bannerBorder = '#fecaca'; bannerIcon = 'fa-ban'; bannerLabel = 'Voided';
+            } else if (norm.includes('adjust')) {
+                bannerBg = '#f1f5f9'; bannerClr = '#475569'; bannerBorder = '#cbd5e1'; bannerIcon = 'fa-sliders-h'; bannerLabel = 'Adjusted';
+            } else if (norm.includes('progress') || norm.includes('ongoing') || norm.includes('active')) {
+                bannerBg = '#eff6ff'; bannerClr = '#2563eb'; bannerBorder = '#bfdbfe'; bannerIcon = 'fa-spinner fa-spin'; bannerLabel = 'In Progress';
+            } else if (norm === 'pending' || norm.includes('awaiting') || norm.includes('draft')) {
+                bannerBg = '#fef3c7'; bannerClr = '#d97706'; bannerBorder = '#fde68a'; bannerIcon = 'fa-clock'; bannerLabel = 'Pending';
+            } else if (norm.includes('released')) {
+                bannerBg = '#f0fdf4'; bannerClr = '#166534'; bannerBorder = '#bbf7d0'; bannerIcon = 'fa-check'; bannerLabel = 'Released';
+            } else {
+                bannerBg = '#f0fdf4'; bannerClr = '#166534'; bannerBorder = '#bbf7d0'; bannerIcon = 'fa-check-circle'; bannerLabel = 'Completed';
+            }
+
+            /* ── PAYMENT STATUS BADGE RESOLUTION ── */
+            const payStatus = (data.payment_status || 'Paid').toString().trim();
+            const normPay = payStatus.toLowerCase();
+            let payBg = '#dcfce7', payClr = '#15803d', payBorder = '#bbf7d0', payIcon = 'fa-check-circle', payLabel = 'PAID';
+            if (normPay.includes('partial')) {
+                payBg = '#fef3c7'; payClr = '#b45309'; payBorder = '#fde68a'; payIcon = 'fa-clock'; payLabel = 'PARTIAL';
+            } else if (normPay.includes('unpaid')) {
+                payBg = '#fee2e2'; payClr = '#b91c1c'; payBorder = '#fecaca'; payIcon = 'fa-times-circle'; payLabel = 'UNPAID';
+            } else if (normPay.includes('credit') || normPay.includes('receivable')) {
+                payBg = '#ede9fe'; payClr = '#6d28d9'; payBorder = '#ddd6fe'; payIcon = 'fa-user-clock'; payLabel = 'CREDIT ACCOUNT';
+            } else {
+                payLabel = 'PAID';
+            }
+            const payBadgeHtml = `<span style="background:${payBg};color:${payClr};border:1px solid ${payBorder};padding:2px 8px;border-radius:4px;font-size:11.5px;font-weight:800;display:inline-flex;align-items:center;gap:4px;letter-spacing:0.3px;"><i class="fas ${payIcon}" style="font-size:10px;"></i> ${payLabel}</span>`;
+            const statusBadgeHtml = `<span style="background:${bannerBg};color:${bannerClr};border:1px solid ${bannerBorder};padding:3px 10px;border-radius:4px;font-size:12.5px;font-weight:800;display:inline-flex;align-items:center;gap:4px;"><i class="fas ${bannerIcon}" style="font-size:11px;"></i> ${bannerLabel}</span>`;
+
             const txnTypeLbl = data.type === 'job_order' ? 'Job Order' : 'Merchandise';
-            html += `<div style="background:${bannerBg};border:1px solid ${bannerClr}33;border-radius:8px;padding:10px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px;">
-                <i class="fas ${bannerIcon}" style="color:${bannerClr};font-size:18px;flex-shrink:0;"></i>
+            html += `<div style="background:${bannerBg};border:1.5px solid ${bannerClr}33;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:12px;">
+                <i class="fas ${bannerIcon}" style="color:${bannerClr};font-size:22px;flex-shrink:0;"></i>
                 <div>
-                    <div style="font-size:13.5px;font-weight:800;color:${bannerClr};text-transform:uppercase;letter-spacing:.4px;">${bannerLabel}</div>
-                    <div style="font-size:12.5px;color:#64748b;">${txnTypeLbl} Transaction &bull; ${data.transaction_date||''}</div>
+                    <div style="font-size:14px;font-weight:800;color:${bannerClr};text-transform:uppercase;letter-spacing:.4px;">${bannerLabel}</div>
+                    <div style="font-size:12px;color:#64748b;margin-top:2px;">${txnTypeLbl} Transaction &bull; ${data.transaction_date||''}</div>
                 </div>
             </div>`;
 
@@ -2397,7 +2452,7 @@ function viewValidatedTransaction(source, id, orNo, txnIdStr) {
                         pmHtmlM += `<div style="font-size:11px;color:#64748b;">Ref No: ${data.ewallet_reference}</div>`;
                     }
                 }
-                html += `<div class="vt-detail-label">Payment Method:</div><div class="vt-detail-value">${pmHtmlM}</div>`;
+                html += `<div class="vt-detail-label">Payment Method:</div><div class="vt-detail-value" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><div>${pmHtmlM}</div>${payBadgeHtml}</div>`;
                 if (data.amount_tendered && data.amount_tendered !== 'N/A') {
                     html += `<div class="vt-detail-label">Amount Tendered:</div><div class="vt-detail-value">&#8369;${data.amount_tendered}</div>`;
                     html += `<div class="vt-detail-label">Sukli / Change:</div><div class="vt-detail-value">&#8369;${data.change_amount}</div>`;
@@ -2405,9 +2460,10 @@ function viewValidatedTransaction(source, id, orNo, txnIdStr) {
                 html += `<div class="vt-detail-label">Transaction Date:</div><div class="vt-detail-value">${data.transaction_date}</div>`;
                 html += `<div class="vt-detail-label">Staff Encoder:</div><div class="vt-detail-value">${data.staff_name}</div>`;
                 if (data.shift && data.shift !== 'N/A') { html += `<div class="vt-detail-label">Shift:</div><div class="vt-detail-value">${data.shift}</div>`; }
-                html += `<div class="vt-detail-label">Status:</div><div class="vt-detail-value"><span style="background:${bannerBg};color:${bannerClr};padding:3px 10px;border-radius:4px;font-size:13px;font-weight:700;">${bannerLabel}</span></div>`;
+                html += `<div class="vt-detail-label">Status:</div><div class="vt-detail-value">${statusBadgeHtml}</div>`;
                 html += `<div class="vt-detail-label">Validated By:</div><div class="vt-detail-value">${data.validated_by}</div>`;
                 html += `<div class="vt-detail-label">Validated At:</div><div class="vt-detail-value">${data.validated_at}</div>`;
+                if (data.void_reason && data.void_reason !== 'N/A') { html += `<div class="vt-detail-label" style="color:#dc2626;">Void Reason:</div><div class="vt-detail-value" style="color:#dc2626;font-weight:600;">${data.void_reason}</div>`; }
                 if (data.remarks && data.remarks !== 'N/A') { html += `<div class="vt-detail-label">Remarks:</div><div class="vt-detail-value">${data.remarks}</div>`; }
                 html += `<div class="vt-detail-label">Total Amount:</div><div class="vt-detail-amount" style="font-size:18px;font-weight:800;">&#8369;${data.total_amount}</div>`;
 
@@ -2430,13 +2486,13 @@ function viewValidatedTransaction(source, id, orNo, txnIdStr) {
                         pmHtmlJ += `<div style="font-size:11px;color:#64748b;">Ref No: ${data.ewallet_reference}</div>`;
                     }
                 }
-                html += `<div class="vt-detail-label">Payment Method:</div><div class="vt-detail-value">${pmHtmlJ}</div>`;
-                html += `<div class="vt-detail-label">Payment Status:</div><div class="vt-detail-value">${data.payment_status}</div>`;
-                html += `<div class="vt-detail-label">Job Status:</div><div class="vt-detail-value"><span style="background:${bannerBg};color:${bannerClr};padding:3px 10px;border-radius:4px;font-size:13px;font-weight:700;">${bannerLabel}</span></div>`;
+                html += `<div class="vt-detail-label">Payment Method:</div><div class="vt-detail-value" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><div>${pmHtmlJ}</div>${payBadgeHtml}</div>`;
+                html += `<div class="vt-detail-label">Job Status:</div><div class="vt-detail-value">${statusBadgeHtml}</div>`;
                 html += `<div class="vt-detail-label">Staff Encoder:</div><div class="vt-detail-value">${data.staff_name}</div>`;
                 html += `<div class="vt-detail-label">Created Date:</div><div class="vt-detail-value">${data.transaction_date}</div>`;
                 html += `<div class="vt-detail-label">Validated By:</div><div class="vt-detail-value">${data.validated_by}</div>`;
                 html += `<div class="vt-detail-label">Validated At:</div><div class="vt-detail-value">${data.validated_at}</div>`;
+                if (data.void_reason && data.void_reason !== 'N/A') { html += `<div class="vt-detail-label" style="color:#dc2626;">Void Reason:</div><div class="vt-detail-value" style="color:#dc2626;font-weight:600;">${data.void_reason}</div>`; }
                 if (data.additional_notes && data.additional_notes !== 'N/A') { html += `<div class="vt-detail-label">Notes:</div><div class="vt-detail-value">${data.additional_notes}</div>`; }
                 html += `<div class="vt-detail-label">Total Amount:</div><div class="vt-detail-amount" style="font-size:18px;font-weight:800;">&#8369;${data.total_amount}</div>`;
             }

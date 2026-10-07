@@ -24,7 +24,6 @@ $master_menu = [
     ['id'=>'inventory','label'=>'Inventory','ico'=>'fas fa-warehouse','href'=>'staff_inventory_merchandise.php','permissions'=>['view_inventory','manage_inventory'],'station_specific'=>true,'sub_items'=>[
         ['id'=>'inv_merch',           'label'=>'Merchandise Inventory',  'href'=>'staff_inventory_merchandise.php',  'permissions'=>['view_inventory'], 'desc'=>'Manage merchandise items and monitor stock levels.'],
         ['id'=>'inv_fuel',            'label'=>'Fuel Inventory',         'href'=>'staff_inventory_fuel.php',         'permissions'=>['view_inventory'], 'desc'=>'Record fuel pump readings and deliveries with Batch ID.'],
-        ['id'=>'inv_record_delivery', 'label'=>'Record Delivery',        'href'=>'staff_record_delivery.php',        'permissions'=>['manage_inventory','view_inventory'], 'desc'=>'Record merchandise delivery receipts and update stock levels.'],
     ]],
 
     // Product Management - Manager (view/manage products & pricing)
@@ -158,7 +157,6 @@ function filter_menu_by_permissions($menu_items, $user_role) {
                 'sub_items' => [
                     ['id' => 'admin_inventory_merchandise', 'label' => 'Merchandise Inventory', 'href' => 'admin_inventory_merchandise.php', 'ico' => 'fas fa-box',               'permissions' => ['view_all_reports', 'view_inventory'], 'desc' => 'Monitor merchandise stock, pricing, and stock alerts.'],
                     ['id' => 'admin_inventory_fuel',        'label' => 'Fuel Inventory',        'href' => 'admin_inventory_fuel.php',        'ico' => 'fas fa-gas-pump',          'permissions' => ['view_all_reports', 'view_inventory'], 'desc' => 'Monitor fuel levels and submit discrepancy corrections.'],
-                    ['id' => 'staff_record_delivery',       'label' => 'Record Delivery',       'href' => 'staff_record_delivery.php',       'ico' => 'fas fa-truck-loading',     'permissions' => ['manage_inventory', 'manage_deliveries'], 'desc' => 'Record merchandise and fuel delivery receipts.'],
                     ['id' => 'mgr_stock_in',                 'label' => 'Stock-In',              'href' => 'manager_stock_in.php',            'ico' => 'fas fa-download',          'permissions' => ['manage_inventory', 'view_inventory'], 'desc' => 'Approve pending staff-recorded deliveries and update inventory.'],
                     ['id' => 'mgr_stock_review',             'label' => 'Purchase Management',   'href' => 'manager_stock_request_review.php','ico' => 'fas fa-clipboard-check',  'permissions' => ['manage_inventory', 'view_inventory'], 'desc' => 'Review stock requests and manage procurement workflow.'],
                 ],

@@ -157,12 +157,36 @@ try {
     $notifications = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($notifications as &$nr) {
-        if (empty($nr['redirect_url']) && !empty($nr['reference_type'])) {
-            $nr['redirect_url'] = notification_redirect_url(
-                $nr['reference_type'],
-                (int)($nr['reference_id'] ?? 0),
-                $role
-            );
+        $cur_ref = $nr['reference_type'] ?? '';
+        $cur_url = trim((string)($nr['redirect_url'] ?? ''));
+
+        if (in_array($role, ['staff', 'cashier', 'pump_attendant'])) {
+            if (empty($cur_url) && !empty($cur_ref)) {
+                $cur_url = notification_redirect_url($cur_ref, (int)($nr['reference_id'] ?? 0), $role);
+            }
+            if (strpos($cur_url, 'staff_fuel_deliveries.php') !== false || strpos($cur_url, 'staff_record_delivery.php') !== false) {
+                $is_fuel = (
+                    strpos($cur_url, 'staff_fuel_deliveries.php') !== false ||
+                    strpos($cur_url, 'tab=fuel') !== false ||
+                    strpos($cur_url, 'fpo') !== false ||
+                    stripos($nr['title'] ?? '', 'fuel') !== false ||
+                    stripos($nr['message'] ?? '', 'fuel') !== false ||
+                    stripos($nr['message'] ?? '', 'diesel') !== false ||
+                    stripos($nr['message'] ?? '', 'liters') !== false ||
+                    stripos($nr['message'] ?? '', 'xcs') !== false ||
+                    stripos($nr['message'] ?? '', 'tank') !== false
+                );
+                $cur_url = $is_fuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+            }
+            $nr['redirect_url'] = $cur_url;
+        } else {
+            if (empty($nr['redirect_url']) && !empty($nr['reference_type'])) {
+                $nr['redirect_url'] = notification_redirect_url(
+                    $nr['reference_type'],
+                    (int)($nr['reference_id'] ?? 0),
+                    $role
+                );
+            }
         }
     }
     unset($nr);
@@ -996,14 +1020,32 @@ function handleFeedItemClick(el, notifId, redirectUrl, nData) {
         'general'           : 'admin_fuel_management.php'
     };
     const staffFallback = {
-        'fuel_transaction'  : 'staff_fuel_sales_closing.php',
-        'fuel_management'   : 'staff_fuel_sales_closing.php',
-        'inventory'         : 'staff_inventory_merchandise.php',
-        'stock_request'     : 'staff_my_requests.php',
-        'general'           : 'staff_fuel_sales_closing.php'
+        'fuel_transaction'      : 'staff_fuel_sales_closing.php',
+        'fuel_management'       : 'staff_fuel_sales_closing.php',
+        'inventory'             : 'staff_inventory_merchandise.php',
+        'stock_in'              : 'staff_inventory_merchandise.php',
+        'merchandise_stock_in'  : 'staff_inventory_merchandise.php',
+        'fuel_stock_in'         : 'staff_inventory_fuel.php',
+        'delivery'              : 'staff_inventory_merchandise.php',
+        'fuel_delivery'         : 'staff_inventory_fuel.php',
+        'merchandise_delivery'  : 'staff_inventory_merchandise.php',
+        'stock_request'         : 'staff_my_requests.php',
+        'general'               : 'staff_fuel_sales_closing.php'
     };
 
-    // Title-based overrides for the manager (handles "general" event_type with specific titles)
+    // Staff URL Sanitization & Redirection
+    if (['staff', 'cashier', 'pump_attendant'].includes(role)) {
+        if (redirectUrl && (redirectUrl.includes('staff_fuel_deliveries.php') || redirectUrl.includes('staff_record_delivery.php'))) {
+            const isFuel = redirectUrl.includes('staff_fuel_deliveries.php') ||
+                           redirectUrl.includes('tab=fuel') ||
+                           redirectUrl.includes('fpo') ||
+                           notifTitle.toLowerCase().includes('fuel') ||
+                           (nData.message && nData.message.toLowerCase().includes('fuel'));
+            redirectUrl = isFuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+        }
+    }
+
+    // Title-based overrides (handles "general" event_type or generic delivery/stock-in notifications)
     let titleFallback = null;
     if (role === 'manager') {
         if (notifTitle.includes('fuel reading') || notifTitle.includes('fuel meter') || notifTitle.includes('fuel transaction') || notifTitle.includes('pending validation')) {
@@ -1020,6 +1062,13 @@ function handleFeedItemClick(el, notifId, redirectUrl, nData) {
             titleFallback = 'manager_inventory_merchandise.php';
         } else if (notifTitle.includes('fuel') || notifTitle.includes('low fuel')) {
             titleFallback = 'manager_inventory_fuel.php';
+        }
+    } else if (['staff', 'cashier', 'pump_attendant'].includes(role)) {
+        const lowerTitle = notifTitle.toLowerCase();
+        const lowerMsg = (nData.message || '').toLowerCase();
+        if (lowerTitle.includes('stock - in') || lowerTitle.includes('stock-in') || lowerTitle.includes('delivery') || lowerTitle.includes('stocked in')) {
+            const isFuel = lowerTitle.includes('fuel') || lowerMsg.includes('fuel') || lowerMsg.includes('diesel') || lowerMsg.includes('unleaded') || lowerMsg.includes('gasoline') || lowerMsg.includes('liters') || lowerMsg.includes('xcs') || lowerMsg.includes('tank');
+            titleFallback = isFuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
         }
     }
 

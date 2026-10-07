@@ -208,6 +208,25 @@ try {
                 upsertSetting($pdo, $key, $valStr, $category, $station_id, $me['id']);
             }
 
+            // Ensure maintenance status consistency
+            if (!empty($settings['maintenance_mode']) && ($settings['maintenance_mode'] === '1' || $settings['maintenance_mode'] === 1)) {
+                $mEndTime = trim((string)($settings['maintenance_end_time'] ?? ''));
+                if ($mEndTime !== '') {
+                    $mTs = strtotime($mEndTime);
+                    if ($mTs !== false && $mTs > 0 && time() >= $mTs) {
+                        // Already expired! Immediately set to Online and clear
+                        upsertSetting($pdo, 'maintenance_mode', '0', 'maintenance', $station_id, $me['id']);
+                        upsertSetting($pdo, 'system_status', 'Online', 'maintenance', $station_id, $me['id']);
+                        upsertSetting($pdo, 'maintenance_end_time', '', 'maintenance', $station_id, $me['id']);
+                    }
+                }
+            } else {
+                // Maintenance is OFF: clear maintenance_end_time
+                upsertSetting($pdo, 'maintenance_mode', '0', 'maintenance', $station_id, $me['id']);
+                upsertSetting($pdo, 'system_status', 'Online', 'maintenance', $station_id, $me['id']);
+                upsertSetting($pdo, 'maintenance_end_time', '', 'maintenance', $station_id, $me['id']);
+            }
+
             // Sync global security, notification, appearance, and report settings across all stations when updated globally
             if ($station_id === 0) {
                 $globalSyncKeys = [
@@ -265,6 +284,11 @@ try {
         case 'get_settings':
             $all_settings = [];
 
+            // Auto-conclude any expired maintenance mode before returning settings
+            if (function_exists('check_and_auto_conclude_maintenance')) {
+                check_and_auto_conclude_maintenance($pdo);
+            }
+
             // Load global settings first
             $stmt0 = $pdo->prepare("SELECT setting_key, setting_value, category FROM system_settings WHERE station_id = 0");
             $stmt0->execute();
@@ -299,6 +323,7 @@ try {
                 'nav_active_color'             => '#E30613',
                 'sidebar_mode'                 => 'Expanded',
                 'dashboard_auto_refresh'       => '10',
+                'auto_refresh_interval'        => '10',
                 'session_timeout'              => '30',
                 'min_password_length'          => '8',
                 'max_login_attempts'           => '5',
@@ -322,6 +347,10 @@ try {
                 $result['company_logo'] = '';
                 $result['logo'] = '';
             }
+
+            $accurateRefreshSec = function_exists('petron_auto_refresh_interval') ? petron_auto_refresh_interval($station_id) : 10;
+            $result['dashboard_auto_refresh'] = (string)$accurateRefreshSec;
+            $result['auto_refresh_interval']  = (string)$accurateRefreshSec;
 
             echo json_encode(['success' => true, 'settings' => $result]);
             break;
@@ -348,6 +377,7 @@ try {
                     ['system_accent_color',          '#002F6C', 'appearance'],
                     ['sidebar_mode',                 'Expanded', 'appearance'],
                     ['dashboard_auto_refresh',       '10', 'appearance'],
+                    ['auto_refresh_interval',        '10', 'appearance'],
                     ['session_timeout',              '30', 'security'],
                     ['min_password_length',          '8', 'security'],
                     ['max_login_attempts',           '5', 'security'],

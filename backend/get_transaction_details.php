@@ -15,6 +15,7 @@
 header('Content-Type: application/json');
 require_once __DIR__ . '/../public/db_connect.php';
 require_once __DIR__ . '/lib.php';
+require_once __DIR__ . '/transaction_schema_fix.php';
 
 // Verify login
 if (session_status() === PHP_SESSION_NONE) session_start();
@@ -79,10 +80,18 @@ try {
                 mt.job_order_mechanic_name,
                 COALESCE(NULLIF(TRIM(mt.job_order_description),''), mt.staff_remarks, mt.remarks, '') AS job_order_description,
                 COALESCE(NULLIF(CONCAT(u_staff.first_name,' ',u_staff.last_name),' '), u_staff.username, 'Unknown') AS staff_name,
-                COALESCE(NULLIF(CONCAT(u_validated.first_name,' ',u_validated.last_name),' '), u_validated.username, 'N/A') AS validated_by_name
+                COALESCE(NULLIF(CONCAT(u_validated.first_name,' ',u_validated.last_name),' '), u_validated.username, 'N/A') AS validated_by_name,
+                COALESCE(mt.workflow_status, '') AS workflow_status,
+                COALESCE(mt.payment_status, '') AS payment_status,
+                mt.amount_paid,
+                mt.job_order_db_id,
+                mt.job_order_id,
+                COALESCE(NULLIF(TRIM(jo_mt.status),''), '') AS jo_status,
+                COALESCE(NULLIF(TRIM(jo_mt.validation_status),''), '') AS jo_validation_status
             FROM merchandise_transactions mt
             LEFT JOIN users u_staff ON u_staff.id = mt.staff_id
             LEFT JOIN users u_validated ON u_validated.id = mt.validated_by
+            LEFT JOIN job_orders jo_mt ON jo_mt.id = mt.job_order_db_id
             LEFT JOIN customers c ON (
                 c.station_id = mt.station_id AND (
                     (mt.credit_customer_id IS NOT NULL AND c.id = mt.credit_customer_id)
@@ -228,11 +237,11 @@ try {
         $pending_void_req = null;
         try {
             $vr_stmt = $pdo->prepare("
-                SELECT tr.request_type, tr.request_reason, tr.remarks, tr.requested_at,
+                SELECT tr.request_type, tr.request_reason, tr.remarks, tr.requested_at, tr.status,
                        COALESCE(NULLIF(CONCAT(u.first_name,' ',u.last_name),' '), u.username, 'Staff') AS req_staff_name
                 FROM transaction_requests tr
                 LEFT JOIN users u ON u.id = tr.requested_by
-                WHERE (tr.transaction_id = ? OR tr.transaction_id = ?)
+                WHERE (tr.transaction_id = ? OR tr.transaction_id = ?) AND tr.status = 'Pending'
                 ORDER BY tr.id DESC LIMIT 1
             ");
             $vr_stmt->execute([$row['id'], $row['transaction_id']]);
@@ -245,6 +254,75 @@ try {
         $eff_staff_remarks = !empty($row['staff_remarks']) && $row['staff_remarks'] !== 'N/A'
             ? $row['staff_remarks']
             : ($pending_void_req['remarks'] ?? ($row['remarks'] ?? ''));
+
+        // Compute authoritative transaction status matching manager_validated_transactions
+        $vst = strtolower(trim((string)($row['validation_status'] ?? 'completed')));
+        $wst = strtolower(trim((string)($row['workflow_status'] ?? '')));
+        if (!empty($row['jo_status'])) {
+            $jo_st = strtolower(trim((string)$row['jo_status']));
+            if (in_array($jo_st, ['inprogress', 'in progress', 'in-progress', 'active', 'ongoing'], true)) {
+                $wst = 'inprogress';
+            } elseif (in_array($jo_st, ['completed', 'finished', 'done', 'released'], true) && !in_array($wst, ['voided', 'adjusted'], true)) {
+                $wst = $jo_st;
+            } elseif (in_array($jo_st, ['pending', 'awaitingpayment', 'draft'], true) && $wst === '') {
+                $wst = 'pending';
+            }
+        }
+        $norm_vst = preg_replace('/[^a-z0-9]+/', '', $vst);
+        $norm_wst = preg_replace('/[^a-z0-9]+/', '', $wst);
+
+        $has_adj_req  = ($pending_void_req && ($pending_void_req['request_type'] ?? '') === 'Adjustment' && ($pending_void_req['status'] ?? 'Pending') === 'Pending' && $norm_vst !== 'adjusted' && !in_array($norm_vst, ['voided', 'void'], true));
+        $has_void_req = ($pending_void_req && ($pending_void_req['request_type'] ?? '') === 'Void' && ($pending_void_req['status'] ?? 'Pending') === 'Pending' && !in_array($norm_vst, ['voided', 'void'], true));
+
+        $is_in_prog = in_array($norm_wst, ['inprogress', 'active', 'ongoing'], true)
+                   || ($norm_wst === '' && in_array($norm_vst, ['inprogress', 'active', 'ongoing'], true));
+        $is_comp_ws = in_array($norm_wst, ['completed', 'finished', 'done', 'approved', 'paid'], true)
+                   || in_array($norm_vst, ['completed', 'finished', 'approved', 'official'], true);
+        $is_pend    = !$is_comp_ws && !$is_in_prog && (
+            in_array($norm_wst, ['pending', 'awaitingpayment', 'draft'], true)
+            || ($norm_wst === '' && in_array($norm_vst, ['unvalidated', 'pendingvalidation'], true))
+        );
+
+        if (in_array($norm_vst, ['voided', 'void', 'cancelled', 'canceled'], true) || in_array($norm_wst, ['voided', 'void', 'cancelled', 'canceled'], true)) {
+            $computed_status = 'Voided';
+        } elseif ($norm_vst === 'adjusted' || $norm_ws === 'adjusted') {
+            $computed_status = 'Adjusted';
+        } elseif ($has_void_req) {
+            $computed_status = 'Void Requested';
+        } elseif ($has_adj_req) {
+            $computed_status = 'Adjustment Requested';
+        } elseif ($is_in_prog) {
+            $computed_status = 'In Progress';
+        } elseif ($is_pend) {
+            $computed_status = 'Pending';
+        } elseif ($norm_wst === 'released' || $norm_vst === 'released') {
+            $computed_status = 'Released';
+        } else {
+            $computed_status = 'Completed';
+        }
+
+        // Compute payment status
+        $raw_pstat = trim((string)($row['payment_status'] ?? ''));
+        $norm_pstat = strtolower($raw_pstat);
+        if ($norm_pstat !== '' && in_array($norm_pstat, ['paid', 'unpaid', 'partial', 'partially paid', 'credit account', 'credit'], true)) {
+            $computed_pay_status = ucwords($raw_pstat);
+            if ($norm_pstat === 'partially paid') $computed_pay_status = 'Partial';
+        } else {
+            $tot = (float)($row['total_amount'] ?? 0);
+            $paid = isset($row['amount_paid']) && $row['amount_paid'] !== null ? (float)$row['amount_paid'] : null;
+            if ($paid === null) {
+                $pm = strtolower(trim((string)($row['payment_method'] ?? '')));
+                $computed_pay_status = ($pm !== '' && $pm !== 'n/a' && !str_contains($pm, 'credit')) ? 'Paid' : 'Unpaid';
+            } elseif ($paid <= 0) {
+                $computed_pay_status = 'Unpaid';
+            } elseif ($paid < $tot - 0.01) {
+                $computed_pay_status = 'Partial';
+            } else {
+                $computed_pay_status = 'Paid';
+            }
+        }
+
+        $computed_or_no = 'OR-' . date('Y', strtotime($row['transaction_date'] > '2000-01-01' ? $row['transaction_date'] : $row['created_at'])) . '-' . str_pad((int)$row['id'], 6, '0', STR_PAD_LEFT);
 
         // Format response for merchandise transaction
         $jo_svc = trim((string)($row['job_order_service'] ?? ''));
@@ -260,6 +338,7 @@ try {
         echo json_encode([
             'success' => true,
             'type' => $is_jo_type ? 'job_order' : 'merchandise',
+            'or_no' => $computed_or_no,
             'transaction_id' => $row['transaction_id'],
             'customer_name' => $row['customer_name'] ?: 'Walk-in',
             'item_sku' => $formatted_item_sku,
@@ -270,10 +349,14 @@ try {
             'payment_method' => $pay_info['payment_type'],
             'payment_type' => $pay_info['payment_type'],
             'payment_display' => $pay_info['display_inline'] ?? $pay_info['payment_type'],
-            'payment_status' => $row['validation_status'] ?: 'Paid',
+            'payment_status' => $computed_pay_status,
+            'status' => $computed_status,
+            'computed_status' => $computed_status,
+            'workflow_status' => $computed_status,
+            'job_status' => $computed_status,
             'transaction_date' => date('M d, Y h:i A', strtotime($row['transaction_date'] > '2000-01-01' ? $row['transaction_date'] : $row['created_at'])),
-            'validation_status' => $row['validation_status'],
-            'job_status' => $row['validation_status'] ?: 'Completed',
+            'validation_status' => $computed_status,
+            'raw_validation_status' => $row['validation_status'],
             'validated_at' => $validated_at,
             'rejection_reason' => $row['rejection_reason'] ?: 'N/A',
             'adjustment_reason' => $row['adjustment_reason'] ?: 'N/A',
@@ -422,11 +505,11 @@ try {
         try {
             $jo_no_check = $row['job_order_number'] ?: "JO-{$id}";
             $vr_stmt = $pdo->prepare("
-                SELECT tr.request_type, tr.request_reason, tr.remarks, tr.requested_at,
+                SELECT tr.request_type, tr.request_reason, tr.remarks, tr.requested_at, tr.status,
                        COALESCE(NULLIF(CONCAT(u.first_name,' ',u.last_name),' '), u.username, 'Staff') AS req_staff_name
                 FROM transaction_requests tr
                 LEFT JOIN users u ON u.id = tr.requested_by
-                WHERE (tr.transaction_id = ? OR tr.transaction_id = ?)
+                WHERE (tr.transaction_id = ? OR tr.transaction_id = ?) AND tr.status = 'Pending'
                 ORDER BY tr.id DESC LIMIT 1
             ");
             $vr_stmt->execute([$row['id'], $jo_no_check]);
@@ -439,6 +522,60 @@ try {
         $eff_jo_staff_remarks = !empty($row['additional_notes']) && $row['additional_notes'] !== 'N/A'
             ? $row['additional_notes']
             : ($pending_jo_void['remarks'] ?? ($row['notes'] ?? ''));
+
+        // Compute authoritative job order status matching manager_validated_transactions
+        $jo_vst = strtolower(trim((string)($row['validation_status'] ?? 'approved')));
+        $jo_wst = strtolower(trim((string)($row['status'] ?? 'pending')));
+        $norm_jvst = preg_replace('/[^a-z0-9]+/', '', $jo_vst);
+        $norm_jwst = preg_replace('/[^a-z0-9]+/', '', $jo_wst);
+
+        $has_jo_adj_req  = ($pending_jo_void && ($pending_jo_void['request_type'] ?? '') === 'Adjustment' && ($pending_jo_void['status'] ?? 'Pending') === 'Pending' && $norm_jvst !== 'adjusted' && !in_array($norm_jvst, ['voided', 'void'], true));
+        $has_jo_void_req = ($pending_jo_void && ($pending_jo_void['request_type'] ?? '') === 'Void' && ($pending_jo_void['status'] ?? 'Pending') === 'Pending' && !in_array($norm_jvst, ['voided', 'void'], true));
+
+        $jo_is_in_prog = in_array($norm_jwst, ['inprogress', 'active', 'ongoing'], true)
+                      || ($norm_jwst === '' && in_array($norm_jvst, ['inprogress', 'active', 'ongoing'], true));
+        $jo_is_comp_ws = in_array($norm_jwst, ['completed', 'finished', 'done', 'approved', 'paid'], true)
+                      || in_array($norm_jvst, ['completed', 'finished', 'approved', 'official'], true);
+        $jo_is_pend    = !$jo_is_comp_ws && !$jo_is_in_prog && (
+            in_array($norm_jwst, ['pending', 'awaitingpayment', 'draft'], true)
+            || ($norm_jwst === '' && in_array($norm_jvst, ['unvalidated', 'pendingvalidation'], true))
+        );
+
+        if (in_array($norm_jvst, ['voided', 'void', 'cancelled', 'canceled'], true) || in_array($norm_jwst, ['voided', 'void', 'cancelled', 'canceled'], true)) {
+            $computed_jo_status = 'Voided';
+        } elseif ($norm_jvst === 'adjusted' || $norm_jwst === 'adjusted') {
+            $computed_jo_status = 'Adjusted';
+        } elseif ($has_jo_void_req) {
+            $computed_jo_status = 'Void Requested';
+        } elseif ($has_jo_adj_req) {
+            $computed_jo_status = 'Adjustment Requested';
+        } elseif ($jo_is_in_prog) {
+            $computed_jo_status = 'In Progress';
+        } elseif ($jo_is_pend) {
+            $computed_jo_status = 'Pending';
+        } elseif ($norm_jwst === 'released' || $norm_jvst === 'released') {
+            $computed_jo_status = 'Released';
+        } else {
+            $computed_jo_status = 'Completed';
+        }
+
+        // Job order payment status
+        $raw_jo_pstat = trim((string)($row['payment_status'] ?? ''));
+        $norm_jo_pstat = strtolower($raw_jo_pstat);
+        if ($norm_jo_pstat !== '' && in_array($norm_jo_pstat, ['paid', 'unpaid', 'partial', 'partially paid', 'credit account', 'credit'], true)) {
+            $computed_jo_pay_status = ucwords($raw_jo_pstat);
+            if ($norm_jo_pstat === 'partially paid') $computed_jo_pay_status = 'Partial';
+        } else {
+            if ($jo_paid <= 0) {
+                $computed_jo_pay_status = 'Unpaid';
+            } elseif ($jo_paid < $jo_total - 0.01) {
+                $computed_jo_pay_status = 'Partial';
+            } else {
+                $computed_jo_pay_status = 'Paid';
+            }
+        }
+
+        $computed_jo_or_no = 'JO-' . date('Y', strtotime($row['created_at'])) . '-' . str_pad((int)$row['id'], 6, '0', STR_PAD_LEFT);
 
         $jo_pay_info = function_exists('format_payment_for_record') ? format_payment_for_record($row) : [
             'payment_type' => $row['payment_method'],
@@ -489,6 +626,7 @@ try {
         echo json_encode([
             'success' => true,
             'type' => 'job_order',
+            'or_no' => $computed_jo_or_no,
             'transaction_id' => $row['job_order_number'] ?: "JO-{$id}",
             'customer_name' => $row['customer_name'] ?: 'Walk-in',
             'vehicle_plate' => $row['vehicle_plate'] ?: 'N/A',
@@ -506,10 +644,14 @@ try {
             'payment_display' => $jo_pay_info['display_inline'] ?? $jo_pay_info['payment_type'],
             'ewallet_provider' => $jo_pay_info['provider'] ?: ($row['ewallet_provider'] ?: 'N/A'),
             'ewallet_reference' => $row['ewallet_reference'] ?: 'N/A',
-            'payment_status' => $row['payment_status'],
-            'validation_status' => $row['validation_status'],
-            'job_status' => $row['status'] ?: 'Pending',
+            'payment_status' => $computed_jo_pay_status,
+            'status' => $computed_jo_status,
+            'computed_status' => $computed_jo_status,
+            'workflow_status' => $computed_jo_status,
+            'job_status' => $computed_jo_status,
             'transaction_date' => date('M d, Y h:i A', strtotime($row['created_at'])),
+            'validation_status' => $computed_jo_status,
+            'raw_validation_status' => $row['validation_status'],
             'validated_at' => $jo_validated_at,
             'adjustment_reason' => $row['adjustment_reason'] ?: 'N/A',
             'void_reason' => $eff_jo_void_reason,

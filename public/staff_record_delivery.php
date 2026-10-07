@@ -1,26 +1,18 @@
 <?php
 $page_id = 'staff_record_delivery';
 require_once __DIR__ . '/../backend/lib.php';
-require_once __DIR__ . '/db_connect.php';
 require_login();
 
-$me         = current_user();
-$role       = role_key($me['role'] ?? '');
-$station_id = user_station_id();
-
-if (!in_array($role, ['staff', 'cashier', 'pump_attendant', 'admin', 'manager', 'superadmin'])) {
-    header('Location: login.php');
-    exit;
+// The "Record Delivery" form has been removed from the staff workflow.
+// Redirect directly to Staff Fuel Inventory or Merchandise Inventory.
+$qs = $_SERVER['QUERY_STRING'] ?? '';
+$tab = $_GET['tab'] ?? '';
+if ($tab === 'fuel' || stripos($qs, 'fuel') !== false || stripos($qs, 'fpo') !== false) {
+    header('Location: staff_inventory_fuel.php');
+} else {
+    header('Location: staff_inventory_merchandise.php');
 }
-
-$msg = '';
-$msg_type = 'success';
-
-// Get active tab
-$active_tab = $_GET['tab'] ?? 'merchandise';
-if (!in_array($active_tab, ['merchandise', 'fuel', 'history', 'delivery'])) {
-    $active_tab = 'merchandise';
-}
+exit;
 
 try {
     $pdo->exec("ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS delivery_time TIME NULL");

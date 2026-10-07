@@ -1117,6 +1117,7 @@ try {
         SELECT 
             fpo.id,
             fpo.po_number,
+            fpo.batch_id,
             'fuel' AS category_type,
             'Fuel' AS category_label,
             COALESCE(s.name, 'Petron Corporation') AS supplier_name,
@@ -1142,20 +1143,38 @@ try {
     $fuel_pos = $stmt_f->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($fuel_pos as &$fpo) {
-        $fpo['items'] = [[
-            'fuel_type' => $fpo['fuel_type'] ?: 'Fuel',
-            'liters' => (float)$fpo['liters'],
-            'cost_per_liter' => (float)$fpo['cost_per_liter'],
-            'total_price' => (float)$fpo['total_amount']
-        ]];
+        $parent_batch_ref = !empty($fpo['batch_id']) ? $fpo['batch_id'] : $fpo['po_number'];
+        $fpo_items_list = [];
+        try {
+            $stmt_batch_items = $pdo->prepare("
+                SELECT ft.name AS fuel_type, fpo2.volume AS liters, fpo2.unit_price AS cost_per_liter, fpo2.total_amount AS total_price
+                FROM fuel_purchase_orders fpo2
+                LEFT JOIN fuel_types ft ON fpo2.fuel_type_id = ft.id
+                WHERE fpo2.station_id = ? AND (fpo2.batch_id = ? OR fpo2.po_number = ?)
+                ORDER BY fpo2.id ASC
+            ");
+            $stmt_batch_items->execute([$station_id, $parent_batch_ref, $fpo['po_number']]);
+            $fpo_items_list = $stmt_batch_items->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {}
+
+        if (!empty($fpo_items_list)) {
+            $fpo['items'] = $fpo_items_list;
+        } else {
+            $fpo['items'] = [[
+                'fuel_type' => $fpo['fuel_type'] ?: 'Fuel',
+                'liters' => (float)$fpo['liters'],
+                'cost_per_liter' => (float)$fpo['cost_per_liter'],
+                'total_price' => (float)$fpo['total_amount']
+            ]];
+        }
 
         $stmt_del = $pdo->prepare("
             SELECT dr_number, sales_invoice_no, COALESCE(received_by_name, 'Staff') AS received_by_name, delivery_date
             FROM deliveries_oversight
-            WHERE (source_ref = ? OR batch_id = ?) AND station_id = ? AND delivery_type = 'fuel'
+            WHERE (source_ref = ? OR source_ref = ? OR batch_id = ? OR batch_id = ?) AND station_id = ? AND delivery_type = 'fuel'
             LIMIT 1
         ");
-        $stmt_del->execute([$fpo['po_number'], $fpo['po_number'], $station_id]);
+        $stmt_del->execute([$fpo['po_number'], $parent_batch_ref, $fpo['po_number'], $parent_batch_ref, $station_id]);
         $del_info = $stmt_del->fetch(PDO::FETCH_ASSOC);
         $fpo['dr_number'] = $del_info['dr_number'] ?? 'N/A';
         $fpo['sales_invoice_no'] = $del_info['sales_invoice_no'] ?? 'N/A';
@@ -1439,6 +1458,7 @@ body .main,
 .status-approved { background: #dcfce7; color: #15803d; }
 .status-received { background: #dbeafe; color: #1d4ed8; }
 .status-cancelled { background: #fee2e2; color: #b91c1c; }
+.status-progress { background: #eff6ff; color: #2563eb; }
 
 /* Modal Design with Scrollable Body and Sticky Footer */
 /* Centered strictly within the main layout area (excluding sidebar) */
@@ -2468,8 +2488,10 @@ body.sidebar-collapsed .modal-overlay {
                             <td colspan="8" style="text-align: center; padding: 40px; color: #94a3b8;">No purchase history records found.</td>
                         </tr>
                     <?php else: ?>
-                        <?php foreach ($purchase_history_list as $ph_item): ?>
-                        <tr data-po="<?= htmlspecialchars($ph_item['po_number']) ?>" data-category="<?= $ph_item['category_type'] ?>" data-supplier="<?= htmlspecialchars($ph_item['supplier_name']) ?>" data-status="<?= htmlspecialchars($ph_item['status']) ?>" data-date="<?= date('Y-m-d', strtotime($ph_item['date_ordered'])) ?>">
+                        <?php foreach ($purchase_history_list as $ph_item): 
+                            $ph_batch_param = !empty($ph_item['batch_id']) ? $ph_item['batch_id'] : $ph_item['po_number'];
+                        ?>
+                        <tr data-po="<?= htmlspecialchars($ph_item['po_number']) ?>" data-batch="<?= htmlspecialchars($ph_batch_param) ?>" data-category="<?= $ph_item['category_type'] ?>" data-supplier="<?= htmlspecialchars($ph_item['supplier_name']) ?>" data-status="<?= htmlspecialchars($ph_item['status']) ?>" data-date="<?= date('Y-m-d', strtotime($ph_item['date_ordered'])) ?>">
                             <td style="font-weight: 800; color: #002F6C; font-family: monospace; font-size: 14px;">
                                 <?= htmlspecialchars($ph_item['po_number']) ?>
                             </td>
@@ -2488,16 +2510,20 @@ body.sidebar-collapsed .modal-overlay {
                                 <?php
                                 $st = strtolower($ph_item['status']);
                                 $badge_class = 'status-pending';
-                                if (in_array($st, ['completed', 'received', 'stock-in complete'])) $badge_class = 'status-approved';
+                                if (in_array($st, ['completed', 'received', 'stock-in complete', 'approved'])) $badge_class = 'status-approved';
                                 elseif (in_array($st, ['cancelled', 'rejected', 'withdrawn'])) $badge_class = 'status-cancelled';
+                                elseif (in_array($st, ['in progress', 'progress', 'processing', 'delivering', 'pending delivery'])) $badge_class = 'status-progress';
                                 ?>
                                 <span class="status-badge <?= $badge_class ?>"><?= htmlspecialchars($ph_item['status']) ?></span>
                             </td>
                             <td style="text-align: center; white-space: nowrap;">
-                                <a href="print_po_new.php?po_id=<?= urlencode($ph_item['po_number']) ?>&batch_id=<?= urlencode($ph_item['po_number']) ?>&type=<?= urlencode($ph_item['category_type']) ?>" target="_blank" class="btn-pr btn-outline-pr" title="Print Purchase Order" style="padding:5px 12px; font-size:12px; text-decoration:none;">
+                                <button type="button" onclick="openPurchaseHistoryModal(<?= htmlspecialchars(json_encode($ph_item), ENT_QUOTES, 'UTF-8') ?>)" class="btn-pr btn-outline-pr" title="View Details" style="padding:5px 12px; font-size:12px; margin-right:4px;">
+                                    <i class="fas fa-eye"></i> View
+                                </button>
+                                <a href="print_po_new.php?po_id=<?= urlencode($ph_item['po_number']) ?>&batch_id=<?= urlencode($ph_batch_param) ?>&type=<?= urlencode($ph_item['category_type']) ?>" target="_blank" class="btn-pr btn-outline-pr" title="Print Purchase Order" style="padding:5px 12px; font-size:12px; text-decoration:none; margin-right:4px;">
                                     <i class="fas fa-print"></i> Print PO
                                 </a>
-                                <a href="print_supplier_invoice.php?po_id=<?= urlencode($ph_item['po_number']) ?>&batch_id=<?= urlencode($ph_item['po_number']) ?>&type=<?= urlencode($ph_item['category_type']) ?>" target="_blank" class="btn-pr btn-outline-pr" title="Print Invoice" style="padding:5px 12px; font-size:12px; text-decoration:none;">
+                                <a href="print_supplier_invoice.php?po_id=<?= urlencode($ph_item['po_number']) ?>&batch_id=<?= urlencode($ph_batch_param) ?>&type=<?= urlencode($ph_item['category_type']) ?>" target="_blank" class="btn-pr btn-outline-pr" title="Print Invoice" style="padding:5px 12px; font-size:12px; text-decoration:none;">
                                     <i class="fas fa-file-invoice"></i> Invoice
                                 </a>
                             </td>
@@ -2875,7 +2901,16 @@ function openPurchaseHistoryModal(item) {
     document.getElementById('mApprovedBy').innerText = item.approved_by_name || 'Admin';
     document.getElementById('mDateOrdered').innerText = item.date_ordered ? item.date_ordered.substring(0, 10) : '—';
     document.getElementById('mDateReceived').innerText = item.date_received && item.date_received !== '0000-00-00 00:00:00' ? item.date_received.substring(0, 10) : '—';
-    document.getElementById('mStatus').innerHTML = '<span class="status-badge status-approved">' + (item.status || 'Completed') + '</span>';
+    var st = (item.status || 'Completed').toLowerCase();
+    var bClass = 'status-pending';
+    if (['completed', 'received', 'stock-in complete', 'approved'].includes(st)) {
+        bClass = 'status-approved';
+    } else if (['cancelled', 'rejected', 'withdrawn'].includes(st)) {
+        bClass = 'status-cancelled';
+    } else if (['in progress', 'progress', 'processing', 'delivering', 'pending delivery'].includes(st)) {
+        bClass = 'status-progress';
+    }
+    document.getElementById('mStatus').innerHTML = '<span class="status-badge ' + bClass + '">' + (item.status || 'Completed') + '</span>';
 
     // Delivery Info
     document.getElementById('mDrNo').innerText = item.dr_number || 'N/A';
@@ -2952,12 +2987,14 @@ function closePurchaseHistoryModal() {
 
 function printModalPO() {
     if (!currentPoItemForModal) return;
-    window.open('print_po_new.php?po_id=' + encodeURIComponent(currentPoItemForModal.po_number) + '&type=' + encodeURIComponent(currentPoItemForModal.category_type), '_blank');
+    var bId = currentPoItemForModal.batch_id || currentPoItemForModal.po_number;
+    window.open('print_po_new.php?po_id=' + encodeURIComponent(currentPoItemForModal.po_number) + '&batch_id=' + encodeURIComponent(bId) + '&type=' + encodeURIComponent(currentPoItemForModal.category_type), '_blank');
 }
 
 function printModalInvoice() {
     if (!currentPoItemForModal) return;
-    window.open('print_supplier_invoice.php?po_id=' + encodeURIComponent(currentPoItemForModal.po_number) + '&type=' + encodeURIComponent(currentPoItemForModal.category_type), '_blank');
+    var bId = currentPoItemForModal.batch_id || currentPoItemForModal.po_number;
+    window.open('print_supplier_invoice.php?po_id=' + encodeURIComponent(currentPoItemForModal.po_number) + '&batch_id=' + encodeURIComponent(bId) + '&type=' + encodeURIComponent(currentPoItemForModal.category_type), '_blank');
 }
 
 // ── Purchase Management Pagination Engine ──

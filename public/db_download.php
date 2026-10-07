@@ -44,8 +44,12 @@ $stored_file = $backup_dir . basename($bk['backup_name'] ?? '');
 $download_name = 'u261539219_petrondbs.sql';
 
 if (!file_exists($stored_file)) {
-    http_response_code(404);
-    exit('Backup file not found on server.');
+    if (file_exists($backup_dir . 'u261539219_petrondbs.sql')) {
+        $stored_file = $backup_dir . 'u261539219_petrondbs.sql';
+    } else {
+        http_response_code(404);
+        exit('Backup file not found on server.');
+    }
 }
 
 // Log the download
@@ -60,6 +64,8 @@ header('Cache-Control: no-cache, no-store, must-revalidate');
 header('Pragma: no-cache');
 header('Expires: 0');
 
-ob_end_clean();
+while (ob_get_level() > 0) {
+    ob_end_clean();
+}
 readfile($stored_file);
 exit;

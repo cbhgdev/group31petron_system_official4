@@ -215,7 +215,7 @@ if (isset($_GET['ajax_action']) && $_GET['ajax_action'] === 'get_closing_for_rev
             'id' => (int)$stx['id'],
             'txn_id' => $stx['transaction_id'],
             'pump_name' => $stx['pump_number'] ?: ('Pump #' . ($stx['pump_id'] ?: '?')),
-            'fuel_type' => $stx['fuel_type'],
+            'fuel_type' => petron_canonical_fuel_type($stx['fuel_type'] ?: ($stx['pump_number'] ?? '')),
             'beginning' => $beg,
             'ending' => $end,
             'cal' => $cal,
@@ -1280,7 +1280,9 @@ try {
 }
 
 // ── Fetch Dynamic Fuel Types (5 Canonical Petron Types, No Numbers) ───
-$fuel_types = petron_standard_fuel_types();
+$fuel_types = function_exists('petron_standard_fuel_types') 
+    ? petron_standard_fuel_types() 
+    : ['Diesel', 'Kerosene', 'Turbo Diesel', 'XCS Plus', 'Xtra UNL'];
 
 // ── Fetch Filtered Transactions ───────────────────────────────────────
 $where = ["ft.station_id = ?"];
@@ -1305,7 +1307,8 @@ if ($shift_filter !== 'all') {
 
 // Fuel Type filter
 if ($fuel_type_filter !== '') {
-    list($ft_cond, $ft_params) = petron_fuel_type_sql_condition('ft.fuel_type', $fuel_type_filter);
+    $col_expr = "COALESCE(NULLIF(TRIM(ft.fuel_type), ''), fp.pump_number, '')";
+    list($ft_cond, $ft_params) = petron_fuel_type_sql_condition($col_expr, $fuel_type_filter);
     $where[] = $ft_cond;
     $params = array_merge($params, $ft_params);
 }
@@ -1376,6 +1379,15 @@ try {
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     $transactions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Normalize fuel types across all records so pump/nozzle numbers (1-1, 1-2, etc.) are stripped
+    foreach ($transactions as &$tx) {
+        $tx['raw_fuel_type'] = $tx['fuel_type'];
+        $canon_ft = petron_canonical_fuel_type($tx['fuel_type'] ?: ($tx['pump_number'] ?? ''));
+        $tx['canonical_fuel_type'] = $canon_ft;
+        $tx['fuel_type'] = $canon_ft;
+    }
+    unset($tx);
 
     // Compute dynamic filtered summaries based on the displayed transactions
     $pending_count = 0;
@@ -2016,7 +2028,7 @@ body.sidebar-collapsed .modal,
         </div>
         <div class="afto-fg">
             <label>Shift</label>
-            <select name="shift_filter">
+            <select name="shift_filter" onchange="this.form.submit()">
                 <option value="all" <?= $shift_filter === 'all' ? 'selected' : '' ?>>All Shifts</option>
                 <option value="first" <?= $shift_filter === 'first' ? 'selected' : '' ?>>First Shift</option>
                 <option value="second" <?= $shift_filter === 'second' ? 'selected' : '' ?>>Second Shift</option>
@@ -2024,16 +2036,16 @@ body.sidebar-collapsed .modal,
         </div>
         <div class="afto-fg">
             <label>Fuel Type</label>
-            <select name="fuel_type">
+            <select name="fuel_type" onchange="this.form.submit()">
                 <option value="">All Fuel Types</option>
                 <?php foreach ($fuel_types as $ft): ?>
-                    <option value="<?= htmlspecialchars($ft) ?>" <?= $fuel_type_filter === $ft ? 'selected' : '' ?>><?= htmlspecialchars($ft) ?></option>
+                    <option value="<?= htmlspecialchars($ft) ?>" <?= (strcasecmp($fuel_type_filter, $ft) === 0) ? 'selected' : '' ?>><?= htmlspecialchars($ft) ?></option>
                 <?php endforeach; ?>
             </select>
         </div>
         <div class="afto-fg">
             <label>Status</label>
-            <select name="status_filter">
+            <select name="status_filter" onchange="this.form.submit()">
                 <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All Statuses</option>
                 <option value="pending" <?= $status_filter === 'pending' ? 'selected' : '' ?>>Awaiting Validation</option>
                 <option value="validated" <?= $status_filter === 'validated' ? 'selected' : '' ?>>Validated</option>

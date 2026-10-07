@@ -16,17 +16,9 @@ require_login();
 $user = $_SESSION['user'];
 
 // ── Load session_timeout from system_settings for client-side idle tracker ──
-$header_session_timeout_seconds = 1800; // fallback 30 minutes
-try {
-    $hst_stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'session_timeout' AND station_id = 0 LIMIT 1");
-    $hst_stmt->execute();
-    $hst_val = $hst_stmt->fetchColumn();
-    if ($hst_val !== false && is_numeric($hst_val) && (int)$hst_val > 0) {
-        $header_session_timeout_seconds = max(1, (int)$hst_val) * 60; // convert minutes → seconds
-    }
-} catch (Exception $e) {
-    // keep fallback
-}
+$header_session_timeout_seconds = function_exists('get_system_session_timeout_seconds')
+    ? get_system_session_timeout_seconds($pdo, (int)($_SESSION['user']['station_id'] ?? 0))
+    : 1800;
 
 // Get current page ID from filename (only if not already set by the calling page)
 if (!isset($page_id)) {
@@ -73,9 +65,27 @@ $header_time_ago = function($datetime) {
     if ($diff < 604800) return floor($diff / 86400) . 'd ago';
     return date('M j, Y', $ts);
 };
-$header_notif_url = function($url) use ($app_base_path, $public_base_url) {
+$header_notif_url = function($url, $context = []) use ($app_base_path, $public_base_url) {
     $url = trim((string)$url);
     if ($url === '' || $url === '#') return '#';
+
+    // Remap deprecated staff delivery URLs to Staff Inventory modules
+    if (strpos($url, 'staff_fuel_deliveries.php') !== false) {
+        $url = 'staff_inventory_fuel.php';
+    } elseif (strpos($url, 'staff_record_delivery.php') !== false) {
+        $is_fuel = (
+            strpos($url, 'tab=fuel') !== false ||
+            strpos($url, 'fpo') !== false ||
+            stripos($context['title'] ?? '', 'fuel') !== false ||
+            stripos($context['message'] ?? '', 'fuel') !== false ||
+            stripos($context['message'] ?? '', 'diesel') !== false ||
+            stripos($context['message'] ?? '', 'liters') !== false ||
+            stripos($context['message'] ?? '', 'xcs') !== false ||
+            stripos($context['message'] ?? '', 'tank') !== false
+        );
+        $url = $is_fuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+    }
+
     if (preg_match('/^https?:\/\//i', $url)) return $url;
     if (strpos($url, '/public/') === 0) return $app_base_path . $url;
     if (strpos($url, 'public/') === 0) return $app_base_path . '/' . $url;
@@ -393,9 +403,9 @@ $theme_primary_color = $appearance_accent_color;
 $theme_button_color  = $appearance_accent_color;
 
 $appearance_sidebar_mode     = $station_settings['sidebar_mode'] ?? 'Expanded';
-$appearance_auto_refresh_sec = (int)($station_settings['dashboard_auto_refresh'] ?? 10);
+$appearance_auto_refresh_sec = function_exists('petron_auto_refresh_interval') ? petron_auto_refresh_interval((int)$myStationId) : (int)($station_settings['dashboard_auto_refresh'] ?? $station_settings['auto_refresh_interval'] ?? 10);
 if ($appearance_auto_refresh_sec < 5)  $appearance_auto_refresh_sec = 5;
-if ($appearance_auto_refresh_sec > 3600) $appearance_auto_refresh_sec = 3600;
+if ($appearance_auto_refresh_sec > 300) $appearance_auto_refresh_sec = 300;
 $appearance_is_dark = (strtolower($appearance_theme) === 'dark');
 // ── Enforce Dynamic Timezone from System Settings ──
 if (function_exists('petron_init_dynamic_timezone')) {
@@ -499,9 +509,53 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
     window.pageData.appBasePath = <?php echo json_encode(rtrim($app_base_path, '/')); ?>;
     window.pageData.publicBasePath = <?php echo json_encode(rtrim($public_base_url, '/')); ?>;
 
-    // ── Global Petron Auto-Refresh Configuration ──
+    // ── Global Petron Auto-Refresh Configuration & Dynamic Controller ──
     window.PETRON_AUTO_REFRESH_SECONDS = <?php echo (int)$header_auto_refresh_seconds; ?>;
     window.PETRON_AUTO_REFRESH_MS      = <?php echo (int)($header_auto_refresh_seconds * 1000); ?>;
+    window.petronSystemSettings = window.petronSystemSettings || {};
+    window.petronSystemSettings.autoRefreshSec = <?php echo (int)$header_auto_refresh_seconds; ?>;
+    window.petronSystemSettings.autoRefreshMs  = <?php echo (int)($header_auto_refresh_seconds * 1000); ?>;
+
+    window.petronResetAutoRefreshInterval = function(newMs) {
+        var ms = parseInt(newMs, 10);
+        if (isNaN(ms) || ms < 5000) ms = 10000;
+        var sec = Math.round(ms / 1000);
+        window.PETRON_AUTO_REFRESH_MS = ms;
+        window.PETRON_AUTO_REFRESH_SECONDS = sec;
+        if (window.petronSystemSettings) {
+            window.petronSystemSettings.autoRefreshSec = sec;
+        }
+
+        // 1. Reschedule PetronRealtime engine
+        if (window.PetronRealtime && typeof window.PetronRealtime.resetPollingInterval === 'function') {
+            window.PetronRealtime.resetPollingInterval(ms);
+        }
+
+        // 2. Reschedule LiveSyncEngine if present
+        if (window.LiveSyncEngine && typeof window.LiveSyncEngine.updateInterval === 'function') {
+            window.LiveSyncEngine.updateInterval(sec);
+        }
+
+        // 3. Reschedule Notification Unread Poller
+        if (typeof window.schedulePetronNotifPoller === 'function') {
+            window.schedulePetronNotifPoller(ms);
+        }
+
+        // 4. Dispatch global event so page-specific pollers update immediately
+        document.dispatchEvent(new CustomEvent('petron:auto-refresh-interval-changed', {
+            detail: { intervalMs: ms, intervalSec: sec }
+        }));
+    };
+
+    // Cross-tab synchronization via localStorage
+    window.addEventListener('storage', function(e) {
+        if (e.key === 'petron_auto_refresh_seconds' && e.newValue) {
+            var newSec = parseInt(e.newValue, 10);
+            if (!isNaN(newSec) && newSec >= 5) {
+                window.petronResetAutoRefreshInterval(newSec * 1000);
+            }
+        }
+    });
 
     // ── Global Petron Security Settings ──
     window.PETRON_SESSION_TIMEOUT_SEC = <?php echo (int)$header_session_timeout_sec; ?>; // from DB system_settings
@@ -3939,9 +3993,19 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
 
             // Position horizontally: prefer aligning right edge to trigger's right edge
             var left = Math.round(rect.right - width - 6);
-            // If there's not enough room on the right, try aligning left edge to trigger's left
-            if(left < 8) left = Math.round(rect.left + 6);
-            if(left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+            if (dropdownId === 'notificationDropdown' && window.innerWidth >= 820) {
+                // Keep dropdown modal directly under the notification icon (close to the bell, not pushed far away)
+                // Leave a compact 205px right clearance for the right-side toast banner
+                var maxRight = window.innerWidth - 205;
+                if (left + width > maxRight) {
+                    left = Math.round(maxRight - width);
+                }
+                if (left < 10) left = 10;
+            } else {
+                // If there's not enough room on the right, try aligning left edge to trigger's left
+                if(left < 8) left = Math.round(rect.left + 6);
+                if(left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+            }
 
             // Position vertically: below trigger; if dropdown would overflow viewport bottom, place above
             var topBelow = Math.round(rect.bottom + 8);
@@ -4134,10 +4198,10 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
             }
 
             var toastMsg = 'Notifications refreshed';
-            if(typeof window.showToast === 'function'){
-                window.showToast(toastMsg, 'info', 2500);
-            } else if(typeof window.showGlobalToast === 'function'){
-                window.showGlobalToast(toastMsg, 'info');
+            if(typeof window.showGlobalToast === 'function'){
+                window.showGlobalToast(toastMsg, 'success');
+            } else if(typeof window.showToast === 'function'){
+                window.showToast(toastMsg, 'success', 2500);
             }
         }catch(err){
             console.warn('petronRefreshNotifications err', err);
@@ -5176,7 +5240,7 @@ require_once __DIR__ . '/rbac_menu.php';
                                 $hn_icon = $header_evt_icons[$hn['event_type'] ?? 'general'] ?? $header_evt_icons['general'];
                                 $hn_color = $header_type_colors[$hn['type'] ?? 'info'] ?? $header_type_colors['info'];
                                 $hn_raw_url = (string)($hn['redirect_url'] ?? '');
-                                $hn_href = $header_notif_url($hn_raw_url);
+                                $hn_href = $header_notif_url($hn_raw_url, $hn);
                                 $hn_js_url = json_encode($hn_raw_url, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
                                 ?>
                                 <a class="notif-item<?php echo $hn_unread ? ' unread' : ''; ?>"
@@ -5846,10 +5910,56 @@ require_once __DIR__ . '/rbac_menu.php';
 
     window.resolveRedirectUrl = function(url) {
         if (!url || url === '#' || url === '' || url === 'null') return '#';
+        if (url.includes('staff_fuel_deliveries.php')) {
+            url = 'staff_inventory_fuel.php';
+        } else if (url.includes('staff_record_delivery.php')) {
+            var isFuel = url.includes('tab=fuel') || url.includes('fpo');
+            url = isFuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+        }
         if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/')) return url;
         // Relative path from search.php (e.g. "staff_inventory.php") — resolve to /public/
         var base = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
         return base + '/public/' + url;
+    };
+
+    window.petronMarkSingleNotificationRead = function(e, id, targetUrl) {
+        if (e && targetUrl && targetUrl !== '#' && targetUrl !== 'javascript:void(0)') {
+            e.preventDefault();
+        }
+        if (id) {
+            // Decrement badge immediately (optimistic UI)
+            var badge = document.getElementById('notificationBadge');
+            if (badge && badge.style.display !== 'none') {
+                var cur = parseInt(badge.textContent.replace(/\D/g, ''), 10) || 0;
+                cur = Math.max(0, cur - 1);
+                if (cur > 0) {
+                    badge.textContent = cur > 99 ? '99+' : cur;
+                } else {
+                    badge.textContent = '';
+                    badge.style.display = 'none';
+                }
+            }
+            var item = document.querySelector('[onclick*="' + id + '"]');
+            if (item) {
+                item.classList.remove('unread');
+                item.style.backgroundColor = 'transparent';
+                var dot = item.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
+                if (dot) dot.remove();
+            }
+            try {
+                var fd = new FormData();
+                fd.append('notification_id', id);
+                var bp = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
+                var api = bp + '/backend/api/notifications_api.php?action=mark_read';
+                if (navigator.sendBeacon) navigator.sendBeacon(api, fd);
+                else fetch(api, { method: 'POST', body: fd, credentials: 'same-origin', keepalive: true }).catch(function(){});
+            } catch (err) {}
+        }
+        if (targetUrl && targetUrl !== '#' && targetUrl !== 'javascript:void(0)') {
+            setTimeout(function() {
+                window.location.href = targetUrl;
+            }, 100);
+        }
     };
 
 
@@ -6365,6 +6475,12 @@ require_once __DIR__ . '/rbac_menu.php';
             // ── Resolve a relative link from search.php to an absolute URL ──
             function resolveLink(link) {
                 if (!link || link === '#') return '#';
+                if (link.indexOf('staff_fuel_deliveries.php') !== -1) {
+                    link = 'staff_inventory_fuel.php';
+                } else if (link.indexOf('staff_record_delivery.php') !== -1) {
+                    var isFuel = link.indexOf('tab=fuel') !== -1 || link.indexOf('fpo') !== -1;
+                    link = isFuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+                }
                 if (link.indexOf('http://') === 0 || link.indexOf('https://') === 0 || link.indexOf('/') === 0) {
                     return link;
                 }
@@ -6857,6 +6973,18 @@ require_once __DIR__ . '/rbac_menu.php';
 
             // Direct notifications (run generator on page load)
             generateAndRefresh();
+
+            // Dynamic background polling for unread notifications
+            let _saNotifTimer = null;
+            function scheduleSaNotifPoller(ms) {
+                if (_saNotifTimer) clearInterval(_saNotifTimer);
+                const interval = (typeof ms === 'number' && ms >= 5000) ? ms : (window.PETRON_AUTO_REFRESH_MS || 10000);
+                _saNotifTimer = setInterval(function() {
+                    fetchUnreadCount();
+                }, interval);
+            }
+            window.schedulePetronNotifPoller = scheduleSaNotifPoller;
+            scheduleSaNotifPoller(window.PETRON_AUTO_REFRESH_MS);
         })();
 
         <?php else: ?>
@@ -7057,6 +7185,15 @@ require_once __DIR__ . '/rbac_menu.php';
                             if (targetUrl.indexOf('staff_requests.php') !== -1) {
                                 targetUrl = 'staff_transactions_hub.php?section=merchandise';
                             }
+                            if (targetUrl.indexOf('staff_fuel_deliveries.php') !== -1 || targetUrl.indexOf('staff_record_delivery.php') !== -1) {
+                                const isFuel = targetUrl.indexOf('staff_fuel_deliveries.php') !== -1 ||
+                                               targetUrl.indexOf('tab=fuel') !== -1 ||
+                                               targetUrl.indexOf('fpo') !== -1 ||
+                                               (n.title && n.title.toLowerCase().indexOf('fuel') !== -1) ||
+                                               (n.message && (n.message.toLowerCase().indexOf('fuel') !== -1 || n.message.toLowerCase().indexOf('diesel') !== -1 || n.message.toLowerCase().indexOf('liters') !== -1));
+                                const base = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
+                                targetUrl = base + '/public/' + (isFuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php');
+                            }
                             const title  = escapeHtml(cleanMojibake(n.title || 'Notification'));
                             const msg    = escapeHtml(cleanMojibake(n.message || ''));
                             const ago    = escapeHtml(n.time_ago || timeAgo(n.created_at));
@@ -7149,9 +7286,19 @@ require_once __DIR__ . '/rbac_menu.php';
                     const res  = await fetch(API_LIST + '?action=unread_count', {
                         signal: ctrl.signal,
                         credentials: 'same-origin',
-                        cache: 'no-store'
+                        cache: 'no-store',
+                        headers: { 'X-Petron-Background': '1' }
                     });
                     clearTimeout(tid);
+                    if (res.status === 401) {
+                        try {
+                            const errData = await res.json();
+                            if (errData && errData.timeout && window.performPetronSessionTimeout) {
+                                window.performPetronSessionTimeout();
+                                return;
+                            }
+                        } catch(e) {}
+                    }
                     if (!res.ok) throw new Error('HTTP ' + res.status);
                     const data = await res.json();
                     if (data.success) {
@@ -7170,11 +7317,19 @@ require_once __DIR__ . '/rbac_menu.php';
                 return fetch(API_GEN, {
                         signal: ctrl.signal,
                         credentials: 'same-origin',
-                        cache: 'no-store'
+                        cache: 'no-store',
+                        headers: { 'X-Petron-Background': '1' }
                     })
                     .then(r => {
                         clearTimeout(tid);
-                        // Do NOT throw on non-ok (403/500 on live server) — treat generator as optional
+                        if (r.status === 401) {
+                            r.json().then(d => {
+                                if (d && d.timeout && window.performPetronSessionTimeout) {
+                                    window.performPetronSessionTimeout();
+                                }
+                            }).catch(() => {});
+                            return null;
+                        }
                         if (!r.ok) {
                             fetchUnreadCount();
                             if (!skipListRefresh && isNotificationDropdownOpen()) {
@@ -7255,10 +7410,17 @@ require_once __DIR__ . '/rbac_menu.php';
 
             // ── Direct notifications (run generator on page load) ──
             runGeneratorBackground();
-            // Poll unread badge count every 10s for real-time live banner count updates
-            setInterval(function() {
-                fetchUnreadCount();
-            }, 10000);
+            // Poll unread badge count dynamically based on system auto-refresh setting
+            let _regularNotifTimer = null;
+            function scheduleRegularNotifPoller(ms) {
+                if (_regularNotifTimer) clearInterval(_regularNotifTimer);
+                const interval = (typeof ms === 'number' && ms >= 5000) ? ms : (window.PETRON_AUTO_REFRESH_MS || 10000);
+                _regularNotifTimer = setInterval(function() {
+                    fetchUnreadCount();
+                }, interval);
+            }
+            window.schedulePetronNotifPoller = scheduleRegularNotifPoller;
+            scheduleRegularNotifPoller(window.PETRON_AUTO_REFRESH_MS);
         })();
         <?php endif; ?>
     </script>
@@ -7355,47 +7517,63 @@ require_once __DIR__ . '/rbac_menu.php';
 <style id="globalToastSystemStyles">
 .global-toast-stack {
     position: fixed !important;
-    top: 85px !important;
-    right: 24px !important;
+    top: 76px !important;
+    right: 12px !important;
+    bottom: auto !important;
+    left: auto !important;
     z-index: 2147483647 !important;
     display: flex !important;
     flex-direction: column !important;
-    gap: 10px !important;
+    gap: 8px !important;
     pointer-events: none !important;
-    max-width: 440px !important;
-    width: calc(100vw - 48px) !important;
-    transition: right 0.25s cubic-bezier(0.16, 1, 0.3, 1), top 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    max-width: 190px !important;
+    width: auto !important;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease !important;
 }
 .global-toast-stack.notif-dropdown-active {
-    right: 410px !important;
+    top: 76px !important;
+    bottom: auto !important;
+    right: 12px !important;
+    left: auto !important;
+    max-width: 190px !important;
 }
 @media (max-width: 820px) {
+    .global-toast-stack {
+        top: 70px !important;
+        bottom: auto !important;
+        right: 12px !important;
+        left: auto !important;
+        max-width: calc(100vw - 24px) !important;
+    }
     .global-toast-stack.notif-dropdown-active {
-        top: 16px !important;
-        right: 16px !important;
-        left: 16px !important;
-        max-width: calc(100vw - 32px) !important;
-        width: auto !important;
+        top: 70px !important;
+        bottom: auto !important;
+        right: 12px !important;
+        left: auto !important;
     }
 }
 .global-toast {
     pointer-events: auto !important;
-    min-width: 280px !important;
+    min-width: 160px !important;
+    max-width: 190px !important;
     background: #16a34a !important;
     color: #ffffff !important;
-    padding: 14px 44px 14px 18px !important;
-    border-radius: 10px !important;
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.15) !important;
-    font-size: 14px !important;
+    padding: 9px 28px 9px 11px !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.12) !important;
+    font-size: 12px !important;
     font-weight: 700 !important;
     position: relative !important;
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
-    line-height: 1.45 !important;
+    line-height: 1.3 !important;
     display: flex !important;
     align-items: center !important;
-    gap: 12px !important;
+    gap: 8px !important;
     animation: globalToastIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
     transition: opacity 0.3s ease, transform 0.3s ease !important;
+}
+.global-toast.success {
+    background: #16a34a !important;
 }
 .global-toast.error, .global-toast.danger {
     background: #dc2626 !important;
@@ -7404,21 +7582,21 @@ require_once __DIR__ . '/rbac_menu.php';
     background: #d97706 !important;
 }
 .global-toast.info {
-    background: #0284c7 !important;
+    background: #16a34a !important;
 }
 .global-toast-close {
     position: absolute !important;
     top: 50% !important;
-    right: 12px !important;
+    right: 8px !important;
     transform: translateY(-50%) !important;
     background: none !important;
     border: none !important;
     color: #ffffff !important;
-    font-size: 22px !important;
+    font-size: 18px !important;
     line-height: 1 !important;
     cursor: pointer !important;
     opacity: 0.85 !important;
-    padding: 4px !important;
+    padding: 2px !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -7438,14 +7616,32 @@ require_once __DIR__ . '/rbac_menu.php';
 (function() {
     let globalToastTimer = null;
 
-    // Helper: update stack position depending on notification dropdown visibility so toast is NEVER covered
+    // Helper: update stack position - strictly right-side top, NEVER at the bottom!
     window.syncGlobalToastPosition = function() {
         const stack = document.getElementById('globalToastStack');
         if (!stack) return;
         const notifDd = document.getElementById('notificationDropdown');
         const isNotifOpen = notifDd && (notifDd.classList.contains('show') || notifDd.style.display === 'block');
+
+        // Always place on the right side at top: 76px, NEVER at the bottom!
+        stack.style.setProperty('top', '76px', 'important');
+        stack.style.setProperty('bottom', 'auto', 'important');
+        stack.style.setProperty('right', '12px', 'important');
+        stack.style.setProperty('left', 'auto', 'important');
+
         if (isNotifOpen) {
             stack.classList.add('notif-dropdown-active');
+            if (window.innerWidth >= 820) {
+                // Keep notification dropdown close to the bell icon (maxRight: window.innerWidth - 205)
+                try {
+                    const ddRect = notifDd.getBoundingClientRect();
+                    const maxRight = window.innerWidth - 205;
+                    if (ddRect.right > maxRight) {
+                        const newLeft = Math.max(10, Math.round(maxRight - ddRect.width));
+                        notifDd.style.left = newLeft + 'px';
+                    }
+                } catch(e) {}
+            }
         } else {
             stack.classList.remove('notif-dropdown-active');
         }
@@ -7481,14 +7677,20 @@ require_once __DIR__ . '/rbac_menu.php';
         const rightContainer = document.getElementById('rightToastContainer');
         if (rightContainer) rightContainer.innerHTML = '';
         
-        const typeKey = String(type || 'success').toLowerCase();
+        let typeKey = String(type || 'success').toLowerCase();
+        // Any refresh confirmation notification should strictly be GREEN success
+        if (typeof msg === 'string' && msg.toLowerCase().includes('refreshed')) {
+            typeKey = 'success';
+        }
+
         let iconHtml = '<i class="fas fa-check-circle" style="font-size:17px;flex-shrink:0;"></i>';
         if (typeKey === 'error' || typeKey === 'danger') {
             iconHtml = '<i class="fas fa-exclamation-circle" style="font-size:17px;flex-shrink:0;"></i>';
         } else if (typeKey === 'warning') {
             iconHtml = '<i class="fas fa-exclamation-triangle" style="font-size:17px;flex-shrink:0;"></i>';
         } else if (typeKey === 'info') {
-            iconHtml = '<i class="fas fa-info-circle" style="font-size:17px;flex-shrink:0;"></i>';
+            iconHtml = '<i class="fas fa-check-circle" style="font-size:17px;flex-shrink:0;"></i>';
+            typeKey = 'success';
         }
 
         const toast = document.createElement('div');
@@ -7623,28 +7825,31 @@ $global_maint_active = false;
 $global_maint_end_time = '';
 $global_maint_msg = '';
 try {
+    if (function_exists('check_and_auto_conclude_maintenance')) {
+        check_and_auto_conclude_maintenance($pdo);
+    }
     $hm_stmt = $pdo->prepare("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('maintenance_mode', 'maintenance_end_time', 'maintenance_message') AND station_id = 0");
     $hm_stmt->execute();
     $hm_rows = $hm_stmt->fetchAll(PDO::FETCH_KEY_PAIR);
-    if (!empty($hm_rows['maintenance_mode']) && ($hm_rows['maintenance_mode'] === '1' || $hm_rows['maintenance_mode'] == 1)) {
+    if (!empty($hm_rows['maintenance_mode']) && in_array(trim((string)$hm_rows['maintenance_mode']), ['1', 'true', 1], true)) {
         $global_maint_active = true;
     }
-    $global_maint_end_time = $hm_rows['maintenance_end_time'] ?? '';
+    $global_maint_end_time = trim((string)($hm_rows['maintenance_end_time'] ?? ''));
     $global_maint_msg = $hm_rows['maintenance_message'] ?? 'Maintenance active';
 } catch (Exception $e) {}
 ?>
 
 <?php if ($global_maint_active && in_array($role, ['superadmin', 'developer'])): ?>
 <!-- Sticky Maintenance Banner for Superadmin -->
-<div id="superadminMaintenanceRibbon" style="background: linear-gradient(90deg, #b45309 0%, #d97706 100%); color: #ffffff; padding: 9px 18px; font-size: 12.5px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 999999; box-shadow: 0 2px 10px rgba(0,0,0,0.18);">
+<div id="superadminMaintenanceRibbon" style="background: linear-gradient(90deg, #b91c1c 0%, #dc2626 100%); color: #ffffff; padding: 9px 18px; font-size: 12.5px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 999999; box-shadow: 0 2px 10px rgba(185,28,28,0.25); transition: all 0.4s ease;">
     <div style="display: flex; align-items: center; gap: 10px;">
-        <i class="fas fa-tools" style="color: #fef3c7; font-size: 15px;"></i>
-        <span><strong>MAINTENANCE MODE ACTIVE:</strong> Non-superadmin users are locked out of the system.</span>
+        <i class="fas fa-tools" style="color: #ffffff; font-size: 14px;"></i>
+        <span><strong>MAINTENANCE MODE ACTIVE</strong></span>
     </div>
     <div style="display: flex; align-items: center; gap: 14px;">
         <?php if (!empty($global_maint_end_time)): ?>
-        <div style="background: rgba(0,0,0,0.25); padding: 3px 10px; border-radius: 6px; font-family: monospace; font-size: 12px;">
-            <i class="fas fa-stopwatch" style="margin-right:4px;"></i> <span id="saHeaderTimer" data-endtime="<?= htmlspecialchars($global_maint_end_time) ?>">Calculating...</span>
+        <div style="background: rgba(0,0,0,0.25); border: 1px solid rgba(255,255,255,0.2); padding: 3px 10px; border-radius: 6px; font-family: monospace; font-size: 12px; display: flex; align-items: center;">
+            <i class="fas fa-stopwatch" style="margin-right:5px; color: #ffffff;"></i> <span id="saHeaderTimer" data-endtime="<?= htmlspecialchars($global_maint_end_time) ?>">Calculating...</span>
         </div>
         <?php endif; ?>
     </div>
@@ -7652,15 +7857,37 @@ try {
 <script>
 (function() {
     const timer = document.getElementById('saHeaderTimer');
-    if (!timer) return;
+    const ribbon = document.getElementById('superadminMaintenanceRibbon');
+    if (!timer || !ribbon) return;
     const endStr = timer.getAttribute('data-endtime');
     if (!endStr) return;
+    let autoConcluding = false;
+
     function update() {
         const target = new Date(endStr.replace(/-/g, '/'));
         const now = new Date();
         const diff = target.getTime() - now.getTime();
         if (diff <= 0) {
-            timer.textContent = 'Expired';
+            timer.textContent = 'Concluding...';
+            if (!autoConcluding) {
+                autoConcluding = true;
+                const concludeApiUrl = '<?= rtrim($app_base_path, "/") ?>/backend/api/maintenance_status.php?auto_conclude=1';
+                fetch(concludeApiUrl, { cache: 'no-store' })
+                    .then(r => r.json())
+                    .then(data => {
+                        ribbon.style.opacity = '0';
+                        ribbon.style.transform = 'translateY(-100%)';
+                        setTimeout(() => {
+                            ribbon.remove();
+                            if (typeof onMaintenanceAutoConcluded === 'function') {
+                                onMaintenanceAutoConcluded();
+                            } else if (typeof window.showGlobalToast === 'function') {
+                                window.showGlobalToast('Maintenance mode has concluded. The system is now Online for all users.', 'success');
+                            }
+                        }, 400);
+                    })
+                    .catch(() => {});
+            }
             return;
         }
         const h = Math.floor(diff / (1000 * 60 * 60));
@@ -7677,27 +7904,28 @@ try {
 <script>
 // ── Client-Side Session Idle Timeout Tracker (Non-superadmin/developer roles only) ──
 (function initSessionIdleTracker() {
-    // Superadmin and Developer are exempt — they manage the system and should never be timed out
-    const CURRENT_ROLE = (window.PETRON_USER_ROLE || '').toLowerCase().trim();
-    if (CURRENT_ROLE === 'superadmin' || CURRENT_ROLE === 'developer') return;
+    // 1. Superadmin and Developer are strictly EXEMPT from session timeout
+    const rawRole = (window.PETRON_USER_ROLE || '<?= htmlspecialchars($role) ?>' || '').toLowerCase().replace(/[\s_-]+/g, '').trim();
+    if (rawRole === 'superadmin' || rawRole === 'developer') {
+        return; // Superadmin NEVER times out!
+    }
 
-    const TIMEOUT_SEC       = <?= (int)$header_session_timeout_seconds ?>;  // from DB setting
-    const TIMEOUT_MS        = TIMEOUT_SEC * 1000;
-    // Show warning before timeout: 60s if >= 2 mins, or half of timeout if < 2 mins (e.g. 30s for 1 min)
-    const WARNING_BEFORE_MS = TIMEOUT_MS >= 120000 ? 60000 : Math.max(10000, Math.floor(TIMEOUT_MS / 2));
-    const loginUrl          = '<?= htmlspecialchars($public_base_url) ?>/login.php?timeout=1';
-    const keepaliveUrl      = '<?= htmlspecialchars($public_base_url) ?>/api_session_keepalive.php';
+    const TIMEOUT_SEC = <?= (int)$header_session_timeout_seconds ?>;  // configured minutes in seconds (min: 60s)
+    const TIMEOUT_MS  = Math.max(60, TIMEOUT_SEC) * 1000;
+    // Warning duration: 30s before timeout if >= 2 mins, or 15s if 1 min
+    const WARNING_BEFORE_MS = TIMEOUT_MS >= 120000 ? 30000 : Math.min(15000, Math.floor(TIMEOUT_MS / 2));
+    const loginUrl     = '<?= htmlspecialchars($public_base_url) ?>/login.php?timeout=1';
+    const keepaliveUrl = '<?= htmlspecialchars($public_base_url) ?>/api_session_keepalive.php';
 
-
-    let idleTimer         = null;
-    let warnTimer         = null;
-    let warningShown      = false;
-    let countdownInterval = null;
-    let lastActivityTime  = Date.now();
+    let lastActivityTime = Date.now();
+    let isTerminated     = false;
+    let warningActive    = false;
+    let tickTimer        = null;
 
     function getStorageTime() {
         try {
-            return parseInt(localStorage.getItem('petron_last_activity') || '0', 10);
+            const v = parseInt(localStorage.getItem('petron_last_activity') || '0', 10);
+            return isNaN(v) ? 0 : v;
         } catch(e) {
             return 0;
         }
@@ -7709,126 +7937,182 @@ try {
         } catch(e) {}
     }
 
-    function resetTimers(syncStorage = true) {
-        lastActivityTime = Date.now();
-        if (syncStorage) {
-            setStorageTime(lastActivityTime);
+    function recordActivity(sync = true) {
+        if (isTerminated) return;
+        const now = Date.now();
+        lastActivityTime = now;
+        if (sync) {
+            setStorageTime(now);
         }
-
-        clearTimeout(idleTimer);
-        clearTimeout(warnTimer);
-        if (countdownInterval) clearInterval(countdownInterval);
-        warningShown = false;
-
-        // Remove warning modal if user becomes active again
-        const existingWarn = document.getElementById('sessionTimeoutWarning');
-        if (existingWarn) existingWarn.remove();
-
-        // Show warning before actual timeout
-        const warnAt = TIMEOUT_MS - WARNING_BEFORE_MS;
-        if (warnAt > 0) {
-            warnTimer = setTimeout(showWarning, warnAt);
+        if (warningActive) {
+            hideWarning();
         }
-
-        // Force redirect on actual timeout
-        idleTimer = setTimeout(() => {
-            // Check if user was active in another tab recently
-            const storageTime = getStorageTime();
-            const elapsed = Date.now() - Math.max(lastActivityTime, storageTime);
-            if (elapsed < TIMEOUT_MS) {
-                // User was active in another tab, reset timers
-                resetTimers(false);
-                return;
-            }
-            try { localStorage.removeItem('petron_last_activity'); } catch(e) {}
-            window.location.replace(loginUrl);
-        }, TIMEOUT_MS);
     }
 
-    function showWarning() {
-        if (warningShown || document.getElementById('sessionTimeoutWarning')) return;
-        warningShown = true;
+    // Terminate session and redirect immediately to login.php?timeout=1
+    function performAutoLogout() {
+        if (isTerminated) return;
+        isTerminated = true;
+        if (tickTimer) clearInterval(tickTimer);
+        try { localStorage.removeItem('petron_last_activity'); } catch(e) {}
 
-        const remainSec = Math.ceil(WARNING_BEFORE_MS / 1000);
-        const overlay = document.createElement('div');
-        overlay.id = 'sessionTimeoutWarning';
-        overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,10,40,0.78); z-index:99999999; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px);';
-        overlay.innerHTML = `
-            <div style="background:#ffffff; border-radius:18px; padding:28px 26px; max-width:420px; width:90%; text-align:center; box-shadow:0 20px 60px rgba(0,0,0,0.4); border:2px solid #f59e0b; animation:fadeInScale 0.25s ease-out;">
-                <div style="background:#fef3c7; color:#d97706; width:60px; height:60px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:26px; margin:0 auto 16px; box-shadow:0 0 20px rgba(245,158,11,0.35);">
-                    <i class="fas fa-clock"></i>
+        // Show immediate locked overlay to give clear visual feedback
+        showExpiredOverlay();
+
+        // Fire beacon to clear session on backend
+        try {
+            if (navigator.sendBeacon) {
+                navigator.sendBeacon(loginUrl, new FormData());
+            }
+        } catch(e) {}
+
+        // Immediate redirect
+        setTimeout(function() {
+            window.location.replace(loginUrl);
+        }, 300);
+    }
+    window.performPetronSessionTimeout = performAutoLogout;
+
+    // Overlay when session has expired
+    function showExpiredOverlay() {
+        if (document.getElementById('sessionExpiredOverlay')) return;
+        const el = document.createElement('div');
+        el.id = 'sessionExpiredOverlay';
+        el.style.cssText = 'position:fixed; inset:0; background:rgba(0,10,35,0.88); z-index:999999999; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(8px);';
+        el.innerHTML = `
+            <div style="background:#ffffff; border-radius:18px; padding:32px 28px; max-width:420px; width:90%; text-align:center; box-shadow:0 25px 70px rgba(0,0,0,0.45); border:2px solid #ef4444; animation:fadeInScale 0.2s ease-out;">
+                <div style="background:#fee2e2; color:#dc2626; width:64px; height:64px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:28px; margin:0 auto 16px;">
+                    <i class="fas fa-user-lock"></i>
                 </div>
-                <h3 style="font-size:17px; font-weight:800; color:#002F6C; margin:0 0 8px; text-transform:uppercase; letter-spacing:0.5px;">Session Expiring Soon</h3>
-                <p style="font-size:13.5px; color:#475569; line-height:1.6; margin:0 0 18px;">
-                    Your session will expire in <span id="stCountdown" style="font-weight:800; color:#d97706; font-size:15px; font-family:monospace;">${remainSec}</span> second(s) due to inactivity.
+                <h3 style="font-size:18px; font-weight:800; color:#002F6C; margin:0 0 10px; text-transform:uppercase;">Session Expired</h3>
+                <p style="font-size:14px; color:#475569; line-height:1.6; margin:0 0 18px;">
+                    Your session has timed out due to inactivity. Logging out automatically...
                 </p>
-                <div style="display:flex; gap:10px; justify-content:center;">
-                    <button type="button" onclick="window.stayLoggedIn && window.stayLoggedIn();"
-                        style="flex:1; background:linear-gradient(135deg,#002F6C,#0050b3); color:#fff; border:none; border-radius:10px; padding:11px 20px; font-size:14px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:8px; box-shadow:0 4px 14px rgba(0,47,108,0.35);">
-                        <i class="fas fa-check-circle"></i> Stay Logged In
-                    </button>
-                    <button type="button" onclick="window.location.replace('${loginUrl}');"
-                        style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; border-radius:10px; padding:11px 16px; font-size:13.5px; font-weight:600; cursor:pointer;">
-                        Log Out Now
-                    </button>
+                <div style="font-size:13px; font-weight:700; color:#dc2626; display:flex; align-items:center; justify-content:center; gap:8px;">
+                    <i class="fas fa-circle-notch fa-spin"></i> Redirecting to login...
                 </div>
             </div>
         `;
-        document.body.appendChild(overlay);
-
-        // Countdown inside warning
-        let secs = remainSec;
-        const countEl = overlay.querySelector('#stCountdown');
-        if (countdownInterval) clearInterval(countdownInterval);
-        countdownInterval = setInterval(() => {
-            secs--;
-            if (countEl) countEl.textContent = Math.max(0, secs);
-            if (secs <= 0) {
-                clearInterval(countdownInterval);
-                try { localStorage.removeItem('petron_last_activity'); } catch(e) {}
-                window.location.replace(loginUrl);
-            }
-        }, 1000);
+        document.body.appendChild(el);
     }
 
-    // Keepalive function when user clicks "Stay Logged In"
+    // Warning Modal before timeout
+    function showWarning(remainSec) {
+        warningActive = true;
+        let overlay = document.getElementById('sessionTimeoutWarning');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'sessionTimeoutWarning';
+            overlay.style.cssText = 'position:fixed; inset:0; background:rgba(0,10,40,0.78); z-index:99999999; display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px);';
+            overlay.innerHTML = `
+                <div style="background:#ffffff; border-radius:18px; padding:28px 26px; max-width:420px; width:90%; text-align:center; box-shadow:0 20px 60px rgba(0,0,0,0.4); border:2px solid #f59e0b; animation:fadeInScale 0.25s ease-out;">
+                    <div style="background:#fef3c7; color:#d97706; width:60px; height:60px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:26px; margin:0 auto 16px; box-shadow:0 0 20px rgba(245,158,11,0.35);">
+                        <i class="fas fa-clock"></i>
+                    </div>
+                    <h3 style="font-size:17px; font-weight:800; color:#002F6C; margin:0 0 8px; text-transform:uppercase; letter-spacing:0.5px;">Session Expiring Soon</h3>
+                    <p style="font-size:13.5px; color:#475569; line-height:1.6; margin:0 0 18px;">
+                        Your session will expire in <span id="stCountdown" style="font-weight:800; color:#d97706; font-size:16px; font-family:monospace;">${remainSec}</span> second(s) due to inactivity.
+                    </p>
+                    <div style="display:flex; gap:10px; justify-content:center;">
+                        <button type="button" onclick="window.stayLoggedIn && window.stayLoggedIn();"
+                            style="flex:1; background:linear-gradient(135deg,#002F6C,#0050b3); color:#fff; border:none; border-radius:10px; padding:11px 20px; font-size:14px; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:8px; box-shadow:0 4px 14px rgba(0,47,108,0.35);">
+                            <i class="fas fa-check-circle"></i> Stay Logged In
+                        </button>
+                        <button type="button" onclick="window.performPetronSessionTimeout && window.performPetronSessionTimeout();"
+                            style="background:#f1f5f9; color:#475569; border:1px solid #cbd5e1; border-radius:10px; padding:11px 16px; font-size:13.5px; font-weight:600; cursor:pointer;">
+                            Log Out Now
+                        </button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(overlay);
+        }
+        const countEl = document.getElementById('stCountdown');
+        if (countEl) countEl.textContent = remainSec;
+    }
+
+    function hideWarning() {
+        warningActive = false;
+        const overlay = document.getElementById('sessionTimeoutWarning');
+        if (overlay) overlay.remove();
+    }
+
     window.stayLoggedIn = function() {
-        const warnModal = document.getElementById('sessionTimeoutWarning');
-        if (warnModal) warnModal.remove();
-        if (countdownInterval) clearInterval(countdownInterval);
-        warningShown = false;
-        
-        // Ping keepalive endpoint to extend PHP session on server
+        hideWarning();
         fetch(keepaliveUrl, { method: 'GET', cache: 'no-store' }).catch(() => {});
-        resetTimers(true);
+        recordActivity(true);
     };
 
-    // Expose reset function globally
-    window.sessionIdleReset = resetTimers;
+    window.sessionIdleReset = function() {
+        recordActivity(true);
+    };
 
     // Cross-tab synchronization via localStorage
     window.addEventListener('storage', function(e) {
         if (e.key === 'petron_last_activity') {
-            resetTimers(false);
+            recordActivity(false);
         }
     });
 
-    // Track user activity events (throttled to avoid performance hits)
-    let lastThrottled = 0;
-    function onUserInteraction() {
+    // ── Main Inactivity Check Engine (Ticks every 1 second) ──
+    function checkIdleState() {
+        if (isTerminated) return;
         const now = Date.now();
-        if (now - lastThrottled > 2000) { // update at most every 2 seconds
-            lastThrottled = now;
-            resetTimers(true);
+        const storageTime = getStorageTime();
+        const effectiveLast = Math.max(lastActivityTime, storageTime);
+
+        const elapsed = now - effectiveLast;
+
+        if (elapsed >= TIMEOUT_MS) {
+            performAutoLogout();
+            return;
+        }
+
+        const remainMs = TIMEOUT_MS - elapsed;
+        if (remainMs <= WARNING_BEFORE_MS) {
+            showWarning(Math.max(1, Math.ceil(remainMs / 1000)));
+        } else if (warningActive) {
+            hideWarning();
         }
     }
 
-    ['mousemove', 'keydown', 'click', 'scroll', 'touchstart', 'pointerdown'].forEach(evt => {
+    // ── User Interaction Handler ──
+    let lastThrottled = 0;
+    function onUserInteraction() {
+        if (isTerminated) return;
+        const now = Date.now();
+        const storageTime = getStorageTime();
+        const effectiveLast = Math.max(lastActivityTime, storageTime);
+
+        // CRITICAL FIX: If user was AFK and timeout already elapsed,
+        // DO NOT revive session! Immediately log out!
+        if (effectiveLast > 0 && (now - effectiveLast) >= TIMEOUT_MS) {
+            performAutoLogout();
+            return;
+        }
+
+        if (now - lastThrottled > 1500) {
+            lastThrottled = now;
+            recordActivity(true);
+        }
+    }
+
+    ['mousemove', 'keydown', 'click', 'scroll', 'touchstart', 'pointerdown'].forEach(function(evt) {
         document.addEventListener(evt, onUserInteraction, { passive: true });
     });
 
-    // Initialize
-    resetTimers(true);
+    // Tick every 1 second
+    tickTimer = setInterval(checkIdleState, 1000);
+
+    // Also immediately check whenever tab regains visibility or focus
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) checkIdleState();
+    });
+    window.addEventListener('focus', checkIdleState);
+    window.addEventListener('pageshow', checkIdleState);
+
+    // Initialize on page load
+    recordActivity(true);
 })();
 </script>
 

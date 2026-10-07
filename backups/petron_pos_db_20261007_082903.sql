@@ -2,8 +2,8 @@
 -- Petron Station Management System
 -- Database: u261539219_petrondbs
 -- Backup Type: Full Backup
--- Trigger: Manual (Create & Download)
--- Generated: 2026-10-07 08:56:07
+-- Trigger: Automated
+-- Generated: 2026-10-07 08:29:03
 -- ============================================================
 
 SET FOREIGN_KEY_CHECKS=0;
@@ -29,7 +29,7 @@ CREATE TABLE `activity_logs` (
   KEY `idx_action` (`action`),
   KEY `idx_created_at` (`created_at`),
   CONSTRAINT `fk_log_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB AUTO_INCREMENT=69 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=64 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 INSERT INTO `activity_logs` (`id`, `user_id`, `action`, `details`, `reference`, `ip_address`, `created_at`, `updated_at`) VALUES
 ('1', '4', 'View Product Pricing', 'Admin viewed pricing for station 1253', NULL, '::1', '2026-10-06 21:09:45', '2026-10-06 21:09:45'),
@@ -94,11 +94,7 @@ INSERT INTO `activity_logs` (`id`, `user_id`, `action`, `details`, `reference`, 
 ('60', '9', 'Login', 'Judy Lastimosa (Staff) logged in via Email', NULL, '::1', '2026-10-07 07:57:41', '2026-10-07 07:57:41'),
 ('61', '1', 'Login', 'Yang (Superadmin) logged in via Email', NULL, '::1', '2026-10-07 08:27:47', '2026-10-07 08:27:47'),
 ('62', '1', 'Database Management', 'Synchronized backup configuration: Frequency=daily, Time=08:29, Retention=30 Days', NULL, '::1', '2026-10-07 08:28:40', '2026-10-07 08:28:40'),
-('63', '1', 'Database Management', 'Manual backup: u261539219_petrondbs.sql (Status:Completed, Size:0.9 KB)', NULL, '::1', '2026-10-07 08:28:41', '2026-10-07 08:28:41'),
-('65', '9', 'Login', 'Judy Lastimosa (Staff) logged in via Email', NULL, '::1', '2026-10-07 08:40:30', '2026-10-07 08:40:30'),
-('66', '1', 'Logout', 'Yang (Superadmin) logged out', NULL, '::1', '2026-10-07 08:48:30', '2026-10-07 08:48:30'),
-('67', '1', 'Login Failed', 'Failed login attempt for login ID: yangc.developer@gmail.com via Email', NULL, '::1', '2026-10-07 08:55:44', '2026-10-07 08:55:44'),
-('68', '1', 'Login', 'Yang (Superadmin) logged in via Email', NULL, '::1', '2026-10-07 08:55:55', '2026-10-07 08:55:55');
+('63', '1', 'Database Management', 'Manual backup: u261539219_petrondbs.sql (Status:Completed, Size:0.9 KB)', NULL, '::1', '2026-10-07 08:28:41', '2026-10-07 08:28:41');
 
 
 -- -----------------------------------------------------------
@@ -203,7 +199,7 @@ CREATE TABLE `audit_logs` (
   PRIMARY KEY (`id`),
   KEY `fk_audit_user` (`user_id`),
   CONSTRAINT `fk_audit_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB AUTO_INCREMENT=18 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=14 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO `audit_logs` (`id`, `user_id`, `log_type`, `action_type`, `action_details`, `entity_type`, `entity_id`, `old_values`, `new_values`, `ip_address`, `user_agent`, `status`, `error_message`, `created_at`) VALUES
 ('1', '4', 'user', 'Login', 'Romeca Katherine Jane Tello Pepito (Admin) logged in via Email', 'users', '4', NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', 'Success', NULL, '2026-10-06 21:25:00'),
@@ -218,11 +214,7 @@ INSERT INTO `audit_logs` (`id`, `user_id`, `log_type`, `action_type`, `action_de
 ('10', '1', 'user', 'Logout', 'Yang (Superadmin) logged out', 'users', '1', NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', 'Success', NULL, '2026-10-07 02:56:54'),
 ('11', '9', 'user', 'Login', 'Judy Lastimosa (Staff) logged in via Email', 'users', '9', NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0', 'Success', NULL, '2026-10-07 03:12:00'),
 ('12', '9', 'user', 'Login', 'Judy Lastimosa (Staff) logged in via Email', 'users', '9', NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0', 'Success', NULL, '2026-10-07 07:57:41'),
-('13', '1', 'user', 'Login', 'Yang (Superadmin) logged in via Email', 'users', '1', NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', 'Success', NULL, '2026-10-07 08:27:47'),
-('14', '9', 'user', 'Login', 'Judy Lastimosa (Staff) logged in via Email', 'users', '9', NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0', 'Success', NULL, '2026-10-07 08:40:30'),
-('15', '1', 'user', 'Logout', 'Yang (Superadmin) logged out', 'users', '1', NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', 'Success', NULL, '2026-10-07 08:48:30'),
-('16', '1', 'user', 'Login Failed', 'Failed login attempt — login ID: yangc.developer@gmail.com via Email (Superadmin)', 'users', '1', NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', 'Failed', NULL, '2026-10-07 08:55:44'),
-('17', '1', 'user', 'Login', 'Yang (Superadmin) logged in via Email', 'users', '1', NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', 'Success', NULL, '2026-10-07 08:55:55');
+('13', '1', 'user', 'Login', 'Yang (Superadmin) logged in via Email', 'users', '1', NULL, NULL, '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', 'Success', NULL, '2026-10-07 08:27:47');
 
 
 -- -----------------------------------------------------------
@@ -521,7 +513,7 @@ CREATE TABLE `database_backups` (
   KEY `idx_created_at` (`created_at`),
   CONSTRAINT `fk_database_backups_created_by` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT `fk_database_backups_station_id` FOREIGN KEY (`station_id`) REFERENCES `stations` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 INSERT INTO `database_backups` (`id`, `backup_name`, `backup_file`, `backup_size`, `backup_type`, `station_id`, `created_by`, `status`, `backup_path`, `notes`, `created_at`, `completed_at`, `compression`, `verified`) VALUES
 ('1', 'petron_pos_db_secure.sql', '/backup/database/petron_pos_db_secure.sql', '831518', 'Full Backup', NULL, '1', 'Completed', NULL, NULL, '2026-09-29 00:46:28', NULL, 'ZIP', '0'),
@@ -529,8 +521,7 @@ INSERT INTO `database_backups` (`id`, `backup_name`, `backup_file`, `backup_size
 ('3', 'petron_pos_db_secure.sql', '/backup/database/petron_pos_db_secure.sql', '837281', 'Full Backup', NULL, NULL, 'Archived', NULL, NULL, '2026-09-29 01:14:55', NULL, 'SQL', '0'),
 ('4', 'petron_pos_db_secure.sql', '/backup/database/petron_pos_db_secure.sql', '1077752', 'Full Backup', NULL, '1', 'Restored', NULL, NULL, '2026-10-01 09:42:00', NULL, 'SQL', '0'),
 ('5', 'u261539219_petrondbs.sql', '/backup/database/u261539219_petrondbs.sql', '931', 'Full Backup', NULL, '1', 'Completed', NULL, NULL, '2026-10-05 01:07:00', NULL, 'SQL', '0'),
-('6', 'u261539219_petrondbs.sql', '/backup/database/u261539219_petrondbs.sql', '931', 'Full Backup', NULL, '1', 'Completed', NULL, NULL, '2026-10-07 08:28:41', NULL, 'SQL', '0'),
-('7', 'u261539219_petrondbs.sql', '/backup/database/u261539219_petrondbs.sql', '931', 'Full Backup', NULL, NULL, 'Completed', NULL, NULL, '2026-10-07 08:29:03', NULL, 'SQL', '0');
+('6', 'u261539219_petrondbs.sql', '/backup/database/u261539219_petrondbs.sql', '931', 'Full Backup', NULL, '1', 'Completed', NULL, NULL, '2026-10-07 08:28:41', NULL, 'SQL', '0');
 
 
 -- -----------------------------------------------------------
@@ -2155,7 +2146,7 @@ CREATE TABLE `login_attempts` (
   KEY `idx_status` (`status`),
   KEY `idx_user_id` (`user_id`),
   CONSTRAINT `fk_login_attempts_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB AUTO_INCREMENT=15 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=12 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO `login_attempts` (`id`, `user_id`, `username`, `ip_address`, `user_agent`, `attempt_time`, `status`, `failure_reason`, `attempts_count`) VALUES
 ('1', '4', 'amda.cabahug.coc@phinmaed.com', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', '2026-10-06 21:25:00', 'success', NULL, '1'),
@@ -2168,9 +2159,7 @@ INSERT INTO `login_attempts` (`id`, `user_id`, `username`, `ip_address`, `user_a
 ('8', '1', 'yangc.developer@gmail.com', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', '2026-10-07 02:38:20', 'success', NULL, '1'),
 ('9', '9', 'amiecabahug2020@gmail.com', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0', '2026-10-07 03:12:00', 'success', NULL, '1'),
 ('10', '9', 'amiecabahug2020@gmail.com', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0', '2026-10-07 07:57:40', 'success', NULL, '1'),
-('11', '1', 'yangc.developer@gmail.com', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', '2026-10-07 08:27:47', 'success', NULL, '1'),
-('12', '9', 'amiecabahug2020@gmail.com', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36 Edg/154.0.0.0', '2026-10-07 08:40:30', 'success', NULL, '1'),
-('14', '1', 'yangc.developer@gmail.com', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', '2026-10-07 08:55:55', 'success', NULL, '1');
+('11', '1', 'yangc.developer@gmail.com', '::1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36', '2026-10-07 08:27:47', 'success', NULL, '1');
 
 
 -- -----------------------------------------------------------
@@ -5879,45 +5868,44 @@ CREATE TABLE `system_settings` (
   KEY `idx_updated_by_auto` (`updated_by`),
   KEY `idx_station_id` (`station_id`),
   CONSTRAINT `fk_system_settings_updated_by_9bc6` FOREIGN KEY (`updated_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB AUTO_INCREMENT=3447 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=3369 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 INSERT INTO `system_settings` (`id`, `station_id`, `setting_key`, `setting_value`, `setting_type`, `category`, `description`, `is_public`, `updated_by`, `updated_at`) VALUES
-('3059', '0', 'system_name', 'Petron Station Management System', 'text', 'general', NULL, '0', '1', '2026-10-07 08:40:47'),
+('3059', '0', 'system_name', 'Petron Station Management System', 'text', 'general', NULL, '0', '1', '2026-10-05 15:56:20'),
 ('3060', '0', 'company_logo', '../assets/img/Petron Logo.png', 'text', 'general', NULL, '0', '1', '2026-10-04 22:59:35'),
-('3061', '0', 'system_version', 'v1.0.0', 'text', 'general', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3062', '0', 'timezone', 'Asia/Manila (UTC+8)', 'text', 'regional', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3063', '0', 'date_format', 'YYYY-MM-DD', 'text', 'regional', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3064', '0', 'time_format', '12H', 'text', 'regional', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3065', '0', 'currency_symbol', 'PHP (₱)', 'text', 'regional', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3066', '0', 'theme', 'Light', 'text', 'appearance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3067', '0', 'system_accent_color', '#002f6c', 'text', 'appearance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3068', '0', 'sidebar_mode', 'Expanded', 'text', 'appearance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3069', '0', 'dashboard_auto_refresh', '10', 'text', 'appearance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3070', '0', 'session_timeout', '3', 'text', 'security', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3071', '0', 'min_password_length', '8', 'text', 'security', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3072', '0', 'max_login_attempts', '5', 'text', 'security', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3073', '0', 'require_uppercase', '1', 'text', 'security', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3074', '0', 'require_numbers', '1', 'text', 'security', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3075', '0', 'require_special_chars', '1', 'text', 'security', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3076', '0', 'banner_duration', '5', 'text', 'notification', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3077', '0', 'enable_system_notifications', '1', 'text', 'notification', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3078', '0', 'enable_error_notifications', '1', 'text', 'notification', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3079', '0', 'default_paper_size', 'A4', 'text', 'reports', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3080', '0', 'default_orientation', 'Portrait', 'text', 'reports', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3081', '0', 'show_company_logo_reports', '0', 'text', 'reports', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3082', '0', 'show_report_footer', '1', 'text', 'reports', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3083', '0', 'maintenance_mode', '0', 'text', 'maintenance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3084', '0', 'system_status', 'Online', 'text', 'maintenance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3085', '0', 'last_system_update', '2026-10-07 08:40:47', 'text', 'maintenance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3086', '0', 'maintenance_message', 'The system is currently undergoing scheduled maintenance to improve performance and stability. Please check back shortly.', 'text', 'maintenance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3087', '0', 'maintenance_end_time', '', 'text', 'maintenance', NULL, '0', '1', '2026-10-07 08:40:47'),
+('3061', '0', 'system_version', 'v1.0.0', 'text', 'general', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3062', '0', 'timezone', 'Asia/Manila (UTC+8)', 'text', 'regional', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3063', '0', 'date_format', 'YYYY-MM-DD', 'text', 'regional', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3064', '0', 'time_format', '12H', 'text', 'regional', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3065', '0', 'currency_symbol', 'PHP (₱)', 'text', 'regional', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3066', '0', 'theme', 'Light', 'text', 'appearance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3067', '0', 'system_accent_color', '#002f6c', 'text', 'appearance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3068', '0', 'sidebar_mode', 'Expanded', 'text', 'appearance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3069', '0', 'dashboard_auto_refresh', '10', 'text', 'appearance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3070', '0', 'session_timeout', '12', 'text', 'security', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3071', '0', 'min_password_length', '8', 'text', 'security', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3072', '0', 'max_login_attempts', '5', 'text', 'security', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3073', '0', 'require_uppercase', '1', 'text', 'security', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3074', '0', 'require_numbers', '1', 'text', 'security', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3075', '0', 'require_special_chars', '1', 'text', 'security', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3076', '0', 'banner_duration', '5', 'text', 'notification', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3077', '0', 'enable_system_notifications', '1', 'text', 'notification', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3078', '0', 'enable_error_notifications', '1', 'text', 'notification', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3079', '0', 'default_paper_size', 'A4', 'text', 'reports', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3080', '0', 'default_orientation', 'Portrait', 'text', 'reports', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3081', '0', 'show_company_logo_reports', '0', 'text', 'reports', NULL, '0', '1', '2026-10-06 21:09:36'),
+('3082', '0', 'show_report_footer', '1', 'text', 'reports', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3083', '0', 'maintenance_mode', '0', 'text', 'maintenance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3084', '0', 'system_status', 'Online', 'text', 'maintenance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3085', '0', 'last_system_update', '2026-10-05 15:56:20', 'text', 'maintenance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3086', '0', 'maintenance_message', 'The system is currently undergoing scheduled maintenance to improve performance and stability. Please check back shortly.', 'text', 'maintenance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3087', '0', 'maintenance_end_time', '', 'text', 'maintenance', NULL, '0', '1', '2026-10-05 15:56:20'),
 ('3088', '0', 'maintenance_duration_minutes', '60', 'text', 'maintenance', NULL, '0', '1', '2026-10-04 22:59:35'),
-('3124', '0', 'sidebar_color', '#00264d', 'text', 'appearance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3125', '0', 'color_sidebar', '#00264d', 'text', 'appearance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3126', '0', 'nav_active_color', '#e30613', 'text', 'appearance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3128', '0', 'color_primary', '#002f6c', 'text', 'appearance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3129', '0', 'color_button', '#002f6c', 'text', 'appearance', NULL, '0', '1', '2026-10-07 08:40:47'),
-('3384', '0', 'auto_refresh_interval', '10', 'text', 'appearance', NULL, '0', '1', '2026-10-07 08:40:47');
+('3124', '0', 'sidebar_color', '#00264d', 'text', 'appearance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3125', '0', 'color_sidebar', '#00264d', 'text', 'appearance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3126', '0', 'nav_active_color', '#e30613', 'text', 'appearance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3128', '0', 'color_primary', '#002f6c', 'text', 'appearance', NULL, '0', '1', '2026-10-05 15:56:20'),
+('3129', '0', 'color_button', '#002f6c', 'text', 'appearance', NULL, '0', '1', '2026-10-05 15:56:20');
 
 
 -- -----------------------------------------------------------
@@ -6051,21 +6039,18 @@ CREATE TABLE `user_form_drafts` (
   KEY `idx_station_id` (`station_id`),
   CONSTRAINT `fk_user_form_drafts_station_id` FOREIGN KEY (`station_id`) REFERENCES `stations` (`id`) ON DELETE SET NULL ON UPDATE CASCADE,
   CONSTRAINT `fk_user_form_drafts_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=209 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=179 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 INSERT INTO `user_form_drafts` (`id`, `user_id`, `station_id`, `module_key`, `draft_key`, `form_data`, `status`, `created_at`, `updated_at`) VALUES
 ('1', '4', '1253', 'user_creation_form', 'draft_4_user_creation_form', '{\"action\":\"add_user\",\"add_first_name\":\"\",\"add_last_name\":\"\",\"add_contact_number\":\"\",\"add_email\":\"\",\"add_username\":\"\",\"user_role_add\":\"\",\"new_password\":\"\"}', 'draft', '2026-10-06 21:04:11', '2026-10-06 22:26:17'),
 ('3', '4', '1253', 'form_users_3', 'draft_4_form_users_3', '{\"action\":\"reset_password\",\"reset_user_id\":\"\",\"reset_password_field\":\"\"}', 'draft', '2026-10-06 21:04:15', '2026-10-06 22:26:10'),
 ('11', '4', '1253', 'add_merchandise_product_modal', 'draft_4_add_merchandise_product_modal', '{\"newMerchName\":\"\",\"newMerchSku\":\"\",\"newMerchCategory\":\"\",\"newMerchBrand\":\"\",\"newMerchSize\":\"\",\"newMerchPrice\":\"\",\"newMerchReorder\":\"24\",\"newMerchCritical\":\"0\",\"newMerchExpiry\":\"\"}', 'draft', '2026-10-06 21:09:48', '2026-10-06 23:01:01'),
-('29', '1', '1253', 'form_database_management_backup_backupConfigForm', 'draft_1_form_database_management_backup_backupConfigForm', '{\"tab\":\"backup\",\"action\":\"run_backup\",\"backupFrequencySelect\":\"daily\",\"scheduledTimeInput\":\"08:29\",\"retention_days\":\"30\"}', 'draft', '2026-10-06 21:40:59', '2026-10-07 08:48:29'),
+('29', '1', '1253', 'form_database_management_backup_backupConfigForm', 'draft_1_form_database_management_backup_backupConfigForm', '{\"tab\":\"backup\",\"action\":\"run_backup\",\"backupFrequencySelect\":\"daily\",\"scheduledTimeInput\":\"08:29\",\"retention_days\":\"30\"}', 'draft', '2026-10-06 21:40:59', '2026-10-07 08:28:45'),
 ('44', '1', '1253', 'form_database_management_backup_8', 'draft_1_form_database_management_backup_8', '{\"tab\":\"restore\",\"action\":\"restore\",\"restore_backup_id\":\"\",\"restore_confirm_text\":\"\"}', 'draft', '2026-10-06 21:43:58', '2026-10-07 08:28:42'),
 ('94', '4', '1253', 'form_admin_set_prices_merch_rejectForm', 'draft_4_form_admin_set_prices_merch_rejectForm', '{\"action\":\"reject_price\",\"rejectApprovalId\":\"\",\"rejectActiveTab\":\"fuel\",\"remarks\":\"\"}', 'draft', '2026-10-06 22:25:23', '2026-10-06 22:25:28'),
 ('95', '4', '1253', 'form_admin_set_prices_merch_6', 'draft_4_form_admin_set_prices_merch_6', '{\"action\":\"reject_price\",\"adminRejectActiveTab\":\"fuel\",\"adminRejectApprovalId\":\"\",\"adminRejectRemarks\":\"\"}', 'draft', '2026-10-06 22:25:23', '2026-10-06 22:25:28'),
 ('132', '4', '1253', 'form_users_archived_3', 'draft_4_form_users_archived_3', '{\"action\":\"reset_password\",\"reset_user_id\":\"\",\"reset_password_field\":\"\"}', 'draft', '2026-10-06 22:26:13', '2026-10-06 22:26:17'),
-('160', '9', '1253', 'transaction_adjustment', 'draft_9_transaction_adjustment', '{\"adj_product_id\":\"\",\"adj_type\":\"\",\"adj_action\":\"Decrease\",\"adj_manual_direction\":\"Decrease\",\"adj_quantity\":\"\",\"adj_reason\":\"\",\"adj_remarks\":\"\"}', 'draft', '2026-10-07 08:09:17', '2026-10-07 08:09:18'),
-('190', '1', '1253', 'form_database_management_backup_9', 'draft_1_form_database_management_backup_9', '{\"tab\":\"restore\",\"action\":\"restore\",\"restore_backup_id\":\"\",\"restore_confirm_text\":\"\"}', 'draft', '2026-10-07 08:39:54', '2026-10-07 08:39:56'),
-('196', '1', '1253', 'form_database_management_backup_10', 'draft_1_form_database_management_backup_10', '{\"tab\":\"restore\",\"action\":\"restore\",\"restore_backup_id\":\"\",\"restore_confirm_text\":\"\"}', 'draft', '2026-10-07 08:40:01', '2026-10-07 08:48:29'),
-('208', '1', '1253', 'form_database_management_backup_11', 'draft_1_form_database_management_backup_11', '{\"tab\":\"restore\",\"action\":\"restore\",\"restore_backup_id\":\"\",\"restore_confirm_text\":\"\"}', 'draft', '2026-10-07 08:56:07', '2026-10-07 08:56:07');
+('160', '9', '1253', 'transaction_adjustment', 'draft_9_transaction_adjustment', '{\"adj_product_id\":\"\",\"adj_type\":\"\",\"adj_action\":\"Decrease\",\"adj_manual_direction\":\"Decrease\",\"adj_quantity\":\"\",\"adj_reason\":\"\",\"adj_remarks\":\"\"}', 'draft', '2026-10-07 08:09:17', '2026-10-07 08:09:18');
 
 
 -- -----------------------------------------------------------
@@ -6203,10 +6188,10 @@ CREATE TABLE `users` (
 ) ENGINE=InnoDB AUTO_INCREMENT=26 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='User accounts with role-based access control and shift assignment for staff';
 
 INSERT INTO `users` (`id`, `employee_id`, `first_name`, `last_name`, `username`, `password_hash`, `role`, `assigned_shift`, `shift_assignment`, `shift_start_time`, `shift_end_time`, `email`, `phone_number`, `station_id`, `status`, `created_at`, `updated_at`, `name`, `profile_picture`, `remarks`) VALUES
-('1', 'SA-001', 'Yang', '', 'developer', '$2y$10$bX1k5n/d6dK79mzuklqXPOKAGjRD3Y9kklnOcrggMmaCD0TNS5BgC', 'superadmin', NULL, NULL, NULL, NULL, 'yangc.developer@gmail.com', '', '1253', 'Active', '2026-02-16 16:04:29', '2026-10-07 08:55:55', 'Yang', 'uploads/profiles/profile_1_1787315400.jpg', NULL),
+('1', 'SA-001', 'Yang', '', 'developer', '$2y$10$bX1k5n/d6dK79mzuklqXPOKAGjRD3Y9kklnOcrggMmaCD0TNS5BgC', 'superadmin', NULL, NULL, NULL, NULL, 'yangc.developer@gmail.com', '', '1253', 'Active', '2026-02-16 16:04:29', '2026-10-07 08:27:47', 'Yang', 'uploads/profiles/profile_1_1787315400.jpg', NULL),
 ('3', 'MGR-001', 'Edgar', 'Eslit', 'cabahug.amiedamas@gmail.com', '$2y$10$ACoV6BZ0vK0cZQCMnETgXuxtKek6qX4QOy91Bp5KQvLGRRMQfzB0i', 'manager', NULL, NULL, NULL, NULL, 'cabahug.amiedamas@gmail.com', 'N/A', '1253', 'Active', '2026-02-27 12:47:29', '2026-10-06 10:00:16', 'Edgar Eslit', 'uploads/profiles/profile_3_1783273496.jpg', NULL),
 ('4', 'ADM-001', 'Romeca Katherine Jane', 'Tello Pepito', 'pepito', '$2y$10$83qOKdC3LJOp0YK6WmLpfOyba3dD96HIXdgzBP8hTtCQHmwXG1En6', 'admin', NULL, NULL, NULL, NULL, 'amda.cabahug.coc@phinmaed.com', '+63 917 791 8140', '1253', 'Active', '2026-03-09 14:41:02', '2026-10-06 22:48:38', 'Romeca Katherine Jane Tello Pepito', 'uploads/profiles/profile_4_1786900100.jpg', NULL),
-('9', 'STF-003', 'Judy', 'Lastimosa', 'judy', '$2y$10$ISMiDK.VvfQuytyt/zF21OlySx/SKtwGfeKICL1gfiQ7bVFnB8R9K', 'staff', NULL, NULL, '14:00:00', '00:00:00', 'amiecabahug2020@gmail.com', '09452136587', '1253', 'Active', '2026-06-30 21:55:43', '2026-10-07 08:40:30', 'Judy Lastimosa', 'uploads/profiles/profile_9_1787063034.jpg', NULL);
+('9', 'STF-003', 'Judy', 'Lastimosa', 'judy', '$2y$10$ISMiDK.VvfQuytyt/zF21OlySx/SKtwGfeKICL1gfiQ7bVFnB8R9K', 'staff', NULL, NULL, '14:00:00', '00:00:00', 'amiecabahug2020@gmail.com', '09452136587', '1253', 'Active', '2026-06-30 21:55:43', '2026-10-07 07:57:41', 'Judy Lastimosa', 'uploads/profiles/profile_9_1787063034.jpg', NULL);
 
 
 -- -----------------------------------------------------------
@@ -6377,4 +6362,4 @@ CREATE TABLE `voided_transactions` (
 
 SET FOREIGN_KEY_CHECKS=1;
 
--- Dump completed: 2026-10-07 08:56:08
+-- Dump completed: 2026-10-07 08:29:03

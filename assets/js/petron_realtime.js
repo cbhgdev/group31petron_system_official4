@@ -39,9 +39,9 @@
         if (typeof window.PETRON_AUTO_REFRESH_SECONDS === 'number' && window.PETRON_AUTO_REFRESH_SECONDS >= 5) {
             return window.PETRON_AUTO_REFRESH_SECONDS * 1000;
         }
-        return 15000;
+        return 10000;
     }
-    var POLL_INTERVAL_MS = getPollIntervalMs(); // dynamic fallback 15s
+    var POLL_INTERVAL_MS = getPollIntervalMs(); // dynamic default 10s
 
     var CSRF_TOKEN = (function () {
         var m = document.querySelector('meta[name="csrf-token"]');
@@ -236,7 +236,10 @@
                 '#joUnifiedTable', '#mhTable', '#jomTable', '#reportTable',
                 'table.txn-table', 'table.data-table',
                 'table.manager-table', 'table.admin-table',
-                'table.afto-tbl', '.afto-tbl'
+                'table.mgr-table', 'table.adm-table', 'table.dev-inner-table',
+                'table.vt-table', '.vt-table',
+                'table.afto-tbl', '.afto-tbl',
+                '#auditTable', '#adminTable', '.petron-table', '.table-custom'
             ];
             tableSelectors.forEach(function (sel) {
                 document.querySelectorAll(sel).forEach(function (currentTbl) {
@@ -297,6 +300,9 @@
             }
             if (typeof window.mftvRender === 'function') {
                 try { window.mftvRender(); } catch (e) {}
+            }
+            if (typeof window.mvtRender === 'function') {
+                try { window.mvtRender(); } catch (e) {}
             }
             if (typeof window.updateBatchButtons === 'function') {
                 try { window.updateBatchButtons(); } catch (e) {}
@@ -472,9 +478,16 @@
             return this;
         },
         getPollingInterval: function () {
-            return typeof getPollIntervalMs === 'function' ? getPollIntervalMs() : 15000;
+            return typeof getPollIntervalMs === 'function' ? getPollIntervalMs() : 10000;
         },
     };
+
+    // Auto-listen to global auto-refresh changes dispatched across tabs/pages
+    document.addEventListener('petron:auto-refresh-interval-changed', function (e) {
+        if (e.detail && e.detail.intervalMs) {
+            PetronRealtime.resetPollingInterval(e.detail.intervalMs);
+        }
+    });
 
     window.PetronRealtime = PetronRealtime;
 

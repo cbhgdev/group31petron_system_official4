@@ -1021,9 +1021,26 @@ function autoRefreshSuperadminDashboard() {
             }
         })
         .catch(() => {});
+}
+
 const superadminRefreshMs = (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000)
     ? window.PETRON_AUTO_REFRESH_MS
     : 10000;
-setInterval(autoRefreshSuperadminDashboard, superadminRefreshMs);
+
+let superadminRefreshTimer = null;
+function scheduleSuperadminRefresh(ms) {
+    if (superadminRefreshTimer) clearInterval(superadminRefreshTimer);
+    const interval = (typeof ms === 'number' && ms >= 5000)
+        ? ms
+        : ((typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000) ? window.PETRON_AUTO_REFRESH_MS : 10000);
+    superadminRefreshTimer = setInterval(autoRefreshSuperadminDashboard, interval);
+}
+scheduleSuperadminRefresh(superadminRefreshMs);
+
+document.addEventListener('petron:auto-refresh-interval-changed', function(e) {
+    if (e.detail && e.detail.intervalMs) {
+        scheduleSuperadminRefresh(e.detail.intervalMs);
+    }
+});
 </script>
 <?php include __DIR__ . '/../partials/footer.php'; ?>

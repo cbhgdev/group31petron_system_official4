@@ -15,13 +15,17 @@ if (!in_array($role, ['manager', 'admin', 'superadmin'], true)) {
 }
 
 $station_id = (int)user_station_id();
-$batch_id = trim($_GET['batch_id'] ?? $_GET['po_id'] ?? $_GET['po_number'] ?? $_GET['delivery_ref'] ?? '');
-$raw_type = $_GET['type'] ?? '';
-$type     = (strpos(strtolower($raw_type), 'fuel') !== false) ? 'fuel' : 'merch';
-
-if ($batch_id === '') {
+$raw_param = trim($_GET['batch_id'] ?? $_GET['po_id'] ?? $_GET['po_number'] ?? $_GET['delivery_ref'] ?? $_GET['id'] ?? '');
+if ($raw_param === '') {
     die('<p style="font-family:Arial;padding:40px;">Missing invoice reference parameters.</p>');
 }
+
+// Normalize spacing to hyphens (e.g. "PO 2026 0003 03" -> "PO-2026-0003-03")
+$batch_id = preg_replace('/\s+/', '-', $raw_param);
+$base_po  = preg_replace('/-\d{2,}$/', '', $batch_id); // e.g. "PO-2026-0003"
+
+$raw_type = $_GET['type'] ?? '';
+$type     = (strpos(strtolower($raw_type), 'fuel') !== false) ? 'fuel' : 'merch';
 
 /* ── helpers ── */
 function psr_due_date($d): string {
@@ -61,10 +65,56 @@ try {
     }
 } catch (Exception $e) {}
 
+/* ── Collect all linked reference candidate keys ── */
+$candidates = array_values(array_unique(array_filter([
+    $batch_id,
+    $raw_param,
+    $base_po
+])));
+
+// 1. Discover linked references from fuel_purchase_orders and purchase_orders
+try {
+    $c_ph = implode(',', array_fill(0, count($candidates), '?'));
+    $stmt_fpo = $pdo->prepare("SELECT po_number, batch_id FROM fuel_purchase_orders WHERE (station_id = ? OR ? = 0) AND (po_number IN ($c_ph) OR batch_id IN ($c_ph) OR po_number LIKE ? OR batch_id LIKE ?)");
+    $stmt_fpo->execute(array_merge([$station_id, $station_id], $candidates, $candidates, [$base_po . '%', $base_po . '%']));
+    while ($r = $stmt_fpo->fetch(PDO::FETCH_ASSOC)) {
+        if (!empty($r['po_number'])) $candidates[] = $r['po_number'];
+        if (!empty($r['batch_id']))  $candidates[] = $r['batch_id'];
+    }
+} catch (Exception $e) {}
+
+try {
+    $c_ph = implode(',', array_fill(0, count($candidates), '?'));
+    $stmt_po = $pdo->prepare("SELECT po_number, batch_id FROM purchase_orders WHERE (station_id = ? OR ? = 0) AND (po_number IN ($c_ph) OR batch_id IN ($c_ph) OR po_number LIKE ? OR batch_id LIKE ?)");
+    $stmt_po->execute(array_merge([$station_id, $station_id], $candidates, $candidates, [$base_po . '%', $base_po . '%']));
+    while ($r = $stmt_po->fetch(PDO::FETCH_ASSOC)) {
+        if (!empty($r['po_number'])) $candidates[] = $r['po_number'];
+        if (!empty($r['batch_id']))  $candidates[] = $r['batch_id'];
+    }
+} catch (Exception $e) {}
+
+// 2. Discover linked references from deliveries_oversight
+try {
+    $c_ph = implode(',', array_fill(0, count($candidates), '?'));
+    $stmt_do = $pdo->prepare("SELECT id, source_ref, delivery_ref, batch_id, dr_number, sales_invoice_no FROM deliveries_oversight WHERE (station_id = ? OR ? = 0) AND (source_ref IN ($c_ph) OR delivery_ref IN ($c_ph) OR batch_id IN ($c_ph) OR source_ref LIKE ? OR delivery_ref LIKE ? OR batch_id LIKE ?)");
+    $stmt_do->execute(array_merge([$station_id, $station_id], $candidates, $candidates, $candidates, [$base_po . '%', $base_po . '%', $base_po . '%']));
+    while ($r = $stmt_do->fetch(PDO::FETCH_ASSOC)) {
+        if (!empty($r['source_ref']))       $candidates[] = $r['source_ref'];
+        if (!empty($r['delivery_ref']))     $candidates[] = $r['delivery_ref'];
+        if (!empty($r['batch_id']))         $candidates[] = $r['batch_id'];
+        if (!empty($r['dr_number']))        $candidates[] = $r['dr_number'];
+        if (!empty($r['sales_invoice_no'])) $candidates[] = $r['sales_invoice_no'];
+        $candidates[] = 'DO-' . $r['id'];
+    }
+} catch (Exception $e) {}
+
+$candidates = array_values(array_unique(array_filter($candidates)));
+$cand_ph = implode(',', array_fill(0, count($candidates), '?'));
+
 /* ── fetch items ── */
 $items = [];
-$is_fuel = false;
-$po_number = '';
+$is_fuel = ($type === 'fuel');
+$po_number = $base_po ?: $batch_id;
 $supplier = 'Petron Corporation';
 $delivery_date = '';
 $delivery_time = '';
@@ -72,101 +122,58 @@ $dr_number = '';
 $sales_invoice_no = '';
 $manager_name = '';
 $approved_at = '';
-$actual_batch_id = '';
+$actual_batch_id = $batch_id;
 
-// 1. Try Merchandise Stock-In first
-if ($type !== 'fuel') {
+// 1. Try Fuel Stock-In if fuel type requested or general
+if ($type === 'fuel' || empty($items)) {
     try {
-        // NOTE: inventory_products JOIN removed — product_name & sku are stored in merchandise_stock_in directly
-        $stmt = $pdo->prepare("
-            SELECT msi.*,
-                   msi.sku AS sku,
-                   msi.product_name AS product_name,
-                   COALESCE(si.unit, 'pcs') AS unit_display,
-                   do.dr_number, do.sales_invoice_no, do.supplier AS do_supplier, do.delivery_date AS do_date,
-                   do.delivery_time AS do_time, do.remarks AS do_remarks, u.name AS mgr_name
-            FROM merchandise_stock_in msi
-            LEFT JOIN station_inventory si ON (si.product_id = msi.product_id AND si.station_id = msi.station_id)
-            LEFT JOIN deliveries_oversight do ON msi.delivery_id = do.id
-            LEFT JOIN users u ON msi.encoded_by = u.id
-            WHERE msi.station_id = ? AND (msi.batch_ref = ? OR msi.po_number = ? OR do.delivery_ref = ?)
-            ORDER BY msi.id ASC
-        ");
-        $stmt->execute([$station_id, $batch_id, $batch_id, $batch_id]);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if (!empty($rows)) {
-            $is_fuel = false;
-            $po_number = $rows[0]['po_number'];
-            $actual_batch_id = $rows[0]['batch_ref'];
-            $supplier = $rows[0]['do_supplier'] ?: 'Petron Corporation';
-            $delivery_date = $rows[0]['do_date'] ?: date('Y-m-d', strtotime($rows[0]['encoded_at']));
-            $delivery_time = $rows[0]['do_time'] ?? '';
-            $dr_number = $rows[0]['dr_number'] ?: '';
-            $sales_invoice_no = $rows[0]['sales_invoice_no'] ?: '';
-            if (empty($sales_invoice_no)) {
-                $sales_invoice_no = si_extract_invoice($rows[0]['do_remarks']);
-            }
-            $manager_name = $rows[0]['mgr_name'] ?: '';
-            $approved_at = $rows[0]['encoded_at'];
-            foreach ($rows as $r) {
-                $items[] = [
-                    'sku'          => $r['sku'] ?: '—',
-                    'name'         => $r['product_name'],
-                    'qty_ordered'  => (float)$r['qty_ordered'],
-                    'qty_received' => (float)$r['qty_received'],
-                    'unit'         => $r['unit_display'] ?: 'pcs',
-                    'cost'         => (float)$r['unit_cost'],
-                    'total'        => (float)$r['total_cost'],
-                    'condition'    => $r['condition_flag'],
-                    'remarks'      => $r['remarks']
-                ];
-            }
-        }
-    } catch (Exception $e) {
-        error_log('[print_supplier_invoice] merch query error: ' . $e->getMessage());
-    }
-}
-
-// 2. Try Fuel Stock-In if empty or if type is fuel
-if (empty($items) && $type !== 'merch') {
-    try {
-        $stmt = $pdo->prepare("
+        $stmt_fsi = $pdo->prepare("
             SELECT fsi.*,
                    do.dr_number, do.sales_invoice_no, do.supplier AS do_supplier, do.delivery_date AS do_date,
                    do.delivery_time AS do_time, do.remarks AS do_remarks, u.name AS mgr_name
             FROM fuel_stock_in fsi
             LEFT JOIN deliveries_oversight do ON fsi.delivery_id = do.id
             LEFT JOIN users u ON fsi.encoded_by = u.id
-            WHERE fsi.station_id = ? AND (fsi.batch_ref = ? OR fsi.delivery_ref = ? OR fsi.invoice_no = ?)
+            WHERE fsi.station_id = ? 
+              AND (fsi.batch_ref IN ($cand_ph) OR fsi.delivery_ref IN ($cand_ph) OR fsi.invoice_no IN ($cand_ph)
+                   OR do.source_ref IN ($cand_ph) OR do.delivery_ref IN ($cand_ph) OR do.batch_id IN ($cand_ph))
             ORDER BY fsi.id ASC
         ");
-        $stmt->execute([$station_id, $batch_id, $batch_id, $batch_id]);
-        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        if (!empty($rows)) {
+        $stmt_fsi->execute(array_merge([$station_id], $candidates, $candidates, $candidates, $candidates, $candidates, $candidates));
+        $fsi_rows = $stmt_fsi->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($fsi_rows)) {
             $is_fuel = true;
-            $po_number = $rows[0]['delivery_ref']; // For fuel, delivery_ref is often the PO number
-            $actual_batch_id = $rows[0]['batch_ref'];
-            $supplier = $rows[0]['do_supplier'] ?: 'Petron Corporation';
-            $delivery_date = $rows[0]['do_date'] ?: date('Y-m-d', strtotime($rows[0]['encoded_at']));
-            $delivery_time = $rows[0]['do_time'] ?? '';
-            $dr_number = $rows[0]['dr_number'] ?: '';
-            $sales_invoice_no = $rows[0]['sales_invoice_no'] ?: '';
+            $po_number = $fsi_rows[0]['delivery_ref'] ?: $base_po;
+            $actual_batch_id = $fsi_rows[0]['batch_ref'] ?: $batch_id;
+            $supplier = $fsi_rows[0]['do_supplier'] ?: 'Petron Corporation';
+            $delivery_date = $fsi_rows[0]['do_date'] ?: date('Y-m-d', strtotime($fsi_rows[0]['encoded_at']));
+            $delivery_time = $fsi_rows[0]['do_time'] ?? '';
+            $dr_number = $fsi_rows[0]['dr_number'] ?: ($fsi_rows[0]['invoice_no'] ?: '');
+            $sales_invoice_no = $fsi_rows[0]['sales_invoice_no'] ?: ($fsi_rows[0]['invoice_no'] ?: '');
             if (empty($sales_invoice_no)) {
-                $sales_invoice_no = $rows[0]['invoice_no'] ?: si_extract_invoice($rows[0]['do_remarks']);
+                $sales_invoice_no = si_extract_invoice($fsi_rows[0]['do_remarks']);
             }
-            $manager_name = $rows[0]['mgr_name'] ?: '';
-            $approved_at = $rows[0]['encoded_at'];
-            foreach ($rows as $r) {
+            $manager_name = $fsi_rows[0]['mgr_name'] ?: '';
+            $approved_at = $fsi_rows[0]['encoded_at'];
+
+            foreach ($fsi_rows as $r) {
                 $qty_ordered = (float)$r['qty_expected'];
                 $qty_received = (float)$r['qty_received'];
                 
-                // Fetch unit_cost from deliveries_oversight using delivery_id
                 $cost = 0;
                 try {
                     $cstmt = $pdo->prepare("SELECT COALESCE(unit_cost, unit_price, 0) FROM deliveries_oversight WHERE id = ?");
                     $cstmt->execute([$r['delivery_id']]);
                     $cost = (float)$cstmt->fetchColumn();
                 } catch (Exception $e) {}
+
+                if ($cost <= 0) {
+                    try {
+                        $cost_stmt = $pdo->prepare("SELECT unit_price FROM fuel_purchase_orders WHERE station_id = ? AND (po_number = ? OR batch_id = ? OR po_number LIKE ?) LIMIT 1");
+                        $cost_stmt->execute([$station_id, $r['delivery_ref'], $r['delivery_ref'], $base_po . '%']);
+                        $cost = (float)$cost_stmt->fetchColumn();
+                    } catch (Exception $e) {}
+                }
                 
                 $total = $qty_received * $cost;
                 $items[] = [
@@ -177,8 +184,208 @@ if (empty($items) && $type !== 'merch') {
                     'unit' => 'L',
                     'cost' => $cost,
                     'total' => $total,
-                    'condition' => $r['condition_flag'],
+                    'condition' => $r['condition_flag'] ?: 'Good',
                     'remarks' => $r['remarks']
+                ];
+            }
+        }
+    } catch (Exception $e) {
+        error_log('[print_supplier_invoice] fuel stock in error: ' . $e->getMessage());
+    }
+}
+
+// 2. Try Merchandise Stock-In if empty or type is merchandise
+if (empty($items) && $type !== 'fuel') {
+    try {
+        $stmt_msi = $pdo->prepare("
+            SELECT msi.*,
+                   msi.sku AS sku,
+                   msi.product_name AS product_name,
+                   COALESCE(si.unit, 'pcs') AS unit_display,
+                   do.dr_number, do.sales_invoice_no, do.supplier AS do_supplier, do.delivery_date AS do_date,
+                   do.delivery_time AS do_time, do.remarks AS do_remarks, u.name AS mgr_name
+            FROM merchandise_stock_in msi
+            LEFT JOIN station_inventory si ON (si.product_id = msi.product_id AND si.station_id = msi.station_id)
+            LEFT JOIN deliveries_oversight do ON msi.delivery_id = do.id
+            LEFT JOIN users u ON msi.encoded_by = u.id
+            WHERE msi.station_id = ? 
+              AND (msi.batch_ref IN ($cand_ph) OR msi.po_number IN ($cand_ph) 
+                   OR do.delivery_ref IN ($cand_ph) OR do.source_ref IN ($cand_ph) OR do.batch_id IN ($cand_ph))
+            ORDER BY msi.id ASC
+        ");
+        $stmt_msi->execute(array_merge([$station_id], $candidates, $candidates, $candidates, $candidates, $candidates));
+        $msi_rows = $stmt_msi->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($msi_rows)) {
+            $is_fuel = false;
+            $po_number = $msi_rows[0]['po_number'] ?: $base_po;
+            $actual_batch_id = $msi_rows[0]['batch_ref'] ?: $batch_id;
+            $supplier = $msi_rows[0]['do_supplier'] ?: 'Petron Corporation';
+            $delivery_date = $msi_rows[0]['do_date'] ?: date('Y-m-d', strtotime($msi_rows[0]['encoded_at']));
+            $delivery_time = $msi_rows[0]['do_time'] ?? '';
+            $dr_number = $msi_rows[0]['dr_number'] ?: '';
+            $sales_invoice_no = $msi_rows[0]['sales_invoice_no'] ?: '';
+            if (empty($sales_invoice_no)) {
+                $sales_invoice_no = si_extract_invoice($msi_rows[0]['do_remarks']);
+            }
+            $manager_name = $msi_rows[0]['mgr_name'] ?: '';
+            $approved_at = $msi_rows[0]['encoded_at'];
+            foreach ($msi_rows as $r) {
+                $items[] = [
+                    'sku'          => $r['sku'] ?: '—',
+                    'name'         => $r['product_name'],
+                    'qty_ordered'  => (float)$r['qty_ordered'],
+                    'qty_received' => (float)$r['qty_received'],
+                    'unit'         => $r['unit_display'] ?: 'pcs',
+                    'cost'         => (float)$r['unit_cost'],
+                    'total'        => (float)$r['total_cost'],
+                    'condition'    => $r['condition_flag'] ?: 'Good',
+                    'remarks'      => $r['remarks']
+                ];
+            }
+        }
+    } catch (Exception $e) {
+        error_log('[print_supplier_invoice] merch stock in error: ' . $e->getMessage());
+    }
+}
+
+// 3. Fallback: Check Deliveries Oversight
+if (empty($items)) {
+    try {
+        $stmt_do_items = $pdo->prepare("
+            SELECT do.*, u.name AS mgr_name
+            FROM deliveries_oversight do
+            LEFT JOIN users u ON (do.verified_by = u.id OR do.approved_by = u.id)
+            WHERE do.station_id = ? 
+              AND (do.source_ref IN ($cand_ph) OR do.delivery_ref IN ($cand_ph) OR do.batch_id IN ($cand_ph))
+            ORDER BY do.id ASC
+        ");
+        $stmt_do_items->execute(array_merge([$station_id], $candidates, $candidates, $candidates));
+        $do_rows = $stmt_do_items->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($do_rows)) {
+            $is_fuel = (strtolower($do_rows[0]['delivery_type']) === 'fuel');
+            $po_number = $do_rows[0]['source_ref'] ?: ($do_rows[0]['delivery_ref'] ?: $base_po);
+            $actual_batch_id = $do_rows[0]['batch_id'] ?: $batch_id;
+            $supplier = $do_rows[0]['supplier'] ?: 'Petron Corporation';
+            $delivery_date = $do_rows[0]['delivery_date'] ?: date('Y-m-d', strtotime($do_rows[0]['created_at']));
+            $delivery_time = $do_rows[0]['delivery_time'] ?? '';
+            $dr_number = $do_rows[0]['dr_number'] ?: '';
+            $sales_invoice_no = $do_rows[0]['sales_invoice_no'] ?: si_extract_invoice($do_rows[0]['remarks']);
+            $manager_name = $do_rows[0]['mgr_name'] ?: '';
+            $approved_at = $do_rows[0]['finalized_at'] ?: $do_rows[0]['created_at'];
+
+            foreach ($do_rows as $r) {
+                $qty_ordered = (float)($r['expected_quantity'] ?: $r['quantity']);
+                $qty_received = (float)($r['actual_quantity'] !== null ? $r['actual_quantity'] : $r['quantity']);
+                $cost = (float)($r['unit_cost'] ?: ($r['unit_price'] ?: 0));
+                $total = (float)($r['total_cost'] ?: ($qty_received * $cost));
+
+                $items[] = [
+                    'sku'          => $is_fuel ? 'FUEL' : '—',
+                    'name'         => $r['product'],
+                    'qty_ordered'  => $qty_ordered,
+                    'qty_received' => $qty_received,
+                    'unit'         => $r['unit'] ?: ($is_fuel ? 'L' : 'pcs'),
+                    'cost'         => $cost,
+                    'total'        => $total,
+                    'condition'    => ($r['damaged_quantity'] > 0) ? 'Damaged' : 'Good',
+                    'remarks'      => $r['remarks']
+                ];
+            }
+        }
+    } catch (Exception $e) {}
+}
+
+// 4. Fallback: Check Fuel Purchase Orders
+if (empty($items) && ($type === 'fuel' || empty($items))) {
+    try {
+        $stmt_fpo_items = $pdo->prepare("
+            SELECT fpo.*, ft.name AS fuel_type_name, sup.name AS sup_name, u.name AS mgr_name
+            FROM fuel_purchase_orders fpo
+            LEFT JOIN fuel_types ft ON fpo.fuel_type_id = ft.id
+            LEFT JOIN suppliers sup ON fpo.supplier_id = sup.id
+            LEFT JOIN users u ON (fpo.approved_by = u.id OR fpo.created_by = u.id)
+            WHERE (fpo.station_id = ? OR ? = 0)
+              AND (fpo.po_number IN ($cand_ph) OR fpo.batch_id IN ($cand_ph) OR fpo.po_number LIKE ? OR fpo.batch_id LIKE ?)
+            ORDER BY fpo.id ASC
+        ");
+        $stmt_fpo_items->execute(array_merge([$station_id, $station_id], $candidates, $candidates, [$base_po . '%', $base_po . '%']));
+        $fpo_rows = $stmt_fpo_items->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($fpo_rows)) {
+            $is_fuel = true;
+            $po_number = !empty($fpo_rows[0]['batch_id']) ? $fpo_rows[0]['batch_id'] : $fpo_rows[0]['po_number'];
+            $actual_batch_id = $po_number;
+            $supplier = $fpo_rows[0]['sup_name'] ?: 'Petron Corporation';
+            $delivery_date = $fpo_rows[0]['expected_delivery_date'] ?: date('Y-m-d', strtotime($fpo_rows[0]['created_at']));
+            $delivery_time = '09:00 AM';
+            $dr_number = 'PO-' . $fpo_rows[0]['id'];
+            $sales_invoice_no = 'INV-' . date('Ymd', strtotime($fpo_rows[0]['created_at'])) . '-' . $fpo_rows[0]['id'];
+            $manager_name = $fpo_rows[0]['mgr_name'] ?: '';
+            $approved_at = $fpo_rows[0]['approved_at'] ?: $fpo_rows[0]['created_at'];
+
+            foreach ($fpo_rows as $r) {
+                $vol = (float)$r['volume'];
+                $unit_p = (float)$r['unit_price'];
+                $tot = (float)($r['total_amount'] ?: ($vol * $unit_p));
+                if ($unit_p <= 0 && $vol > 0 && $tot > 0) {
+                    $unit_p = $tot / $vol;
+                }
+                $items[] = [
+                    'sku'          => 'FUEL',
+                    'name'         => $r['fuel_type_name'] ?: 'Fuel',
+                    'qty_ordered'  => $vol,
+                    'qty_received' => $vol,
+                    'unit'         => 'L',
+                    'cost'         => $unit_p,
+                    'total'        => $tot,
+                    'condition'    => 'Good',
+                    'remarks'      => $r['notes']
+                ];
+            }
+        }
+    } catch (Exception $e) {}
+}
+
+// 5. Fallback: Check Merchandise Purchase Orders
+if (empty($items)) {
+    try {
+        $stmt_po_items = $pdo->prepare("
+            SELECT po.*, poi.item_name, poi.quantity, poi.unit_price, poi.total_price, sup.name AS sup_name, u.name AS mgr_name
+            FROM purchase_orders po
+            LEFT JOIN purchase_order_items poi ON po.id = poi.po_id
+            LEFT JOIN suppliers sup ON po.supplier_id = sup.id
+            LEFT JOIN users u ON (po.approved_by = u.id OR po.created_by = u.id)
+            WHERE (po.station_id = ? OR ? = 0)
+              AND (po.po_number IN ($cand_ph) OR po.batch_id IN ($cand_ph) OR po.po_number LIKE ? OR po.batch_id LIKE ?)
+            ORDER BY po.id ASC
+        ");
+        $stmt_po_items->execute(array_merge([$station_id, $station_id], $candidates, $candidates, [$base_po . '%', $base_po . '%']));
+        $po_rows = $stmt_po_items->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($po_rows)) {
+            $is_fuel = false;
+            $po_number = !empty($po_rows[0]['batch_id']) ? $po_rows[0]['batch_id'] : $po_rows[0]['po_number'];
+            $actual_batch_id = $po_number;
+            $supplier = $po_rows[0]['sup_name'] ?: 'Petron Corporation';
+            $delivery_date = $po_rows[0]['expected_delivery_date'] ?: date('Y-m-d', strtotime($po_rows[0]['created_at']));
+            $delivery_time = '09:00 AM';
+            $dr_number = 'PO-' . $po_rows[0]['id'];
+            $sales_invoice_no = 'INV-' . date('Ymd', strtotime($po_rows[0]['created_at'])) . '-' . $po_rows[0]['id'];
+            $manager_name = $po_rows[0]['mgr_name'] ?: '';
+            $approved_at = $po_rows[0]['admin_finalized_at'] ?: ($po_rows[0]['approved_at'] ?: $po_rows[0]['created_at']);
+
+            foreach ($po_rows as $r) {
+                $qty = (float)$r['quantity'];
+                $unit_p = (float)$r['unit_price'];
+                $tot = (float)($r['total_price'] ?: ($qty * $unit_p));
+                $items[] = [
+                    'sku'          => '—',
+                    'name'         => $r['item_name'] ?: $r['product_name'],
+                    'qty_ordered'  => $qty,
+                    'qty_received' => $qty,
+                    'unit'         => 'pcs',
+                    'cost'         => $unit_p,
+                    'total'        => $tot,
+                    'condition'    => 'Good',
+                    'remarks'      => $r['remarks']
                 ];
             }
         }
@@ -186,7 +393,7 @@ if (empty($items) && $type !== 'merch') {
 }
 
 if (empty($items)) {
-    die('<p style="font-family:Arial;padding:40px;">No approved Stock-In records found for reference: ' . htmlspecialchars($batch_id) . '.</p>');
+    die('<p style="font-family:Arial;padding:40px;">No record found for reference: ' . htmlspecialchars($batch_id) . '.</p>');
 }
 
 $invoice_date  = $delivery_date ?: date('Y-m-d');
@@ -321,8 +528,8 @@ body{font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;font-size:11px;
 <body>
 
 <div class="btn-print-bar">
-    <a href="<?= htmlspecialchars($back_url) ?>" class="btn-print btn-back">&larr; Back</a>
-    <button onclick="window.print()" class="btn-print">&#128438; Print Invoice</button>
+    <button type="button" onclick="window.print()" class="btn-print">&#128438; Print Invoice</button>
+    <button type="button" onclick="window.history.length > 1 ? window.history.back() : window.close();" class="btn-print btn-back">&#x2190; Close</button>
 </div>
 
 <div class="po-document">

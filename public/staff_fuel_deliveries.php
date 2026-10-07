@@ -1,16 +1,12 @@
 <?php
 $page_id = 'staff_fuel_deliveries';
 require_once __DIR__ . '/../backend/lib.php';
-require_once __DIR__ . '/db_connect.php';
 require_login();
 
-$me         = current_user();
-$role       = role_key($me['role'] ?? '');
-$station_id = user_station_id();
-
-if (!in_array($role, ['staff', 'cashier', 'pump_attendant', 'admin', 'manager', 'superadmin'])) {
-    header('Location: login.php'); exit;
-}
+// The "Record Delivery" / Tank monitoring delivery form has been deprecated from the staff workflow.
+// Redirect directly to Staff Fuel Inventory.
+header('Location: staff_inventory_fuel.php');
+exit;
 
 $msg      = '';
 $msg_type = 'success';

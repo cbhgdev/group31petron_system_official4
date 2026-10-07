@@ -207,23 +207,25 @@ if (!function_exists('enforce_server_security')) {
         }
 
         // 1. Session & Inactivity Timeout (Dynamically loaded from system_settings)
-        $timeout = 1800; // 30 minutes fallback default
-        try {
-            if ($pdo) {
-                $stStmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'session_timeout' AND station_id = 0 LIMIT 1");
-                $stStmt->execute();
-                $stVal = $stStmt->fetchColumn();
-                if ($stVal !== false && is_numeric($stVal) && (int)$stVal > 0) {
-                    $timeout = max(60, (int)$stVal * 60); // minimum 1 min (60s)
-                }
-            }
-        } catch (Exception $e) {}
+        $user_st_id = (int)($_SESSION['user']['station_id'] ?? $_SESSION['station_id'] ?? 0);
+        $timeout = function_exists('get_system_session_timeout_seconds') 
+            ? get_system_session_timeout_seconds($pdo, $user_st_id) 
+            : 1800;
 
         if (empty($_SESSION['user']) || empty($_SESSION['user_id'])) {
             sec_reject_request(401, 'Unauthorized access. Please log in.');
         }
 
-        if (isset($_SESSION['last_activity'])) {
+        // NOTE: Superadmin and Developer are strictly exempt from session timeout
+        $__current_role = '';
+        if (!empty($_SESSION['user']['role'])) {
+            $__current_role = function_exists('role_key') ? role_key($_SESSION['user']['role']) : strtolower(trim($_SESSION['user']['role']));
+        } elseif (!empty($_SESSION['role'])) {
+            $__current_role = function_exists('role_key') ? role_key($_SESSION['role']) : strtolower(trim($_SESSION['role']));
+        }
+        $__is_exempt = in_array($__current_role, ['superadmin', 'developer'], true);
+
+        if (!$__is_exempt && isset($_SESSION['last_activity'])) {
             $inactive = time() - (int)$_SESSION['last_activity'];
             if ($inactive >= $timeout) {
                 $_SESSION = [];
@@ -235,8 +237,14 @@ if (!function_exists('enforce_server_security')) {
         // Only update last activity timestamp on REAL user requests, NOT background polling/heartbeats
         $is_background_poll = !empty($_SERVER['HTTP_X_PETRON_BACKGROUND']) 
             || (!empty($_GET['ajax_sss'])) 
-            || (isset($_GET['poll']) && $_GET['poll'] == '1')
-            || (isset($_GET['action']) && in_array($_GET['action'], ['check_maintenance', 'unread_count', 'get_unread_count', 'ping', 'heartbeat'], true));
+            || (!empty($_GET['ajax'])) 
+            || (!empty($_GET['poll'])) 
+            || (isset($_GET['action']) && in_array(strtolower((string)$_GET['action']), ['check_maintenance', 'unread_count', 'get_unread_count', 'ping', 'heartbeat', 'notifications_count', 'badge_count'], true))
+            || (isset($_SERVER['SCRIPT_NAME']) && (
+                strpos($_SERVER['SCRIPT_NAME'], '_generator.php') !== false ||
+                strpos($_SERVER['SCRIPT_NAME'], 'maintenance_status.php') !== false ||
+                strpos($_SERVER['SCRIPT_NAME'], 'notifications_api.php') !== false
+            ));
 
         if (!$is_background_poll) {
             $_SESSION['last_activity'] = time();

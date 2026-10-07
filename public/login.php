@@ -59,17 +59,20 @@ $is_maintenance = false;
 $maint_msg = "The system is currently undergoing scheduled maintenance to improve performance and stability. Please check back shortly.";
 $maint_end_time = "";
 try {
+    if (function_exists('check_and_auto_conclude_maintenance')) {
+        check_and_auto_conclude_maintenance($pdo);
+    }
     $stmtM = $pdo->prepare("SELECT setting_key, setting_value FROM system_settings WHERE setting_key IN ('maintenance_mode', 'maintenance_message', 'maintenance_end_time') AND station_id = 0");
     $stmtM->execute();
     $mRows = $stmtM->fetchAll(PDO::FETCH_KEY_PAIR);
-    if (!empty($mRows['maintenance_mode']) && ($mRows['maintenance_mode'] === '1' || $mRows['maintenance_mode'] == 1 || $mRows['maintenance_mode'] === 'true')) {
+    if (!empty($mRows['maintenance_mode']) && in_array(trim((string)$mRows['maintenance_mode']), ['1', 'true', 1], true)) {
         $is_maintenance = true;
     }
     if (!empty($mRows['maintenance_message'])) {
         $maint_msg = $mRows['maintenance_message'];
     }
     if (!empty($mRows['maintenance_end_time'])) {
-        $maint_end_time = $mRows['maintenance_end_time'];
+        $maint_end_time = trim((string)$mRows['maintenance_end_time']);
     }
 } catch (Exception $e) {}
 
@@ -394,9 +397,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($valid_login) {
 
                 // ── Check Maintenance Mode Role Restriction ──
+                if ($is_maintenance && function_exists('check_and_auto_conclude_maintenance')) {
+                    $is_maintenance = check_and_auto_conclude_maintenance($pdo);
+                }
                 $u_role = role_key($user['role'] ?? '');
                 if ($is_maintenance && !in_array($u_role, ['superadmin', 'developer'])) {
-                    $error = "⚠️ The system is currently undergoing maintenance. Only Super Administrators can log in at this time.";
+                    $error = "⚠️ The system is currently undergoing maintenance. Only Developers can log in at this time.";
                     $valid_login = false;
                     generate_strong_captcha();
                     $captcha_question = $_SESSION['captcha_question'];
@@ -2129,7 +2135,7 @@ $logo_fallback = $_asset_base . '/img/petron_logo.png';
                             </div>
                             <?php endif; ?>
                             <div style="font-size:11.5px; color:#fde68a; font-weight:600; display:flex; align-items:center; gap:6px; opacity:0.95;">
-                                <i class="fas fa-lock"></i> Regular access is temporarily restricted. Super Administrators can log in below.
+                                <i class="fas fa-lock"></i> Regular access is temporarily restricted. Developers can log in below.
                             </div>
                         </div>
                     </div>
@@ -2760,14 +2766,31 @@ document.addEventListener('DOMContentLoaded', function() {
     const endTimeStr = timerEl.getAttribute('data-endtime');
     if (!endTimeStr) return;
 
+    let concludingFired = false;
     function update() {
         const target = new Date(endTimeStr.replace(/-/g, '/'));
         const now = new Date();
         const diff = target.getTime() - now.getTime();
 
         if (isNaN(target.getTime()) || diff <= 0) {
-            timerEl.textContent = 'Maintenance concluding shortly...';
-            timerEl.style.color = '#fbbf24';
+            timerEl.textContent = 'Maintenance concluded. Resuming system...';
+            timerEl.style.color = '#4ade80';
+
+            if (!concludingFired) {
+                concludingFired = true;
+                fetch('../backend/api/maintenance_status.php?auto_conclude=1', { cache: 'no-store' })
+                    .then(res => res.json())
+                    .then(data => {
+                        const banner = document.querySelector('.maint-banner-card');
+                        if (banner) {
+                            banner.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+                            banner.style.opacity = '0';
+                            banner.style.transform = 'translateY(-10px)';
+                            setTimeout(() => { if (banner.parentNode) banner.remove(); }, 500);
+                        }
+                    })
+                    .catch(() => {});
+            }
             return;
         }
 

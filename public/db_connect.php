@@ -8,8 +8,8 @@ ini_set('log_errors', '1');
 
 // Auto-detect environment: Live Hosting vs. Localhost / XAMPP
 $is_live_hosting = (
-    (isset($_SERVER['HTTP_HOST']) && strpos($_SERVER['HTTP_HOST'], 'yangch-stationms.online') !== false) ||
-    (isset($_SERVER['SERVER_NAME']) && strpos($_SERVER['SERVER_NAME'], 'yangch-stationms.online') !== false) ||
+    (isset($_SERVER['HTTP_HOST']) && (strpos($_SERVER['HTTP_HOST'], 'yangch-stationms.online') !== false || strpos($_SERVER['HTTP_HOST'], 'stationms.online') !== false)) ||
+    (isset($_SERVER['SERVER_NAME']) && (strpos($_SERVER['SERVER_NAME'], 'yangch-stationms.online') !== false || strpos($_SERVER['SERVER_NAME'], 'stationms.online') !== false)) ||
     (isset($_SERVER['DOCUMENT_ROOT']) && (strpos($_SERVER['DOCUMENT_ROOT'], 'u261539219') !== false || strpos($_SERVER['DOCUMENT_ROOT'], 'public_html') !== false))
 );
 

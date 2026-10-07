@@ -767,10 +767,10 @@ table.afto-tbl.report-table.no-min-width.print-table {
         </div>
         <div class="afto-fg" style="width: 125px; flex-shrink: 0;">
             <label>Fuel Type</label>
-            <select name="fuel_type">
+            <select name="fuel_type" onchange="this.form.submit()">
                 <option value="all">All Fuel Types</option>
                 <?php foreach ($fuel_types as $ft): ?>
-                    <option value="<?= htmlspecialchars($ft) ?>" <?= $fuel_type_filter === $ft ? 'selected' : '' ?>><?= htmlspecialchars($ft) ?></option>
+                    <option value="<?= htmlspecialchars($ft) ?>" <?= (strcasecmp($fuel_type_filter, $ft) === 0) ? 'selected' : '' ?>><?= htmlspecialchars($ft) ?></option>
                 <?php endforeach; ?>
             </select>
         </div>

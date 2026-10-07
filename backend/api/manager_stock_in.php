@@ -1182,7 +1182,7 @@ function notify_stock_in_users(
                 $actor_name,
                 $actor_role,
                 $details,
-                'stock_in',
+                $is_fuel ? 'fuel_stock_in' : 'merchandise_stock_in',
                 0,
                 $staff_redirect
             );

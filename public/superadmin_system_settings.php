@@ -12,6 +12,10 @@ if (!in_array($role, ['superadmin', 'developer'])) {
     exit;
 }
 
+if (function_exists('check_and_auto_conclude_maintenance')) {
+    check_and_auto_conclude_maintenance($pdo);
+}
+
 try {
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS system_settings (
@@ -668,9 +672,20 @@ input:checked + .ss-slider:before {
                     </div>
 
                     <div class="ss-form-group">
-                        <label for="ss_dashboard_auto_refresh">Auto Refresh Interval (seconds)</label>
-                        <input type="number" id="ss_dashboard_auto_refresh" class="ss-form-control" value="10" min="5" max="300" title="Auto refresh interval in seconds (default 10s)">
-                        <small style="color:#64748b; font-size:12.5px; margin-top:5px; display:block;">Real-time background data sync rate (5s - 300s).</small>
+                        <label for="ss_dashboard_auto_refresh_select"><i class="fas fa-sync-alt" style="color:var(--petron-blue, #002F6C); margin-right:4px;"></i> Auto Refresh Interval (seconds)</label>
+                        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <select id="ss_dashboard_auto_refresh_select" class="ss-form-control" onchange="onAutoRefreshSelectChange(this.value)" style="flex:1; min-width:200px; font-weight:500;">
+                                <option value="5">5 Seconds</option>
+                                <option value="10" selected>10 Seconds</option>
+                                <option value="15">15 Seconds</option>
+                                <option value="30">30 Seconds</option>
+                                <option value="60">60 Seconds</option>
+                                <option value="custom">Custom Duration (seconds)...</option>
+                            </select>
+                            <div id="ss_custom_refresh_wrapper" style="display:none; width:130px;">
+                                <input type="number" id="ss_dashboard_auto_refresh" class="ss-form-control" value="10" min="5" max="300" placeholder="Sec (5-300)" title="Auto refresh interval in seconds (5s - 300s)" oninput="onCustomRefreshInput(this.value)">
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -683,7 +698,8 @@ input:checked + .ss-slider:before {
                 <div class="ss-grid-3" style="margin-bottom:16px;">
                     <div class="ss-form-group">
                         <label for="ss_session_timeout">Session Timeout (minutes) <small style="color:#64748b; font-weight:400;">(min: 1)</small></label>
-                        <input type="number" id="ss_session_timeout" class="ss-form-control" value="30" min="1" max="1440" title="Global session timeout in minutes (min: 1). Inactive users across all roles and pages will be automatically logged out after this duration.">
+                        <input type="number" id="ss_session_timeout" class="ss-form-control" value="30" min="1" max="1440" title="Global session timeout in minutes (min: 1). Inactive users across all roles will be automatically logged out after this duration (Super Admin is exempt).">
+                        <small style="color:#64748b; font-size:12px; margin-top:4px; display:block;">Inactive users will be automatically logged out after this duration. (Super Admin is exempt)</small>
                     </div>
                     <div class="ss-form-group">
                         <label for="ss_min_password_length">Minimum Password Length</label>
@@ -1067,7 +1083,20 @@ function populateFormFields(s) {
     onAccentColorChange(accentCol);
 
     document.getElementById('ss_sidebar_mode').value = s.sidebar_mode || 'Expanded';
-    document.getElementById('ss_dashboard_auto_refresh').value = s.dashboard_auto_refresh || s.auto_refresh_interval || '10';
+    const refreshSec = parseInt(s.dashboard_auto_refresh || s.auto_refresh_interval || '10', 10) || 10;
+    const inputEl = document.getElementById('ss_dashboard_auto_refresh');
+    const selectEl = document.getElementById('ss_dashboard_auto_refresh_select');
+    const customWrap = document.getElementById('ss_custom_refresh_wrapper');
+    if (inputEl) inputEl.value = refreshSec;
+    if (selectEl) {
+        if (['5', '10', '15', '30', '60'].includes(String(refreshSec))) {
+            selectEl.value = String(refreshSec);
+            if (customWrap) customWrap.style.display = 'none';
+        } else {
+            selectEl.value = 'custom';
+            if (customWrap) customWrap.style.display = 'block';
+        }
+    }
     document.getElementById('ss_session_timeout').value = s.session_timeout || '30';
     document.getElementById('ss_min_password_length').value = s.min_password_length || '8';
     document.getElementById('ss_max_login_attempts').value = s.max_login_attempts || '5';
@@ -1169,6 +1198,31 @@ function updateHeaderBranding(logoUrl, systemName) {
     // Also update page <title>
     if (systemName) {
         document.title = systemName + ' — System Settings';
+    }
+}
+
+// ── Auto Refresh Interval Select & Custom Input Controller ──────────────────
+function onAutoRefreshSelectChange(val) {
+    const input = document.getElementById('ss_dashboard_auto_refresh');
+    const customWrap = document.getElementById('ss_custom_refresh_wrapper');
+    if (val === 'custom') {
+        if (customWrap) customWrap.style.display = 'block';
+        if (input) {
+            input.focus();
+            input.select();
+        }
+    } else {
+        if (customWrap) customWrap.style.display = 'none';
+        if (input) {
+            input.value = val;
+        }
+    }
+}
+
+function onCustomRefreshInput(val) {
+    const sel = document.getElementById('ss_dashboard_auto_refresh_select');
+    if (sel && sel.value !== 'custom') {
+        sel.value = 'custom';
     }
 }
 
@@ -1275,6 +1329,43 @@ async function removeLogo() {
 // ── Maintenance Mode ↔ System Status sync ─────────────────────────────────
 
 // ── Maintenance Timer & Presets Helper Functions ─────────────────────────
+let isAutoConcludingMaintenance = false;
+
+window.onMaintenanceAutoConcluded = function() {
+    isAutoConcludingMaintenance = false;
+    const maintToggle = document.getElementById('ss_maintenance_mode');
+    const statusSel = document.getElementById('ss_system_status');
+    const endInput = document.getElementById('ss_maintenance_end_time');
+    const previewEl = document.getElementById('maintCountdownPreview');
+    const targetEl = document.getElementById('maintTargetTimePreview');
+    const ribbon = document.getElementById('superadminMaintenanceRibbon');
+
+    if (maintToggle) maintToggle.checked = false;
+    if (statusSel) statusSel.value = 'Online';
+    if (endInput) endInput.value = '';
+    if (previewEl) {
+        previewEl.textContent = 'Maintenance completed — System is Online';
+        previewEl.style.color = '#15803d';
+    }
+    if (targetEl) targetEl.textContent = 'Target: Concluded';
+
+    if (ribbon) {
+        ribbon.style.opacity = '0';
+        ribbon.style.transform = 'translateY(-100%)';
+        setTimeout(() => { if (ribbon.parentNode) ribbon.remove(); }, 400);
+    }
+
+    if (typeof showToast === 'function') {
+        showToast('Maintenance Concluded', 'Scheduled maintenance period has ended. Maintenance mode is automatically disabled and access has been restored for all users.', false);
+    }
+
+    if (typeof loadedSettings !== 'undefined' && loadedSettings) {
+        loadedSettings.maintenance_mode = '0';
+        loadedSettings.system_status = 'Online';
+        loadedSettings.maintenance_end_time = '';
+    }
+};
+
 function updateMaintenanceTimerPreview() {
     const endInput = document.getElementById('ss_maintenance_end_time');
     const previewEl = document.getElementById('maintCountdownPreview');
@@ -1285,6 +1376,7 @@ function updateMaintenanceTimerPreview() {
     if (!val) {
         previewEl.textContent = 'No timer configured';
         targetEl.textContent = 'Target: None';
+        previewEl.style.color = '#92400e';
         return;
     }
 
@@ -1302,8 +1394,30 @@ function updateMaintenanceTimerPreview() {
     targetEl.textContent = 'Target: ' + targetDate.toLocaleString('en-US', options);
 
     if (diff <= 0) {
-        previewEl.textContent = 'Timer Expired (Concluding shortly)';
-        previewEl.style.color = '#dc2626';
+        const maintToggle = document.getElementById('ss_maintenance_mode');
+        const isToggleChecked = maintToggle && maintToggle.checked;
+        const ribbon = document.getElementById('superadminMaintenanceRibbon');
+
+        if (isToggleChecked || ribbon) {
+            previewEl.textContent = 'Timer Expired — Concluding maintenance...';
+            previewEl.style.color = '#dc2626';
+
+            if (!isAutoConcludingMaintenance) {
+                isAutoConcludingMaintenance = true;
+                fetch('../backend/api/maintenance_status.php?auto_conclude=1', { cache: 'no-store' })
+                    .then(r => r.json())
+                    .then(data => {
+                        window.onMaintenanceAutoConcluded();
+                    })
+                    .catch(err => {
+                        console.error('Error auto-concluding maintenance:', err);
+                        isAutoConcludingMaintenance = false;
+                    });
+            }
+        } else {
+            previewEl.textContent = 'Maintenance completed — System is Online';
+            previewEl.style.color = '#15803d';
+        }
     } else {
         const hours = Math.floor(diff / (1000 * 60 * 60));
         const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
@@ -1361,12 +1475,23 @@ function onSystemStatusChange(val) {
 async function saveAllSystemSettings() {
     const stationId = document.getElementById('ss_station_val').value || '0';
 
+    // Synchronize auto refresh interval input before numeric validation
+    let refreshVal = document.getElementById('ss_dashboard_auto_refresh') ? document.getElementById('ss_dashboard_auto_refresh').value : '10';
+    const autoRefreshSel = document.getElementById('ss_dashboard_auto_refresh_select');
+    if (autoRefreshSel && autoRefreshSel.value !== 'custom' && autoRefreshSel.value) {
+        refreshVal = autoRefreshSel.value;
+    }
+    const finalRefreshSec = Math.max(5, Math.min(300, parseInt(refreshVal, 10) || 10));
+    if (document.getElementById('ss_dashboard_auto_refresh')) {
+        document.getElementById('ss_dashboard_auto_refresh').value = finalRefreshSec;
+    }
+
     // Basic numeric validation
     const numericFields = [
         { id: 'ss_session_timeout',        label: 'Session Timeout',          min: 1,  max: 1440 },
         { id: 'ss_min_password_length',    label: 'Min Password Length',      min: 4,  max: 64   },
         { id: 'ss_max_login_attempts',     label: 'Max Login Attempts',       min: 3,  max: 20   },
-        { id: 'ss_dashboard_auto_refresh', label: 'Dashboard Auto Refresh',   min: 5,  max: 3600 },
+        { id: 'ss_dashboard_auto_refresh', label: 'Dashboard Auto Refresh',   min: 5,  max: 300  },
         { id: 'ss_banner_duration',        label: 'Banner Duration',          min: 1,  max: 60   },
     ];
     for (const f of numericFields) {
@@ -1406,8 +1531,8 @@ async function saveAllSystemSettings() {
             color_primary: document.getElementById('ss_accent_color').value,
             color_button: document.getElementById('ss_accent_color').value,
             sidebar_mode: document.getElementById('ss_sidebar_mode').value,
-            dashboard_auto_refresh: document.getElementById('ss_dashboard_auto_refresh').value,
-            auto_refresh_interval: document.getElementById('ss_dashboard_auto_refresh').value,
+            dashboard_auto_refresh: String(finalRefreshSec),
+            auto_refresh_interval: String(finalRefreshSec),
             session_timeout: document.getElementById('ss_session_timeout').value,
             min_password_length: document.getElementById('ss_min_password_length').value,
             max_login_attempts: document.getElementById('ss_max_login_attempts').value,
@@ -1484,14 +1609,13 @@ async function saveAllSystemSettings() {
                 window.petronSystemSettings.showReportFooter = (payload.settings.show_report_footer === '1');
             }
 
-            // Live sync auto-refresh interval immediately
-            if (payload.settings.dashboard_auto_refresh) {
-                const refreshSec = Math.max(5, parseInt(payload.settings.dashboard_auto_refresh, 10) || 10);
-                window.PETRON_AUTO_REFRESH_SECONDS = refreshSec;
-                window.PETRON_AUTO_REFRESH_MS = refreshSec * 1000;
-                if (window.PetronRealtime && typeof window.PetronRealtime.resetPollingInterval === 'function') {
-                    window.PetronRealtime.resetPollingInterval(window.PETRON_AUTO_REFRESH_MS);
-                }
+            // Live sync auto-refresh interval immediately across all tabs and active timers
+            const refreshSec = finalRefreshSec;
+            window.PETRON_AUTO_REFRESH_SECONDS = refreshSec;
+            window.PETRON_AUTO_REFRESH_MS = refreshSec * 1000;
+            try { localStorage.setItem('petron_auto_refresh_seconds', String(refreshSec)); } catch (e) {}
+            if (typeof window.petronResetAutoRefreshInterval === 'function') {
+                window.petronResetAutoRefreshInterval(window.PETRON_AUTO_REFRESH_MS);
             }
 
             showToast('Settings Saved', 'System, notification & report settings saved successfully.');

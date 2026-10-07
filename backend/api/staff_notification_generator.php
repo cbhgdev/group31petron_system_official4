@@ -52,6 +52,8 @@ try {
         @unlink($stale_file);
     }
     $pdo->exec("UPDATE notifications SET redirect_url = 'staff_transactions_hub.php?section=merchandise' WHERE redirect_url LIKE '%staff_requests.php%'");
+    $pdo->exec("UPDATE notifications SET redirect_url = 'staff_inventory_fuel.php' WHERE (redirect_url LIKE '%staff_fuel_deliveries.php%' OR redirect_url LIKE '%staff_record_delivery.php%tab=fuel%') OR (redirect_url LIKE '%staff_record_delivery.php%' AND (title LIKE '%Fuel%' OR event_type IN ('fuel','fuel_stock_in','fuel_delivery') OR message LIKE '%Fuel%'))");
+    $pdo->exec("UPDATE notifications SET redirect_url = 'staff_inventory_merchandise.php' WHERE redirect_url LIKE '%staff_record_delivery.php%' OR (event_type IN ('stock_in','merchandise_stock_in','delivery') AND (redirect_url LIKE '%staff_fuel_deliveries.php%' OR redirect_url LIKE '%staff_record_delivery.php%'))");
 } catch (Exception $e) {}
 
 $generated = 0;
@@ -353,10 +355,11 @@ try {
         $dt          = $r['delivery_date'] ? date('M d, Y', strtotime($r['delivery_date'])) : 'TBD';
         $deliv_type  = strtolower($r['delivery_type'] ?? '');
 
-        // Route to correct staff delivery page based on delivery type
-        $redirect_page = (strpos($deliv_type, 'fuel') !== false)
-            ? 'staff_fuel_deliveries.php'
-            : 'staff_record_delivery.php';
+        // Route to correct staff inventory module based on delivery type
+        $is_fuel_delivery = (strpos($deliv_type, 'fuel') !== false || stripos($status, 'fuel') !== false);
+        $redirect_page = $is_fuel_delivery
+            ? 'staff_inventory_fuel.php'
+            : 'staff_inventory_merchandise.php';
 
         $type = 'info'; $sev = 'low';
         if (in_array($status, ['Pending Manager Approval', 'Pending Manager Confirmation', 'Pending Verification'])) {

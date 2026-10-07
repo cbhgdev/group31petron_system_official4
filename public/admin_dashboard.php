@@ -3041,7 +3041,22 @@ document.addEventListener('DOMContentLoaded', function () {
     const adminRefreshMs = (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000)
         ? window.PETRON_AUTO_REFRESH_MS
         : 10000;
-    setInterval(autoRefreshAdminDashboard, adminRefreshMs);
+
+    let adminRefreshTimer = null;
+    function scheduleAdminRefresh(ms) {
+        if (adminRefreshTimer) clearInterval(adminRefreshTimer);
+        const interval = (typeof ms === 'number' && ms >= 5000)
+            ? ms
+            : ((typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000) ? window.PETRON_AUTO_REFRESH_MS : 10000);
+        adminRefreshTimer = setInterval(autoRefreshAdminDashboard, interval);
+    }
+    scheduleAdminRefresh(adminRefreshMs);
+
+    document.addEventListener('petron:auto-refresh-interval-changed', function(e) {
+        if (e.detail && e.detail.intervalMs) {
+            scheduleAdminRefresh(e.detail.intervalMs);
+        }
+    });
 });
 </script>
 

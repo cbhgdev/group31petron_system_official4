@@ -2678,25 +2678,39 @@ document.addEventListener('DOMContentLoaded', function() {
         loadManagerCustomers();
     }
 
-    // Auto-refresh pending requests list and counts in real time (every 10 seconds)
-    setInterval(function() {
-        if (activeTab === 'pending') {
-            loadCustomerRequests(true);
-        } else {
-            // Silently poll pending count for stats card
-            fetch(`${apiUrl}?action=requests`)
-                .then(r => r.json())
-                .then(res => {
-                    if (res && res.success && Array.isArray(res.requests)) {
-                        const statEl = document.getElementById('statRequests');
-                        if (statEl) statEl.innerText = res.requests.length;
-                        const reqCountEl = document.getElementById('requestCount');
-                        if (reqCountEl) reqCountEl.innerText = res.requests.length + ' pending';
-                    }
-                })
-                .catch(() => {});
+    // Auto-refresh pending requests list and counts in real time based on system setting
+    let custRefreshTimer = null;
+    function scheduleCustomerRefresh(ms) {
+        if (custRefreshTimer) clearInterval(custRefreshTimer);
+        const interval = (typeof ms === 'number' && ms >= 5000)
+            ? ms
+            : ((typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000) ? window.PETRON_AUTO_REFRESH_MS : 10000);
+        custRefreshTimer = setInterval(function() {
+            if (activeTab === 'pending') {
+                loadCustomerRequests(true);
+            } else {
+                // Silently poll pending count for stats card
+                fetch(`${apiUrl}?action=requests`)
+                    .then(r => r.json())
+                    .then(res => {
+                        if (res && res.success && Array.isArray(res.requests)) {
+                            const statEl = document.getElementById('statRequests');
+                            if (statEl) statEl.innerText = res.requests.length;
+                            const reqCountEl = document.getElementById('requestCount');
+                            if (reqCountEl) reqCountEl.innerText = res.requests.length + ' pending';
+                        }
+                    })
+                    .catch(() => {});
+            }
+        }, interval);
+    }
+    scheduleCustomerRefresh();
+
+    document.addEventListener('petron:auto-refresh-interval-changed', function(e) {
+        if (e.detail && e.detail.intervalMs) {
+            scheduleCustomerRefresh(e.detail.intervalMs);
         }
-    }, 10000);
+    });
 });
 </script>
 

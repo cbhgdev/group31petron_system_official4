@@ -10,222 +10,8 @@ if (!in_array($my_role, ['superadmin', 'developer'])) {
     header("Location: dashboard.php"); exit;
 }
 
-// ── Helper: get/set system_config ─────────────────────────────────────
-try {
-    $pdo->exec("CREATE TABLE IF NOT EXISTS system_config (
-        config_key VARCHAR(100) PRIMARY KEY,
-        config_value TEXT,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-} catch (Exception $e) { /* ignore */ }
-
-function cfg_get(PDO $pdo, string $key, string $default = ''): string {
-    try {
-        $r = $pdo->prepare("SELECT config_value FROM system_config WHERE config_key = ?");
-        $r->execute([$key]);
-        $v = $r->fetchColumn();
-        return $v === false ? $default : (string)$v;
-    } catch (Exception $e) { return $default; }
-}
-function cfg_set(PDO $pdo, string $key, string $value, int $uid = 0): void {
-    try {
-        $pdo->prepare("INSERT INTO system_config (config_key, config_value)
-            VALUES(?, ?) ON DUPLICATE KEY UPDATE config_value=VALUES(config_value), updated_at=NOW()")
-            ->execute([$key, $value]);
-    } catch (Exception $e) {
-        error_log("cfg_set failed for key={$key}: " . $e->getMessage());
-    }
-}
-
-// ── Retention Policy Engine ───────────────────────────────────────────
-function apply_backup_retention_policy(PDO $pdo, int $retention_days): int {
-    if ($retention_days <= 0) return 0;
-    try {
-        $cutoff = date('Y-m-d H:i:s', strtotime("-{$retention_days} days"));
-        $stmt = $pdo->prepare("UPDATE database_backups 
-            SET status = 'Archived' 
-            WHERE created_at < ? AND status = 'Completed'");
-        $stmt->execute([$cutoff]);
-        return (int)$stmt->rowCount();
-    } catch (Exception $e) {
-        error_log("Retention policy error: " . $e->getMessage());
-        return 0;
-    }
-}
-
-// ── Core System Backup Engine ─────────────────────────────────────────
-function execute_database_backup(PDO $pdo, string $backup_dir, ?int $user_id = null, string $trigger_label = 'Manual'): array {
-    $btype = 'Full Backup';
-    $comp  = 'SQL';
-    $fname = 'u261539219_petrondbs.sql';
-    $fpath = $backup_dir . $fname;
-    $db_name = 'u261539219_petrondbs';
-
-    if (!is_dir($backup_dir)) @mkdir($backup_dir, 0755, true);
-
-    // 1. Try real mysqldump first
-    $mysqldump_bin = 'C:\\xampp\\mysql\\bin\\mysqldump.exe';
-    if (!file_exists($mysqldump_bin)) $mysqldump_bin = 'mysqldump';
-
-    $dump_args  = "--host=localhost --user=root --single-transaction --quick --skip-lock-tables --routines --triggers";
-    $dump_cmd   = "\"{$mysqldump_bin}\" {$dump_args} {$db_name} > " . escapeshellarg($fpath) . " 2>&1";
-    $dump_out_arr = [];
-    @exec($dump_cmd, $dump_out_arr, $dump_ret);
-
-    $fsize  = file_exists($fpath) ? filesize($fpath) : 0;
-    $status = ($dump_ret === 0 && $fsize > 500) ? 'Completed' : 'Simulated';
-
-    // 2. Fallback: PHP-PDO full SQL dump
-    if ($status === 'Simulated') {
-        try {
-            $header  = "-- ============================================================\n";
-            $header .= "-- Petron Station Management System\n";
-            $header .= "-- Database: {$db_name}\n";
-            $header .= "-- Backup Type: Full Backup\n";
-            $header .= "-- Trigger: {$trigger_label}\n";
-            $header .= "-- Generated: " . date('Y-m-d H:i:s') . "\n";
-            $header .= "-- ============================================================\n\n";
-            $header .= "SET FOREIGN_KEY_CHECKS=0;\n";
-            $header .= "SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';\n";
-            $header .= "SET NAMES utf8mb4;\n\n";
-            file_put_contents($fpath, $header);
-
-            $tables  = $pdo->query("SHOW FULL TABLES WHERE Table_type='BASE TABLE'")->fetchAll(PDO::FETCH_COLUMN);
-            $skipped = [];
-
-            foreach ($tables as $tbl) {
-                try {
-                    $create = $pdo->query("SHOW CREATE TABLE `{$tbl}`")->fetch(PDO::FETCH_NUM);
-                    $block  = "\n-- -----------------------------------------------------------\n";
-                    $block .= "-- Table: `{$tbl}`\n";
-                    $block .= "-- -----------------------------------------------------------\n";
-                    $block .= "DROP TABLE IF EXISTS `{$tbl}`;\n";
-                    $block .= $create[1] . ";\n";
-
-                    $rows = $pdo->query("SELECT * FROM `{$tbl}`")->fetchAll(PDO::FETCH_ASSOC);
-                    if (!empty($rows)) {
-                        $cols    = array_map(fn($c) => "`{$c}`", array_keys($rows[0]));
-                        $block  .= "\nINSERT INTO `{$tbl}` (" . implode(', ', $cols) . ") VALUES\n";
-                        $vblocks = [];
-                        foreach ($rows as $row) {
-                            $vals    = array_map(fn($v) => $v === null ? 'NULL' : $pdo->quote($v), array_values($row));
-                            $vblocks[] = '(' . implode(', ', $vals) . ')';
-                        }
-                        $block .= implode(",\n", $vblocks) . ";\n";
-                    }
-                    $block .= "\n";
-                    file_put_contents($fpath, $block, FILE_APPEND);
-
-                } catch (Exception $tblEx) {
-                    $skipped[] = $tbl;
-                    file_put_contents($fpath,
-                        "\n-- SKIPPED `{$tbl}`: " . $tblEx->getMessage() . "\n\n",
-                        FILE_APPEND
-                    );
-                }
-            }
-
-            $footer  = "SET FOREIGN_KEY_CHECKS=1;\n";
-            $footer .= "\n-- Dump completed: " . date('Y-m-d H:i:s') . "\n";
-            if (!empty($skipped)) {
-                $footer .= "-- Skipped tables (" . count($skipped) . "): " . implode(', ', $skipped) . "\n";
-            }
-            file_put_contents($fpath, $footer, FILE_APPEND);
-
-            $fsize  = filesize($fpath);
-            $status = 'Completed';
-
-        } catch (Exception $dumpEx) {
-            $stub = "-- Backup generation failed: " . $dumpEx->getMessage() . "\n";
-            file_put_contents($fpath, $stub);
-            $fsize  = strlen($stub);
-            $status = 'Simulated';
-        }
-    }
-
-    // Also maintain a timestamped archive copy for point-in-time recovery
-    $timestamp = date('Ymd_His');
-    $archive_name = "petron_pos_db_{$timestamp}.sql";
-    if (file_exists($fpath) && $fsize > 0) {
-        @copy($fpath, $backup_dir . $archive_name);
-    }
-
-    // Save record to database_backups
-    $pdo->prepare("INSERT INTO database_backups
-        (backup_name, backup_file, backup_size, backup_type, compression, status, created_by, created_at)
-        VALUES (?,?,?,?,?,?,?,NOW())")
-        ->execute([$fname, '/backup/database/' . $fname, $fsize, $btype, $comp, $status, $user_id]);
-
-    $bid = (int)$pdo->lastInsertId();
-
-    if ($user_id) {
-        log_activity($pdo, $user_id, 'Database Management',
-            "{$trigger_label} backup: {$fname} (Status:{$status}, Size:" . round($fsize/1024,1) . " KB)");
-    } else {
-        log_activity($pdo, 0, 'Database Management',
-            "Automated system backup: {$fname} (Status:{$status}, Size:" . round($fsize/1024,1) . " KB)");
-    }
-
-    return [
-        'success'  => true,
-        'id'       => $bid,
-        'filename' => $fname,
-        'size'     => $fsize,
-        'status'   => $status,
-    ];
-}
-
-// ── Automated Scheduled Backup Checker ────────────────────────────────
-function check_and_run_scheduled_backup(PDO $pdo, string $backup_dir): bool {
-    $freq = cfg_get($pdo, 'backup_frequency', 'manual');
-    if ($freq === 'manual' || empty($freq)) {
-        return false;
-    }
-
-    $last_run_str = cfg_get($pdo, 'backup_last_auto_run', '');
-    $last_run = !empty($last_run_str) ? strtotime($last_run_str) : 0;
-    $now = time();
-    $is_due = false;
-
-    if ($freq === 'hourly') {
-        // Run if never run or >= 3600 seconds (1 hour) since last run
-        if ($last_run === 0 || ($now - $last_run) >= 3600) {
-            $is_due = true;
-        }
-    } elseif ($freq === 'daily') {
-        $stime = cfg_get($pdo, 'backup_scheduled_time', '02:00');
-        $todayScheduled = strtotime(date('Y-m-d') . ' ' . $stime);
-        // If scheduled time has arrived today and we haven't run today at or after the scheduled time
-        if ($now >= $todayScheduled && $last_run < $todayScheduled) {
-            $is_due = true;
-        }
-    } elseif ($freq === 'weekly') {
-        // Run once every 7 days (604800s)
-        if ($last_run === 0 || ($now - $last_run) >= 604800) {
-            $is_due = true;
-        }
-    } elseif ($freq === 'monthly') {
-        // Run once every 30 days (2592000s)
-        if ($last_run === 0 || ($now - $last_run) >= 2592000) {
-            $is_due = true;
-        }
-    }
-
-    if ($is_due) {
-        // Prevent concurrent execution races
-        cfg_set($pdo, 'backup_last_auto_run', date('Y-m-d H:i:s'), 0);
-
-        execute_database_backup($pdo, $backup_dir, null, 'Automated');
-
-        // Apply retention policy
-        $ret = max(1, (int)cfg_get($pdo, 'backup_retention_days', '30'));
-        apply_backup_retention_policy($pdo, $ret);
-
-        return true;
-    }
-
-    return false;
-}
+// ── Database Backup Library & Scheduled Runner ────────────────────────
+require_once __DIR__ . '/../backend/backup_lib.php';
 
 
 // ── Ensure backup & restore columns exist ──────────────────────────────
@@ -257,13 +43,13 @@ try {
     }
 } catch (Exception $e) { /* ignore */ }
 
-// ── Load config ────────────────────────────────────────────────────────
-$cfg_backup_frequency = cfg_get($pdo, 'backup_frequency',       'manual');
-$cfg_scheduled_time   = cfg_get($pdo, 'backup_scheduled_time',  '02:00');
-$cfg_retention_days   = cfg_get($pdo, 'backup_retention_days',  '30');
-$backup_dir           = __DIR__ . '/../backups/';
+// ── Load config & schedule info ────────────────────────────────────────
+$sched_info           = get_backup_schedule_info($pdo);
+$cfg_backup_frequency = $sched_info['frequency'];
+$cfg_scheduled_time   = $sched_info['scheduled_time'];
+$cfg_retention_days   = $sched_info['retention_days'];
+$backup_dir           = get_backup_directory();
 $backup_dir_display   = '/backup/database/';
-if (!is_dir($backup_dir)) @mkdir($backup_dir, 0755, true);
 
 $msg     = $_SESSION['db_flash_msg']     ?? $_GET['msg']     ?? '';
 $success = $_SESSION['db_flash_success'] ?? $_GET['success'] ?? '';
@@ -275,17 +61,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     if (!empty($_POST['tab'])) {
         $active_tab = $_POST['tab'];
-    } elseif (in_array($action, ['save_backup_config','run_backup'])) {
+    } elseif (in_array($action, ['save_schedule','create_and_download','save_backup_config','run_backup'])) {
         $active_tab = 'backup';
     } elseif ($action === 'restore') {
         $active_tab = 'restore';
     }
 
 
-    // ── Save Backup Config ─────────────────────────────────────────────
-    if ($action === 'save_backup_config') {
-        $freq     = $_POST['backup_frequency']    ?? 'manual';
-        $stime    = $_POST['scheduled_time']      ?? '02:00';
+    // ── Save Automatic Backup Schedule (Figure M.1.6) ───────────────────
+    if ($action === 'save_schedule') {
+        $enabled    = (isset($_POST['schedule_enabled']) && ($_POST['schedule_enabled'] === '1' || $_POST['schedule_enabled'] === 'on')) ? '1' : '0';
+        $start_date = trim($_POST['start_date'] ?? date('Y-m-d'));
+        $stime      = trim($_POST['scheduled_time'] ?? '23:00');
+        $freq       = trim($_POST['backup_frequency'] ?? 'daily');
+        $ret        = max(1, (int)($_POST['retention_days'] ?? 30));
+
+        cfg_set($pdo, 'backup_schedule_enabled', $enabled,    $me['id']);
+        cfg_set($pdo, 'backup_start_date',       $start_date, $me['id']);
+        cfg_set($pdo, 'backup_scheduled_time',   $stime,      $me['id']);
+        cfg_set($pdo, 'backup_frequency',        $freq,       $me['id']);
+        cfg_set($pdo, 'backup_retention_days',   (string)$ret,$me['id']);
+
+        apply_backup_retention_policy($pdo, $ret);
+        check_and_run_scheduled_backup($pdo, $backup_dir);
+
+        $sched_info = get_backup_schedule_info($pdo);
+        log_activity($pdo, $me['id'], 'Database Management', "Saved backup schedule: Enabled={$enabled}, Start={$start_date}, Time={$stime}, Frequency={$freq}");
+
+        if ($sched_info['enabled']) {
+            $success = "Backup schedule saved successfully! Next automated backup: <strong>" . htmlspecialchars($sched_info['next_formatted']) . "</strong>.";
+        } else {
+            $success = "Backup schedule updated. Automatic backups are currently <strong>Disabled</strong>.";
+        }
+    }
+
+    // ── Create & Download Backup (Figure M.1.6 Top Action) ─────────────
+    elseif ($action === 'create_and_download') {
+        $res   = execute_database_backup($pdo, $backup_dir, $me['id'], 'Manual (Create & Download)');
+        $fname = $res['filename'];
+        $fsize = $res['size'];
+        $bid   = (int)$res['id'];
+
+        $ret = max(1, (int)cfg_get($pdo, 'backup_retention_days', '30'));
+        apply_backup_retention_policy($pdo, $ret);
+
+        $_SESSION['db_flash_success'] = "Backup <strong>{$fname}</strong> created successfully. File download initiated.";
+        header("Location: database_management.php?tab=backup&download_id={$bid}");
+        exit;
+    }
+
+    // ── Save Backup Config (Compatibility) ─────────────────────────────
+    elseif ($action === 'save_backup_config') {
+        $freq     = $_POST['backup_frequency']    ?? 'daily';
+        $stime    = $_POST['scheduled_time']      ?? '23:00';
         $ret      = max(1, (int)($_POST['retention_days'] ?? 30));
         cfg_set($pdo, 'backup_frequency',      $freq,  $me['id']);
         cfg_set($pdo, 'backup_scheduled_time', $stime, $me['id']);
@@ -305,12 +133,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $success = "Backup configuration saved successfully (Frequency: {$freq_label}, Retention: {$ret} Days).";
     }
 
-    // ── Run Manual Backup (Synchronized with Backup Configuration) ──────
+    // ── Run Manual Backup (Compatibility) ──────────────────────────────
     elseif ($action === 'run_backup') {
-        // Automatically save and sync configuration if provided
         if (isset($_POST['backup_frequency'])) {
-            $freq     = $_POST['backup_frequency']    ?? 'manual';
-            $stime    = $_POST['scheduled_time']      ?? '02:00';
+            $freq     = $_POST['backup_frequency']    ?? 'daily';
+            $stime    = $_POST['scheduled_time']      ?? '23:00';
             $ret      = max(1, (int)($_POST['retention_days'] ?? 30));
             cfg_set($pdo, 'backup_frequency',      $freq,  $me['id']);
             cfg_set($pdo, 'backup_scheduled_time', $stime, $me['id']);
@@ -328,7 +155,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $fsize = $res['size'];
         $status= $res['status'];
 
-        // Apply retention policy with the active retention days
         apply_backup_retention_policy($pdo, $ret);
 
         $success = "Configuration synchronized and backup <strong>{$fname}</strong> created successfully. <small>(Status: {$status}, Size: " .
@@ -428,7 +254,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($msg || $success) {
         $target_tab = 'backup';
         if ($action === 'restore') $target_tab = 'restore';
-        elseif (in_array($action, ['save_backup_config','run_backup','archive_backup','verify_backup'])) $target_tab = 'backup';
+        elseif (in_array($action, ['save_schedule','save_backup_config','run_backup','archive_backup','verify_backup'])) $target_tab = 'backup';
 
         if ($msg)     $_SESSION['db_flash_msg']     = $msg;
         if ($success) $_SESSION['db_flash_success'] = $success;
@@ -529,6 +355,7 @@ if (isset($_GET['ajax_db']) && $_GET['ajax_db'] == '1') {
     $last_b_date  = !empty($backup_history) ? date('M d', strtotime($backup_history[0]['created_at'])) : '—';
     $last_b_time  = !empty($backup_history) ? date('h:i A', strtotime($backup_history[0]['created_at'])) : 'No backups yet';
     
+    $sched_now = get_backup_schedule_info($pdo);
     echo json_encode([
         'success'            => true,
         'total_backups'      => count($backup_history),
@@ -540,6 +367,8 @@ if (isset($_GET['ajax_db']) && $_GET['ajax_db'] == '1') {
         'backup_count_text'  => count($backup_history) . ' records',
         'restore_count_text' => count($restore_history) . ' records',
         'security_count_text'=> count($security_logs) . ' entries',
+        'next_scheduled_text'=> $sched_now['next_formatted'],
+        'schedule_enabled'   => $sched_now['enabled'],
     ]);
     exit;
 }
@@ -1121,6 +950,253 @@ a.db-btn,
   color: #b91c1c !important;
   border-color: #b91c1c !important;
 }
+
+/* ── AUTOMATIC BACKUP SCHEDULING (Figure M.1.6 Styles) ── */
+.db-create-backup-top {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  margin-bottom: 24px !important;
+}
+.db-btn-create-download {
+  background: #002F6C !important;
+  border-color: #002F6C !important;
+  color: #ffffff !important;
+  padding: 12px 24px !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  border-radius: 8px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  box-shadow: 0 2px 5px rgba(0, 47, 108, 0.25) !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+}
+.db-btn-create-download:hover {
+  background: #001f4d !important;
+  border-color: #001f4d !important;
+  transform: translateY(-1px);
+}
+.db-safe-operation-hint {
+  font-size: 13.5px;
+  color: #64748b;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  text-align: left;
+}
+.db-schedule-card-header {
+  padding: 20px 24px 16px !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+}
+.db-schedule-title {
+  font-size: 18.5px !important;
+  font-weight: 700 !important;
+  color: #002F6C !important;
+  margin: 0 0 4px 0 !important;
+}
+.db-schedule-subtitle {
+  font-size: 13.5px !important;
+  color: #64748b !important;
+  margin: 0 !important;
+}
+.db-schedule-toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #f1f5f9;
+  margin-bottom: 22px;
+}
+.db-toggle-row-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e293b;
+  margin-bottom: 2px;
+}
+.db-toggle-row-sub {
+  font-size: 13.5px;
+  color: #64748b;
+}
+.db-toggle-switch-wrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.db-switch {
+  position: relative;
+  display: inline-block;
+  width: 52px;
+  height: 28px;
+  margin: 0;
+}
+.db-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.db-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #cbd5e1;
+  transition: .25s ease;
+  border-radius: 28px;
+}
+.db-slider:before {
+  position: absolute;
+  content: "";
+  height: 22px;
+  width: 22px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #ffffff;
+  transition: .25s ease;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+}
+input:checked + .db-slider {
+  background-color: #10b981;
+}
+input:checked + .db-slider:before {
+  transform: translateX(24px);
+}
+.db-toggle-status-text {
+  font-size: 15px;
+  font-weight: 700;
+  min-width: 65px;
+}
+.db-toggle-status-text.enabled {
+  color: #059669;
+}
+.db-toggle-status-text.disabled {
+  color: #64748b;
+}
+.db-schedule-inputs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-bottom: 22px;
+  transition: opacity 0.2s ease;
+}
+@media (max-width: 800px) {
+  .db-schedule-inputs-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.db-schedule-label {
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  color: #334155 !important;
+  margin-bottom: 6px !important;
+  display: block !important;
+}
+.db-schedule-input, .db-schedule-select {
+  width: 100% !important;
+  padding: 11px 14px !important;
+  border: 1.5px solid #cbd5e1 !important;
+  border-radius: 8px !important;
+  font-size: 15px !important;
+  color: #0f172a !important;
+  background: #ffffff !important;
+  box-sizing: border-box !important;
+  font-family: inherit !important;
+  transition: border-color .15s ease, box-shadow .15s ease !important;
+}
+.db-schedule-input:focus, .db-schedule-select:focus {
+  border-color: #002F6C !important;
+  box-shadow: 0 0 0 3px rgba(0,47,108,0.1) !important;
+  outline: none !important;
+}
+.db-next-sched-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border-radius: 10px;
+  margin-bottom: 22px;
+  transition: all 0.25s ease;
+}
+.db-next-sched-card.active {
+  background: #ecfdf5;
+  border: 1.5px solid #a7f3d0;
+}
+.db-next-sched-card.active .db-next-sched-icon {
+  color: #059669;
+  font-size: 28px;
+}
+.db-next-sched-card.active .db-next-sched-title {
+  color: #047857;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.db-next-sched-card.active .db-next-sched-time {
+  color: #065f46;
+  font-size: 18px;
+  font-weight: 800;
+  margin-top: 2px;
+}
+.db-next-sched-card.disabled {
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+}
+.db-next-sched-card.disabled .db-next-sched-icon {
+  color: #94a3b8;
+  font-size: 28px;
+}
+.db-next-sched-card.disabled .db-next-sched-title {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.db-next-sched-card.disabled .db-next-sched-time {
+  color: #64748b;
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+.db-btn-save-schedule {
+  background: #16a34a !important;
+  border-color: #16a34a !important;
+  color: #ffffff !important;
+  padding: 11px 24px !important;
+  border-radius: 8px !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  box-shadow: 0 2px 4px rgba(22,163,74,0.2) !important;
+}
+.db-btn-save-schedule:hover {
+  background: #15803d !important;
+  border-color: #15803d !important;
+}
+.db-back-dash-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 14.5px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.db-back-dash-link:hover {
+  color: #002F6C;
+  text-decoration: underline;
+}
 </style>
 
 <?php
@@ -1215,69 +1291,112 @@ var _DB_TOASTS = <?= json_encode($_toast_msgs) ?>;
   ══════════════════════════════════════════════════════ -->
   <div class="db-tab-pane active" id="tab-backup">
 
-    <!-- Backup Configuration -->
-    <div class="db-card">
-      <div class="db-card-header">
-        <h3 class="db-card-title"><i class="fas fa-cog"></i> Backup Configuration</h3>
+    <!-- 1. Top Action: Create & Download Backup (Figure M.1.6) -->
+    <div class="db-create-backup-top" style="display:flex; flex-direction:column; align-items:flex-start; margin-bottom:22px;">
+      <form method="POST" id="createDownloadBackupForm" onsubmit="handleCreateAndDownloadBackup(event)" style="margin:0;">
+        <input type="hidden" name="tab" value="backup">
+        <input type="hidden" name="action" value="create_and_download">
+        <button type="submit" class="db-btn db-btn-create-download" id="createDownloadBackupBtn">
+          <i class="fas fa-download"></i> Create &amp; Download Backup
+        </button>
+      </form>
+      <div class="db-safe-operation-hint" style="text-align:left; margin-top:8px;">
+        <i class="fas fa-shield-alt"></i> Safe operation &mdash; creating a backup does not modify or delete your existing database.
       </div>
-      <div class="db-card-body">
-        <form method="POST" id="backupConfigForm">
-          <input type="hidden" name="tab" value="<?= htmlspecialchars($active_tab) ?>" class="db-form-tab-input">
-          <input type="hidden" name="action" value="save_backup_config">
-          <div class="db-form-grid" style="margin-bottom:16px;">
+      <div id="createBackupProgressWrap" style="display:none; margin:14px 0 0 0; width:100%; max-width:550px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+          <span style="font-size:14px; font-weight:700; color:#002F6C;" id="createProgressLabel">Preparing safe database dump…</span>
+          <span style="font-size:14px; font-weight:800; color:#002F6C;" id="createProgressPct">0%</span>
+        </div>
+        <div class="db-progress-wrap">
+          <div class="db-progress-bar" id="createProgressBar" style="width:0%;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. Main Card: Automatic Backup (Figure M.1.6) -->
+    <div class="db-card" style="margin-bottom:18px;">
+      <div class="db-schedule-card-header">
+        <h3 class="db-schedule-title">Automatic Backup</h3>
+        <p class="db-schedule-subtitle">Schedule when backups should be created</p>
+      </div>
+      <div class="db-card-body" style="padding:24px;">
+        <form method="POST" id="autoBackupScheduleForm" onsubmit="handleSaveSchedule(event)">
+          <input type="hidden" name="tab" value="backup">
+          <input type="hidden" name="action" value="save_schedule">
+          <input type="hidden" name="schedule_enabled" id="scheduleEnabledInput" value="<?= $sched_info['enabled'] ? '1' : '0' ?>">
+
+          <!-- Backup Schedule Toggle Row -->
+          <div class="db-schedule-toggle-row">
+            <div>
+              <div class="db-toggle-row-title">Backup Schedule</div>
+              <div class="db-toggle-row-sub">Turn on scheduling to configure automatic backups</div>
+            </div>
+            <div class="db-toggle-switch-wrap">
+              <label class="db-switch" title="Toggle automatic backup scheduling">
+                <input type="checkbox" id="backupScheduleToggle" <?= $sched_info['enabled'] ? 'checked' : '' ?> onchange="onToggleBackupSchedule(this)">
+                <span class="db-slider"></span>
+              </label>
+              <span id="backupScheduleStatusLabel" class="db-toggle-status-text <?= $sched_info['enabled'] ? 'enabled' : 'disabled' ?>">
+                <?= $sched_info['enabled'] ? 'Enabled' : 'Disabled' ?>
+              </span>
+            </div>
+          </div>
+
+          <!-- 3-Column Schedule Inputs Grid -->
+          <div class="db-schedule-inputs-grid" id="scheduleInputsGrid" style="<?= $sched_info['enabled'] ? '' : 'opacity:0.45; pointer-events:none;' ?>">
+            <!-- Col 1: Start Date -->
             <div class="db-form-group">
-              <label class="db-label">Backup Frequency</label>
-              <select name="backup_frequency" id="backupFrequencySelect" class="db-select">
-                <?php foreach(['manual'=>'Manual Only','hourly'=>'Every Hour','daily'=>'Daily','weekly'=>'Weekly','monthly'=>'Monthly'] as $k=>$v): ?>
-                <option value="<?= $k ?>" <?= $cfg_backup_frequency===$k?'selected':''?>><?= $v ?></option>
-                <?php endforeach; ?>
+              <label class="db-schedule-label" for="backupStartDate">Start Date</label>
+              <input type="date" name="start_date" id="backupStartDate" class="db-schedule-input" value="<?= htmlspecialchars($sched_info['start_date']) ?>" onchange="recalculateNextBackupPreview()">
+            </div>
+
+            <!-- Col 2: Backup Time -->
+            <div class="db-form-group">
+              <label class="db-schedule-label" for="backupScheduledTime">Backup Time</label>
+              <input type="time" name="scheduled_time" id="backupScheduledTime" class="db-schedule-input" value="<?= htmlspecialchars($sched_info['scheduled_time']) ?>" onchange="recalculateNextBackupPreview()">
+            </div>
+
+            <!-- Col 3: Frequency -->
+            <div class="db-form-group">
+              <label class="db-schedule-label" for="backupFrequencySelect">Frequency</label>
+              <select name="backup_frequency" id="backupFrequencySelect" class="db-schedule-select" onchange="recalculateNextBackupPreview()">
+                <option value="daily" <?= $sched_info['frequency'] === 'daily' ? 'selected' : '' ?>>Daily</option>
+                <option value="weekly" <?= $sched_info['frequency'] === 'weekly' ? 'selected' : '' ?>>Weekly</option>
+                <option value="monthly" <?= $sched_info['frequency'] === 'monthly' ? 'selected' : '' ?>>Monthly</option>
+                <option value="hourly" <?= $sched_info['frequency'] === 'hourly' ? 'selected' : '' ?>>Every Hour</option>
               </select>
-              <span class="db-hint">How often automatic backups are triggered.</span>
-            </div>
-            <div class="db-form-group" id="sched-time-wrap" style="<?= in_array($cfg_backup_frequency, ['manual', 'hourly'], true) ? 'opacity:.45;pointer-events:none;' : ''?>">
-              <label class="db-label">Scheduled Time</label>
-              <input type="time" name="scheduled_time" id="scheduledTimeInput" class="db-input" value="<?= htmlspecialchars($cfg_scheduled_time) ?>">
-              <span class="db-hint">Applies when Daily, Weekly, or Monthly is selected.</span>
             </div>
           </div>
-          <div class="db-form-grid" style="margin-bottom:20px;">
-            <div class="db-form-group">
-              <label class="db-label">Retention Period</label>
-              <select name="retention_days" class="db-select">
-                <?php foreach([30=>'30 Days',60=>'60 Days',90=>'90 Days'] as $d=>$dl): ?>
-                <option value="<?= $d ?>" <?= (int)$cfg_retention_days===$d?'selected':''?>><?= $dl ?></option>
-                <?php endforeach; ?>
-              </select>
-              <span class="db-hint">Old backups beyond this period will be flagged for cleanup.</span>
+
+          <!-- Next Scheduled Backup Highlight Box -->
+          <div id="nextScheduledBackupCard" class="db-next-sched-card <?= $sched_info['enabled'] ? 'active' : 'disabled' ?>">
+            <div class="db-next-sched-icon" id="nextSchedIconWrap">
+              <i class="fas <?= $sched_info['enabled'] ? 'fa-calendar-check' : 'fa-pause-circle' ?>"></i>
             </div>
-            <div class="db-form-group">
-              <label class="db-label">Storage Location</label>
-              <input type="text" class="db-input" value="<?= htmlspecialchars($backup_dir_display) ?>" readonly>
-              <span class="db-hint">Server-side storage path (managed by system administrator).</span>
+            <div class="db-next-sched-content">
+              <div class="db-next-sched-title">Next Scheduled Backup</div>
+              <div class="db-next-sched-time" id="nextScheduledBackupText">
+                <?= htmlspecialchars($sched_info['next_formatted']) ?>
+              </div>
             </div>
           </div>
-          <!-- Progress bar (shown when Save & Run Backup Now is clicked) -->
-          <div id="backupProgressWrap" style="display:none; margin-bottom:16px;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-              <span style="font-size:14.5px; font-weight:700; color:var(--db-blue);" id="backupProgressLabel">Initializing backup…</span>
-              <span style="font-size:14.5px; font-weight:800; color:var(--db-blue);" id="backupProgressPct">0%</span>
-            </div>
-            <div class="db-progress-wrap">
-              <div class="db-progress-bar" id="backupProgressBar" style="width:0%;"></div>
-            </div>
-            <div id="backupProgressStatus" style="font-size:13.5px; color:#64748b; margin-top:4px;"></div>
-          </div>
-          <div id="backupCompletedMsg" style="display:none; margin-bottom:12px; padding:14px 18px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; color:#166534; font-size:14.5px; font-weight:600;">
-            <i class="fas fa-check-circle" style="margin-right:6px;"></i>
-            Backup Completed Successfully — page will refresh shortly.
-          </div>
-          <div style="display:flex; justify-content:flex-end; gap:10px; align-items:center; margin-top:16px;">
-            <button type="button" class="db-btn db-btn-success" id="saveAndRunBackupBtn" onclick="saveAndRunBackupNow()">
-              <i class="fas fa-play-circle"></i> Save &amp; Run Backup Now
+
+          <!-- Action Button Row -->
+          <div style="display:flex; justify-content:flex-end; margin-top:16px;">
+            <button type="submit" class="db-btn db-btn-save-schedule" id="saveScheduleBtn">
+              <i class="fas fa-check"></i> Save Schedule
             </button>
           </div>
         </form>
       </div>
+    </div>
+
+    <!-- 3. Navigation: Back to Dashboard Link (Figure M.1.6) -->
+    <div style="margin: 0 0 28px 4px;">
+      <a href="dashboard.php" class="db-back-dash-link">
+        <i class="fas fa-arrow-left"></i> Back to Dashboard
+      </a>
     </div>
 
 
@@ -1342,7 +1461,7 @@ var _DB_TOASTS = <?= json_encode($_toast_msgs) ?>;
                   <?= !empty($bk['created_at']) ? date('M d, Y h:i A', strtotime($bk['created_at'])) : '—' ?>
                 </td>
                 <td style="font-size:14px; color:#1a1a1a;">
-                  <?= !empty($bk['first_name']) ? htmlspecialchars($bk['first_name'].' '.($bk['last_name']??'')) : '—' ?>
+                  <?= !empty($bk['first_name']) ? htmlspecialchars($bk['first_name'].' '.($bk['last_name']??'')) : '<span style="color:#059669; font-weight:600;"><i class="fas fa-robot"></i> Automated</span>' ?>
                 </td>
                 <td>
                   <div class="db-action-row" style="display:flex; gap:8px; align-items:center;">
@@ -1702,89 +1821,148 @@ var _DB_TOASTS = <?= json_encode($_toast_msgs) ?>;
   window.switchTab = switchTab;
 })();
 
-// ── Scheduled time toggle ───────────────────────────────────────────
-function updateConfigSummary() {
-  const freqSel = document.getElementById('backupFrequencySelect');
-  const wrap    = document.getElementById('sched-time-wrap');
+// ── AUTOMATIC BACKUP SCHEDULING (Figure M.1.6 Controller) ───────────
+function recalculateNextBackupPreview() {
+  const toggle = document.getElementById('backupScheduleToggle');
+  const isEnabled = toggle ? toggle.checked : false;
+  const statusLabel = document.getElementById('backupScheduleStatusLabel');
+  const card = document.getElementById('nextScheduledBackupCard');
+  const iconWrap = document.getElementById('nextSchedIconWrap');
+  const textEl = document.getElementById('nextScheduledBackupText');
+  const grid = document.getElementById('scheduleInputsGrid');
+  const enabledInput = document.getElementById('scheduleEnabledInput');
 
-  const freqVal = freqSel ? freqSel.value : 'manual';
+  if (enabledInput) {
+    enabledInput.value = isEnabled ? '1' : '0';
+  }
 
-  if (wrap) {
-    const isManual = (freqVal === 'manual' || freqVal === 'hourly');
-    wrap.style.opacity       = isManual ? '.45' : '1';
-    wrap.style.pointerEvents = isManual ? 'none' : 'auto';
+  if (statusLabel) {
+    statusLabel.textContent = isEnabled ? 'Enabled' : 'Disabled';
+    statusLabel.className = 'db-toggle-status-text ' + (isEnabled ? 'enabled' : 'disabled');
+  }
+
+  if (grid) {
+    grid.style.opacity = isEnabled ? '1' : '0.45';
+    grid.style.pointerEvents = isEnabled ? 'auto' : 'none';
+  }
+
+  if (!isEnabled) {
+    if (card) card.className = 'db-next-sched-card disabled';
+    if (iconWrap) iconWrap.innerHTML = '<i class="fas fa-pause-circle"></i>';
+    if (textEl) textEl.textContent = 'Scheduling is currently disabled';
+    return;
+  }
+
+  const startDateVal = document.getElementById('backupStartDate')?.value || new Date().toISOString().slice(0, 10);
+  const timeVal = document.getElementById('backupScheduledTime')?.value || '23:00';
+  const freqVal = document.getElementById('backupFrequencySelect')?.value || 'daily';
+
+  const [sYear, sMonth, sDay] = startDateVal.split('-').map(Number);
+  const [sHours, sMins] = timeVal.split(':').map(Number);
+  const startDateObj = new Date(sYear, (sMonth || 1) - 1, sDay || 1, sHours || 0, sMins || 0, 0);
+
+  const now = new Date();
+  let nextDate = new Date(startDateObj);
+
+  if (nextDate <= now) {
+    if (freqVal === 'hourly') {
+      nextDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), sMins || 0, 0);
+      if (nextDate <= now) {
+        nextDate.setHours(nextDate.getHours() + 1);
+      }
+    } else if (freqVal === 'daily') {
+      nextDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sHours || 0, sMins || 0, 0);
+      if (nextDate <= now) {
+        nextDate.setDate(nextDate.getDate() + 1);
+      }
+    } else if (freqVal === 'weekly') {
+      const targetDay = startDateObj.getDay();
+      nextDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sHours || 0, sMins || 0, 0);
+      let diff = (targetDay - now.getDay() + 7) % 7;
+      if (diff === 0 && nextDate <= now) {
+        diff = 7;
+      }
+      nextDate.setDate(now.getDate() + diff);
+    } else if (freqVal === 'monthly') {
+      const targetMDay = startDateObj.getDate();
+      nextDate = new Date(now.getFullYear(), now.getMonth(), targetMDay, sHours || 0, sMins || 0, 0);
+      if (nextDate <= now) {
+        nextDate.setMonth(nextDate.getMonth() + 1);
+      }
+    }
+  }
+
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const monthName = months[nextDate.getMonth()];
+  const day = nextDate.getDate();
+  const year = nextDate.getFullYear();
+
+  let h = nextDate.getHours();
+  const m = String(nextDate.getMinutes()).padStart(2, '0');
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  h = h ? h : 12;
+  const formattedTime = `${h}:${m} ${ampm}`;
+
+  const formattedStr = `${monthName} ${day}, ${year} • ${formattedTime}`;
+
+  if (card) card.className = 'db-next-sched-card active';
+  if (iconWrap) iconWrap.innerHTML = '<i class="fas fa-calendar-check"></i>';
+  if (textEl) textEl.textContent = formattedStr;
+}
+
+function onToggleBackupSchedule(checkbox) {
+  recalculateNextBackupPreview();
+}
+
+// ── Save Schedule Form Submission ─────────────────────────────────────
+function handleSaveSchedule(e) {
+  const saveBtn = document.getElementById('saveScheduleBtn');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving Schedule…';
   }
 }
 
-// Bind live sync listeners
-document.getElementById('backupFrequencySelect')?.addEventListener('change', updateConfigSummary);
-document.getElementById('scheduledTimeInput')?.addEventListener('input', updateConfigSummary);
-// Run once on load
-updateConfigSummary();
-
-
-// ── Save & Run Backup Now (saves config + immediately triggers backup)
-function saveAndRunBackupNow() {
-  const configForm = document.getElementById('backupConfigForm');
-  if (!configForm) return;
-  triggerBackupProgress({
-    preventDefault: function(){},
-    target: configForm
-  });
-}
-
-// ── Backup Progress Animation ─────────────────────────────────────────
-function triggerBackupProgress(e) {
-  const saveAndRunBtn = document.getElementById('saveAndRunBackupBtn');
-  const wrap = document.getElementById('backupProgressWrap');
-  const bar  = document.getElementById('backupProgressBar');
-  const pct  = document.getElementById('backupProgressPct');
-  const lbl  = document.getElementById('backupProgressLabel');
-  const done = document.getElementById('backupCompletedMsg');
+// ── Create & Download Backup (Figure M.1.6 Top Action) ─────────────────
+function handleCreateAndDownloadBackup(e) {
+  e.preventDefault();
+  const form = document.getElementById('createDownloadBackupForm');
+  const btn  = document.getElementById('createDownloadBackupBtn');
+  const wrap = document.getElementById('createBackupProgressWrap');
+  const bar  = document.getElementById('createProgressBar');
+  const pct  = document.getElementById('createProgressPct');
+  const lbl  = document.getElementById('createProgressLabel');
 
   if (wrap) wrap.style.display = 'block';
-  if (saveAndRunBtn) {
-    saveAndRunBtn.disabled = true;
-    saveAndRunBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving &amp; Running…';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating Safe Backup…';
   }
-
 
   const steps = [
-    [10, 'Synchronizing configuration & connecting…'],
-    [25, 'Locking database tables…'],
-    [45, 'Exporting database schema…'],
-    [65, 'Exporting complete table data…'],
-    [80, 'Compressing secure backup…'],
-    [92, 'Writing to storage location…'],
-    [100,'Finalising backup & applying retention…'],
+    [15, 'Locking database tables & verifying schema…'],
+    [40, 'Exporting database tables & structures…'],
+    [70, 'Dumping full table rows & triggers…'],
+    [90, 'Writing u261539219_petrondbs.sql to secure storage…'],
+    [100,'Finalising dump & initiating download…'],
   ];
 
-  let si = 0;
+  let stepIdx = 0;
   function tick() {
-    if (si >= steps.length) {
-      if (done) done.style.display = 'block';
+    if (stepIdx >= steps.length) {
       setTimeout(() => {
-        const formToSubmit = (e && e.target) ? e.target : document.getElementById('backupConfigForm');
-        if (formToSubmit) {
-          // Switch action to run_backup so server saves config AND runs backup
-          let hiddenAction = formToSubmit.querySelector('[name="action"]');
-          if (hiddenAction) hiddenAction.value = 'run_backup';
-          formToSubmit.submit();
-        }
-      }, 700);
+        if (form) form.submit();
+      }, 350);
       return;
     }
-    const [p, l] = steps[si++];
-    if (bar) bar.style.width  = p + '%';
-    if (pct) pct.textContent  = p + '%';
-    if (lbl) lbl.textContent  = l;
-    setTimeout(tick, 340);
+    const [p, l] = steps[stepIdx++];
+    if (bar) bar.style.width = p + '%';
+    if (pct) pct.textContent = p + '%';
+    if (lbl) lbl.textContent = l;
+    setTimeout(tick, 260);
   }
   tick();
-
-  if (e && typeof e.preventDefault === 'function') {
-    e.preventDefault();
-  }
 }
 
 // ── Restore Modal ──────────────────────────────────────────────────────
@@ -2110,6 +2288,8 @@ function exportSecurityLogsPDF() {
   window.showSuccessToast = function(t, s) { showToast('success', t, s, 4000); };
 
   // ── REAL-TIME BACKGROUND AUTO-REFRESH (10-Second Interval) ────────────────
+  var _lastBackupCount = <?= count($backup_history) ?>;
+
   function autoRefreshDatabaseManagement() {
     if (document.querySelector('.db-modal-overlay.open') || (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'SELECT'))) {
       return;
@@ -2136,6 +2316,25 @@ function exportSecurityLogsPDF() {
 
           var timeEl = document.getElementById('stat_last_backup_time');
           if (timeEl) timeEl.textContent = data.last_backup_time;
+
+          // If automated backup ran in background, notify user and refresh table
+          if (data.total_backups > _lastBackupCount) {
+            _lastBackupCount = data.total_backups;
+            if (typeof showSuccessToast === 'function') {
+              showSuccessToast('Automated Backup Completed', 'A scheduled backup was created successfully.');
+            }
+            setTimeout(function() {
+              window.location.reload();
+            }, 1800);
+          }
+
+          // Update next scheduled time text if available and not user-editing
+          if (data.next_scheduled_text && document.getElementById('nextScheduledBackupText') && !document.querySelector('#backupScheduleToggle:focus')) {
+            var toggle = document.getElementById('backupScheduleToggle');
+            if (toggle && toggle.checked) {
+              document.getElementById('nextScheduledBackupText').textContent = data.next_scheduled_text;
+            }
+          }
         }
       })
       .catch(function(err) {
@@ -2143,8 +2342,11 @@ function exportSecurityLogsPDF() {
       });
   }
 
-  // Start 10s timer for real-time operation auto-refresh
-  setInterval(autoRefreshDatabaseManagement, 10000);
+  // Start timer for real-time operation auto-refresh from system settings
+  const dbRefreshMs = (typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000)
+    ? window.PETRON_AUTO_REFRESH_MS
+    : 10000;
+  setInterval(autoRefreshDatabaseManagement, dbRefreshMs);
 
   // ── Fire PHP-generated toasts on DOM ready & clean polluted URL ───────
   document.addEventListener('DOMContentLoaded', function() {
@@ -2156,37 +2358,29 @@ function exportSecurityLogsPDF() {
       });
     }
 
-    // ── Dynamic Scheduled Time toggle for Backup Frequency ────────────
-    const freqSelect = document.getElementById('backupFrequencySelect');
-    const schedWrap  = document.getElementById('sched-time-wrap');
-    const schedInput = document.getElementById('scheduledTimeInput');
+    // Auto-trigger download if redirected after Create & Download Backup
+    <?php if (!empty($_GET['download_id'])): ?>
+    setTimeout(function() {
+      var dlUrl = 'db_download.php?id=' + <?= (int)$_GET['download_id'] ?>;
+      var dlFrame = document.createElement('iframe');
+      dlFrame.style.display = 'none';
+      dlFrame.src = dlUrl;
+      document.body.appendChild(dlFrame);
+    }, 450);
+    <?php endif; ?>
 
-    function updateSchedTimeVisibility() {
-      if (!freqSelect || !schedWrap || !schedInput) return;
-      const val = freqSelect.value;
-      const isManualOrHourly = (val === 'manual' || val === 'hourly');
-      if (isManualOrHourly) {
-        schedWrap.style.opacity = '0.45';
-        schedWrap.style.pointerEvents = 'none';
-        schedInput.setAttribute('tabindex', '-1');
-      } else {
-        schedWrap.style.opacity = '1';
-        schedWrap.style.pointerEvents = 'auto';
-        schedInput.removeAttribute('tabindex');
-      }
-    }
-
-    if (freqSelect) {
-      freqSelect.addEventListener('change', updateSchedTimeVisibility);
-      updateSchedTimeVisibility();
+    // Initialize Figure M.1.6 dynamic scheduler preview
+    if (typeof recalculateNextBackupPreview === 'function') {
+      recalculateNextBackupPreview();
     }
 
     // Clean query parameters from URL so F5/auto-refresh doesn't re-trigger old banners
     if (window.history && window.history.replaceState) {
       const cleanUrl = new URL(window.location.href);
-      if (cleanUrl.searchParams.has('msg') || cleanUrl.searchParams.has('success')) {
+      if (cleanUrl.searchParams.has('msg') || cleanUrl.searchParams.has('success') || cleanUrl.searchParams.has('download_id')) {
         cleanUrl.searchParams.delete('msg');
         cleanUrl.searchParams.delete('success');
+        cleanUrl.searchParams.delete('download_id');
         window.history.replaceState(null, '', cleanUrl.toString());
       }
     }

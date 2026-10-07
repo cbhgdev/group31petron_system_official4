@@ -12,14 +12,14 @@ if (!function_exists('petron_get_setting_value')) {
                 $station_id = (int)user_station_id();
             }
             if ($station_id !== null && $station_id > 0) {
-                $stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ? AND station_id = ? AND setting_value IS NOT NULL AND setting_value != '' LIMIT 1");
+                $stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ? AND station_id = ? AND setting_value IS NOT NULL AND setting_value != '' ORDER BY updated_at DESC, id DESC LIMIT 1");
                 $stmt->execute([$key, $station_id]);
                 $val = $stmt->fetchColumn();
                 if ($val !== false && $val !== null && $val !== '') {
                     return (string)$val;
                 }
             }
-            $stmt0 = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ? AND station_id = 0 LIMIT 1");
+            $stmt0 = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = ? AND station_id = 0 ORDER BY updated_at DESC, id DESC LIMIT 1");
             $stmt0->execute([$key]);
             $val0 = $stmt0->fetchColumn();
             if ($val0 !== false && $val0 !== null && $val0 !== '') {
@@ -232,6 +232,39 @@ if (!function_exists('petron_banner_duration')) {
 
 if (!function_exists('petron_auto_refresh_interval')) {
     function petron_auto_refresh_interval(?int $station_id = null): int {
+        global $pdo;
+        try {
+            if (!isset($pdo) || !$pdo) {
+                require_once __DIR__ . '/../public/db_connect.php';
+            }
+            if ($station_id === null && function_exists('user_station_id')) {
+                $station_id = (int)user_station_id();
+            }
+            // 1. Station-specific override
+            if ($station_id !== null && $station_id > 0) {
+                $stmtS = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key IN ('dashboard_auto_refresh', 'auto_refresh_interval', 'global_dashboard_auto_refresh', 'global_auto_refresh_interval') AND station_id = ? AND setting_value IS NOT NULL AND setting_value != '' ORDER BY updated_at DESC, id DESC LIMIT 1");
+                $stmtS->execute([$station_id]);
+                $valS = $stmtS->fetchColumn();
+                if ($valS !== false && $valS !== null && is_numeric($valS)) {
+                    $sec = (int)$valS;
+                    if ($sec >= 5 && $sec <= 300) {
+                        return $sec;
+                    }
+                }
+            }
+            // 2. Global setting (station_id = 0)
+            $stmt0 = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key IN ('dashboard_auto_refresh', 'auto_refresh_interval', 'global_dashboard_auto_refresh', 'global_auto_refresh_interval') AND station_id = 0 AND setting_value IS NOT NULL AND setting_value != '' ORDER BY updated_at DESC, id DESC LIMIT 1");
+            $stmt0->execute();
+            $val0 = $stmt0->fetchColumn();
+            if ($val0 !== false && $val0 !== null && is_numeric($val0)) {
+                $sec = (int)$val0;
+                if ($sec >= 5 && $sec <= 300) {
+                    return $sec;
+                }
+            }
+        } catch (Throwable $e) {}
+
+        // Fallback to petron_get_setting_value
         $val = petron_get_setting_value('dashboard_auto_refresh', $station_id, '');
         if ($val === '' || !is_numeric($val)) {
             $val = petron_get_setting_value('auto_refresh_interval', $station_id, '10');
@@ -280,6 +313,121 @@ if (!function_exists('petron_report_show_footer')) {
     function petron_report_show_footer(?int $station_id = null): bool {
         $val = petron_get_setting_value('show_report_footer', $station_id, '1');
         return !($val === '0' || $val === 0 || $val === false || $val === 'false');
+    }
+}
+
+if (!function_exists('force_conclude_maintenance_mode')) {
+    function force_conclude_maintenance_mode(?PDO $pdo = null, string $reason = 'Target completion time reached'): bool {
+        global $pdo;
+        try {
+            if (!isset($pdo) || !$pdo) {
+                require_once __DIR__ . '/../public/db_connect.php';
+            }
+            if (!$pdo) return false;
+
+            $now_str = date('Y-m-d H:i:s');
+            // Reset global settings (station_id = 0)
+            $updateStmt = $pdo->prepare("
+                UPDATE system_settings 
+                SET setting_value = CASE 
+                    WHEN setting_key = 'maintenance_mode' THEN '0'
+                    WHEN setting_key = 'system_status' THEN 'Online'
+                    WHEN setting_key = 'last_system_update' THEN ?
+                    WHEN setting_key = 'maintenance_end_time' THEN ''
+                    ELSE setting_value
+                END,
+                updated_at = NOW()
+                WHERE setting_key IN ('maintenance_mode', 'system_status', 'last_system_update', 'maintenance_end_time')
+            ");
+            $updateStmt->execute([$now_str]);
+
+            // Ensure all station overrides are set to Online & not maintenance
+            $pdo->exec("UPDATE system_settings SET setting_value = '0', updated_at = NOW() WHERE setting_key = 'maintenance_mode'");
+            $pdo->exec("UPDATE system_settings SET setting_value = 'Online', updated_at = NOW() WHERE setting_key = 'system_status'");
+            $pdo->exec("UPDATE system_settings SET setting_value = '', updated_at = NOW() WHERE setting_key = 'maintenance_end_time'");
+
+            // Log activity
+            try {
+                $logStmt = $pdo->prepare("
+                    INSERT INTO activity_logs (user_id, action, details, ip_address, created_at)
+                    VALUES (1, 'Maintenance Concluded', ?, '127.0.0.1', NOW())
+                ");
+                $logStmt->execute(["Scheduled maintenance mode automatically concluded. Reason: {$reason}. System is now fully Online for all users."]);
+            } catch (Throwable $tLog) {}
+
+            return true;
+        } catch (Throwable $e) {
+            error_log("force_conclude_maintenance_mode error: " . $e->getMessage());
+            return false;
+        }
+    }
+}
+
+if (!function_exists('check_and_auto_conclude_maintenance')) {
+    function check_and_auto_conclude_maintenance(?PDO $pdo = null): bool {
+        global $pdo;
+        try {
+            if (!isset($pdo) || !$pdo) {
+                require_once __DIR__ . '/../public/db_connect.php';
+            }
+            if (!$pdo) return false;
+
+            $stmt = $pdo->prepare("
+                SELECT setting_key, setting_value 
+                FROM system_settings 
+                WHERE setting_key IN ('maintenance_mode', 'maintenance_end_time', 'system_status') 
+                  AND station_id = 0
+            ");
+            $stmt->execute();
+            $rows = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+
+            $is_maint = (!empty($rows['maintenance_mode']) && in_array(trim((string)$rows['maintenance_mode']), ['1', 'true', 1], true));
+            if (!$is_maint) {
+                // If system_status is Maintenance but maintenance_mode is 0, fix inconsistency
+                if (!empty($rows['system_status']) && $rows['system_status'] === 'Maintenance') {
+                    $pdo->exec("UPDATE system_settings SET setting_value = 'Online', updated_at = NOW() WHERE setting_key = 'system_status'");
+                }
+                return false;
+            }
+
+            $end_time = trim((string)($rows['maintenance_end_time'] ?? ''));
+            // If maintenance is ON and end_time is configured:
+            if ($end_time !== '') {
+                $end_ts = strtotime($end_time);
+                if ($end_ts !== false && $end_ts > 0) {
+                    if (time() >= $end_ts) {
+                        return force_conclude_maintenance_mode($pdo, "Timer completed at " . date('Y-m-d H:i:s', $end_ts));
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            error_log("check_and_auto_conclude_maintenance error: " . $e->getMessage());
+        }
+        return false;
+    }
+}
+
+if (!function_exists('is_system_in_maintenance_mode')) {
+    function is_system_in_maintenance_mode(?PDO $pdo = null): bool {
+        global $pdo;
+        try {
+            if (!isset($pdo) || !$pdo) {
+                require_once __DIR__ . '/../public/db_connect.php';
+            }
+            if (!$pdo) return false;
+
+            // Automatically check and conclude if timer has expired
+            if (function_exists('check_and_auto_conclude_maintenance')) {
+                check_and_auto_conclude_maintenance($pdo);
+            }
+
+            $stmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'maintenance_mode' AND station_id = 0 LIMIT 1");
+            $stmt->execute();
+            $val = $stmt->fetchColumn();
+            return ($val !== false && in_array(trim((string)$val), ['1', 'true', 1], true));
+        } catch (Throwable $e) {
+            return false;
+        }
     }
 }
 
@@ -631,28 +779,59 @@ if (!function_exists('is_user_archived_status')) {
     }
 }
 
+if (!function_exists('get_system_session_timeout_seconds')) {
+    function get_system_session_timeout_seconds(?PDO $pdo = null, int $station_id = 0): int {
+        if (!$pdo) {
+            global $pdo;
+        }
+        if (!$pdo) {
+            try {
+                require_once __DIR__ . '/../public/db_connect.php';
+            } catch (Exception $e) {}
+        }
+        if (!$pdo) {
+            return 1800; // fallback 30 minutes
+        }
+        try {
+            $stmt = $pdo->prepare("
+                SELECT setting_value FROM system_settings 
+                WHERE setting_key = 'session_timeout' 
+                ORDER BY CASE 
+                    WHEN station_id = ? AND station_id > 0 THEN 1 
+                    WHEN station_id = 0 THEN 2 
+                    ELSE 3 
+                END, updated_at DESC 
+                LIMIT 1
+            ");
+            $stmt->execute([$station_id]);
+            $val = $stmt->fetchColumn();
+            if ($val !== false && is_numeric($val) && (int)$val > 0) {
+                return max(1, (int)$val) * 60; // convert configured minutes to seconds (minimum 1 minute / 60 seconds)
+            }
+        } catch (Exception $e) {}
+        return 1800;
+    }
+}
+
 function require_login(){
   if(session_status() !== PHP_SESSION_ACTIVE) {
     session_start();
   }
 
   // ── Dynamic Session Timeout from system_settings ──
-  $timeout = 1800; // fallback default = 30 minutes in seconds
-  try {
-    global $pdo;
-    if (!isset($pdo) || !$pdo) {
+  global $pdo;
+  if (!isset($pdo) || !$pdo) {
+    try {
       require_once __DIR__ . '/../public/db_connect.php';
-    }
-    $stmtTmt = $pdo->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'session_timeout' AND station_id = 0 LIMIT 1");
-    $stmtTmt->execute();
-    $storedTimeout = $stmtTmt->fetchColumn();
-    if ($storedTimeout !== false && is_numeric($storedTimeout) && (int)$storedTimeout > 0) {
-      $timeoutMinutes = max(1, (int)$storedTimeout); // Enforce whatever minutes are configured (min: 1 minute)
-      $timeout = $timeoutMinutes * 60; // convert minutes to seconds
-    }
-  } catch (Exception $e) {
-    // keep fallback default
+    } catch (Exception $e) {}
   }
+  $user_st_id = 0;
+  if (!empty($_SESSION['user']['station_id'])) {
+      $user_st_id = (int)$_SESSION['user']['station_id'];
+  } elseif (!empty($_SESSION['station_id'])) {
+      $user_st_id = (int)$_SESSION['station_id'];
+  }
+  $timeout = get_system_session_timeout_seconds($pdo, $user_st_id);
   $script = $_SERVER['SCRIPT_NAME'] ?? '';
   $root = rtrim(dirname($script), '/\\');
   if($root === '' || $root === '.') $root = '/';
@@ -713,7 +892,10 @@ function require_login(){
     $__current_role = '';
     if (!empty($_SESSION['user']['role'])) {
       $__current_role = function_exists('role_key') ? role_key($_SESSION['user']['role']) : strtolower(trim($_SESSION['user']['role']));
+    } elseif (!empty($_SESSION['role'])) {
+      $__current_role = function_exists('role_key') ? role_key($_SESSION['role']) : strtolower(trim($_SESSION['role']));
     }
+    // Superadmin and developer are strictly exempt from session timeout
     $__is_exempt = in_array($__current_role, ['superadmin', 'developer'], true);
 
     if (!$__is_exempt && isset($_SESSION['last_activity'])) {
@@ -735,8 +917,15 @@ function require_login(){
           header('Expires: 0');
         }
 
-        // If called from /backend/* API, return JSON 401
-        if (strpos($script, '/backend/') !== false) {
+        // If called from /backend/* or /api/*, or AJAX request, return JSON 401
+        $is_ajax_or_api = (strpos($script, '/backend/') !== false) 
+            || (strpos($script, '/api/') !== false) 
+            || (!empty($_GET['ajax'])) 
+            || (!empty($_GET['poll']))
+            || (!empty($_GET['ajax_sss']))
+            || (!empty($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false);
+
+        if ($is_ajax_or_api) {
           json_response(['ok' => false, 'error' => 'Session expired due to inactivity', 'timeout' => true], 401);
         }
 
@@ -752,8 +941,14 @@ function require_login(){
     // Only update last activity timestamp on REAL user requests, NOT background polling/heartbeats
     $is_background_poll = !empty($_SERVER['HTTP_X_PETRON_BACKGROUND']) 
         || (!empty($_GET['ajax_sss'])) 
-        || (isset($_GET['poll']) && $_GET['poll'] == '1')
-        || (isset($_GET['action']) && in_array($_GET['action'], ['check_maintenance', 'unread_count', 'get_unread_count', 'ping', 'heartbeat'], true));
+        || (!empty($_GET['ajax'])) 
+        || (!empty($_GET['poll'])) 
+        || (isset($_GET['action']) && in_array(strtolower((string)$_GET['action']), ['check_maintenance', 'unread_count', 'get_unread_count', 'ping', 'heartbeat', 'notifications_count', 'badge_count'], true))
+        || (isset($_SERVER['SCRIPT_NAME']) && (
+            strpos($_SERVER['SCRIPT_NAME'], '_generator.php') !== false ||
+            strpos($_SERVER['SCRIPT_NAME'], 'maintenance_status.php') !== false ||
+            strpos($_SERVER['SCRIPT_NAME'], 'notifications_api.php') !== false
+        ));
 
     if (!$is_background_poll) {
       $_SESSION['last_activity'] = time();
@@ -3821,6 +4016,8 @@ function notify(
                 "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reference_type VARCHAR(80) NULL AFTER redirect_url",
                 "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reference_id INT NULL AFTER reference_type",
                 "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS shift_period VARCHAR(20) NULL AFTER reference_id",
+                "UPDATE notifications SET redirect_url = 'staff_inventory_fuel.php' WHERE (redirect_url LIKE '%staff_fuel_deliveries.php%' OR redirect_url LIKE '%staff_record_delivery.php%tab=fuel%') OR (redirect_url LIKE '%staff_record_delivery.php%' AND (title LIKE '%Fuel%' OR event_type IN ('fuel','fuel_stock_in','fuel_delivery') OR message LIKE '%Fuel%'))",
+                "UPDATE notifications SET redirect_url = 'staff_inventory_merchandise.php' WHERE redirect_url LIKE '%staff_record_delivery.php%' OR (event_type IN ('stock_in','merchandise_stock_in','delivery') AND (redirect_url LIKE '%staff_fuel_deliveries.php%' OR redirect_url LIKE '%staff_record_delivery.php%'))",
             ] as $ddl) {
                 try { $pdo->exec($ddl); } catch (Throwable $e) {}
             }
@@ -4175,8 +4372,8 @@ function notification_redirect_url(string $ref_type, int $ref_id, string $role):
             'admin'    => "manager_validated_transactions.php{$id}",
         ],
         'purchase_order' => [
-            'staff'    => "admin_stock_confirmation.php{$id}",
-            'manager'  => "admin_stock_confirmation.php{$id}",
+            'staff'    => "staff_inventory_merchandise.php",
+            'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
             'admin'    => "admin_stock_confirmation.php{$id}",
         ],
         'user_account' => [
@@ -4190,19 +4387,34 @@ function notification_redirect_url(string $ref_type, int $ref_id, string $role):
             'superadmin' => "manager_customers.php?tab=pending" . ($ref_id > 0 ? "&id={$ref_id}" : ""),
         ],
         'stock_in' => [
-            'staff'    => "staff_record_delivery.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'staff'    => "staff_inventory_merchandise.php",
             'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
             'admin'    => "admin_stock_confirmation.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
         ],
         'merchandise_stock_in' => [
-            'staff'    => "staff_record_delivery.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'staff'    => "staff_inventory_merchandise.php",
             'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
             'admin'    => "admin_stock_confirmation.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
         ],
         'fuel_stock_in' => [
-            'staff'    => "staff_record_delivery.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'staff'    => "staff_inventory_fuel.php",
             'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
             'admin'    => "admin_stock_confirmation.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+        ],
+        'delivery' => [
+            'staff'    => "staff_inventory_merchandise.php",
+            'manager'  => "manager_merchandise_deliveries.php",
+            'admin'    => "admin_deliveries_oversight.php",
+        ],
+        'fuel_delivery' => [
+            'staff'    => "staff_inventory_fuel.php",
+            'manager'  => "manager_merchandise_deliveries.php",
+            'admin'    => "admin_deliveries_oversight.php",
+        ],
+        'merchandise_delivery' => [
+            'staff'    => "staff_inventory_merchandise.php",
+            'manager'  => "manager_merchandise_deliveries.php",
+            'admin'    => "admin_deliveries_oversight.php",
         ],
     ];
     return $map[$ref_type][$role] ?? $map[$ref_type]['staff'] ?? 'notifications.php';
@@ -4652,13 +4864,14 @@ if (!function_exists('petron_canonical_fuel_type')) {
         $f = strtoupper(trim((string)$raw));
         if ($f === '') return '';
         if (str_contains($f, 'TURBO') && str_contains($f, 'DIESEL')) return 'Turbo Diesel';
-        if (str_contains($f, 'DIESEL')) return 'Diesel';
         if (str_contains($f, 'KEROSENE') || str_contains($f, 'KERO')) return 'Kerosene';
         if (str_contains($f, 'XCS')) return 'XCS Plus';
         if (str_contains($f, 'XTRA') || str_contains($f, 'UNL') || str_contains($f, 'ADVANCE') || str_contains($f, 'UNLEADED')) return 'Xtra UNL';
-        // Fallback: strip any trailing numbers
-        $cleaned = preg_replace('/\s+\d+$/', '', trim((string)$raw));
-        return $cleaned ?: trim((string)$raw);
+        if (str_contains($f, 'DIESEL')) return 'Diesel';
+        // Fallback: strip any trailing pump/nozzle numbers
+        $cleaned = preg_replace('/\s*-\s*\d+.*$/', '', trim((string)$raw));
+        $cleaned = preg_replace('/\s+\d+.*$/', '', $cleaned);
+        return trim($cleaned) ?: trim((string)$raw);
     }
 }
 
@@ -4704,5 +4917,5 @@ if (!function_exists('petron_fuel_type_sql_condition')) {
     }
 }
 
-
-
+// ── Shared Database Backup & Automated Runner Engine ──
+require_once __DIR__ . '/backup_lib.php';

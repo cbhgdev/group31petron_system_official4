@@ -5049,24 +5049,42 @@ document.addEventListener('DOMContentLoaded', function() {
 </div> <!-- /.mim-wrap -->
 
 <script id="merchAutoRefreshScript">
-// ── Silent Background Auto-Refresh for Merchandise Inventory (15 seconds) ──
+// ── Silent Background Auto-Refresh for Merchandise Inventory (Dynamic Interval) ──
 (function() {
     'use strict';
-    setInterval(function() {
+    let _merchRefreshTimer = null;
+
+    function runMerchRefresh() {
         if (!document.hidden) {
-            // If any modal is currently open, skip page reload to avoid interrupting user input
+            // If any modal is currently open, skip refresh to avoid interrupting user input
             var openModal = document.querySelector('.modal-overlay.open, .sr-modal-overlay.open, .modal.show, div[style*="display: block"][id*="Modal"]');
             if (!openModal) {
                 if (typeof loadMerchandiseInventory === 'function') {
                     loadMerchandiseInventory();
                 } else if (typeof fetchInventoryData === 'function') {
                     fetchInventoryData();
-                } else {
-                    location.reload();
+                } else if (window.PetronRealtime && typeof window.PetronRealtime.refreshActiveView === 'function') {
+                    window.PetronRealtime.refreshActiveView({ force: false });
                 }
             }
         }
-    },  15000);
+    }
+
+    function scheduleMerchRefresh(ms) {
+        if (_merchRefreshTimer) clearInterval(_merchRefreshTimer);
+        const interval = (typeof ms === 'number' && ms >= 5000)
+            ? ms
+            : ((typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000) ? window.PETRON_AUTO_REFRESH_MS : 10000);
+        _merchRefreshTimer = setInterval(runMerchRefresh, interval);
+    }
+
+    scheduleMerchRefresh();
+
+    document.addEventListener('petron:auto-refresh-interval-changed', function(e) {
+        if (e.detail && e.detail.intervalMs) {
+            scheduleMerchRefresh(e.detail.intervalMs);
+        }
+    });
 })();
 </script>
 <?php include __DIR__ . '/../partials/footer.php'; ?>

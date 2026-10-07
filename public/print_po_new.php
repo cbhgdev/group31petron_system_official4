@@ -17,11 +17,35 @@ if (!in_array($role, ['admin', 'superadmin', 'manager', 'staff', 'cashier', 'pum
     die('<p style="font-family:Arial;padding:40px;color:#721c24;">Access denied.</p>');
 }
 
-$po_id    = (int)($_GET['id'] ?? 0);
-$po_date  = $_GET['date']     ?? null;
-$batch_id = trim($_GET['batch_id'] ?? $_GET['po_id'] ?? $_GET['po_number'] ?? $_GET['po'] ?? '');
-$raw_type = $_GET['type']     ?? 'merch';
-$po_type  = (strpos(strtolower($raw_type), 'fuel') !== false) ? 'fuel' : 'merch';
+$po_id     = (int)($_GET['id'] ?? 0);
+$po_date   = $_GET['date']     ?? null;
+$raw_param = trim($_GET['batch_id'] ?? $_GET['po_id'] ?? $_GET['po_number'] ?? $_GET['po'] ?? (isset($_GET['id']) && !is_numeric($_GET['id']) ? $_GET['id'] : ''));
+$batch_id  = preg_replace('/\s+/', '-', $raw_param);
+$base_po   = preg_replace('/-\d{2,}$/', '', $batch_id);
+$raw_type  = $_GET['type']     ?? '';
+$po_type   = (strpos(strtolower($raw_type), 'fuel') !== false) ? 'fuel' : ((strpos(strtolower($raw_type), 'merch') !== false) ? 'merch' : '');
+
+if ($batch_id === '' && $po_id > 0) {
+    try {
+        $stmt_find_f = $pdo->prepare("SELECT batch_id, po_number FROM fuel_purchase_orders WHERE id = ? LIMIT 1");
+        $stmt_find_f->execute([$po_id]);
+        $rf = $stmt_find_f->fetch(PDO::FETCH_ASSOC);
+        if ($rf) {
+            $batch_id = $rf['batch_id'] ?: $rf['po_number'];
+            $base_po  = preg_replace('/-\d{2,}$/', '', $batch_id);
+            $po_type  = 'fuel';
+        } else {
+            $stmt_find_m = $pdo->prepare("SELECT batch_id, po_number FROM purchase_orders WHERE id = ? LIMIT 1");
+            $stmt_find_m->execute([$po_id]);
+            $rm = $stmt_find_m->fetch(PDO::FETCH_ASSOC);
+            if ($rm) {
+                $batch_id = $rm['batch_id'] ?: $rm['po_number'];
+                $base_po  = preg_replace('/-\d{2,}$/', '', $batch_id);
+                $po_type  = 'merch';
+            }
+        }
+    } catch (Exception $e) {}
+}
 
 if (!$po_id && !$po_date && $batch_id === '') {
     die('<p style="font-family:Arial;padding:40px;">No Purchase Order ID, Date, or Batch ID provided.</p>');
@@ -80,7 +104,38 @@ try {
     ";
 
     if ($batch_id !== '') {
-        if ($po_type === 'fuel') {
+        $candidates = array_values(array_unique(array_filter([
+            $batch_id,
+            $raw_param,
+            $base_po
+        ])));
+        $cand_ph = !empty($candidates) ? implode(',', array_fill(0, count($candidates), '?')) : "''";
+
+        $matched_fuel_parent = '';
+        try {
+            $stmt_f_chk = $pdo->prepare("
+                SELECT DISTINCT batch_id, po_number 
+                FROM fuel_purchase_orders 
+                WHERE (station_id = ? OR ? = 0)
+                  AND (batch_id IN ($cand_ph) OR po_number IN ($cand_ph) OR batch_id LIKE ? OR po_number LIKE ?)
+            ");
+            $stmt_f_chk->execute(array_merge([$station_id, $station_id], $candidates, $candidates, [$base_po . '%', $base_po . '%']));
+            $f_matches = $stmt_f_chk->fetchAll(PDO::FETCH_ASSOC);
+            if (!empty($f_matches)) {
+                foreach ($f_matches as $fm) {
+                    if (!empty($fm['batch_id'])) {
+                        $matched_fuel_parent = $fm['batch_id'];
+                        break;
+                    }
+                }
+                if (!$matched_fuel_parent) {
+                    $matched_fuel_parent = $base_po ?: $batch_id;
+                }
+            }
+        } catch (Exception $e) {}
+
+        if ($matched_fuel_parent !== '' || $po_type === 'fuel') {
+            $fuel_key = $matched_fuel_parent ?: ($base_po ?: $batch_id);
             $stmt = $pdo->prepare("
                 SELECT fpo.*,
                        fpo.volume AS quantity,
@@ -104,11 +159,18 @@ try {
                 LEFT JOIN suppliers sup ON fpo.supplier_id = sup.id
                 LEFT JOIN users u ON fpo.created_by = u.id
                 LEFT JOIN users ab ON fpo.approved_by = ab.id
-                WHERE (fpo.batch_id = ? OR fpo.po_number = ?)
+                WHERE (fpo.station_id = ? OR ? = 0)
+                  AND (fpo.batch_id = ? OR fpo.po_number = ? OR fpo.batch_id = ? OR fpo.po_number LIKE ? OR fpo.batch_id LIKE ?)
                 ORDER BY fpo.id ASC
             ");
-            $stmt->execute([$batch_id, $batch_id]);
-        } else {
+            $stmt->execute([$station_id, $station_id, $fuel_key, $batch_id, $batch_id, $fuel_key . '%', $fuel_key . '%']);
+            $po_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            if (!empty($po_items)) {
+                $po_type = 'fuel';
+            }
+        }
+
+        if (empty($po_items) && $po_type !== 'fuel') {
             $stmt = $pdo->prepare("
                 SELECT po.*,
                        u.name AS created_by_name,
@@ -133,12 +195,16 @@ try {
                 {$ip_join_on_sku_or_name}
                 LEFT JOIN products p ON (sr.item_id = p.id OR po.product_name = p.name)
                 LEFT JOIN product_categories pc ON p.category_id = pc.id
-                WHERE (po.batch_id = ? OR po.po_number = ?)
+                WHERE (po.station_id = ? OR ? = 0)
+                  AND (po.batch_id IN ($cand_ph) OR po.po_number IN ($cand_ph) OR po.batch_id LIKE ? OR po.po_number LIKE ?)
                 ORDER BY po.id ASC
             ");
-            $stmt->execute([$batch_id, $batch_id]);
+            $stmt->execute(array_merge([$station_id, $station_id], $candidates, $candidates, [$base_po . '%', $base_po . '%']));
+            $po_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            if (!empty($po_items)) {
+                $po_type = 'merch';
+            }
         }
-        $po_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         if ($po_type !== 'fuel' && !empty($po_items)) {
             $parents_by_id = [];
@@ -256,7 +322,17 @@ try {
         }
 
         $po = $po_items[0] ?? false;
-        if ($po) { $po['po_number'] = $batch_id; }
+        if ($po) {
+            if ($po_type === 'fuel' && !empty($matched_fuel_parent)) {
+                $po['po_number'] = $matched_fuel_parent;
+            } elseif (!empty($po['batch_id'])) {
+                $po['po_number'] = $po['batch_id'];
+            } elseif (!empty($base_po)) {
+                $po['po_number'] = $base_po;
+            } else {
+                $po['po_number'] = $batch_id;
+            }
+        }
     }
     elseif ($po_date) {
         if ($po_type === 'fuel') {
@@ -680,14 +756,18 @@ body{font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;font-size:11px;
                 foreach ($po_items as $idx => $item):
                     $qty = (float)($item['quantity'] ?? 0);
                     $price = (float)($item['unit_price'] ?? 0);
-                    $total = $qty * $price;
+                    $stored_total = (float)($item['total_amount'] ?? $item['total_price'] ?? 0);
+                    if ($price <= 0 && $qty > 0 && $stored_total > 0) {
+                        $price = $stored_total / $qty;
+                    }
+                    $total = $stored_total > 0 ? $stored_total : ($qty * $price);
                     $subtotal += $total;
                 ?>
                 <tr>
                     <td><?php echo $idx + 1; ?></td>
-                    <td><code style="font-weight:bold; font-size:11px;"><?php echo htmlspecialchars($item['item_sku'] ?? ($is_fuel ? 'FUEL-PO' : 'N/A')); ?></code></td>
+                    <td><code style="font-weight:bold; font-size:11px;"><?php echo htmlspecialchars($item['item_sku'] ?: ($is_fuel ? 'FUEL-PO' : 'N/A')); ?></code></td>
                     <td><?php echo htmlspecialchars($item['product_name'] ?? '—'); ?></td>
-                    <td><?php echo htmlspecialchars($item['product_category'] ?? 'Lubricant'); ?></td>
+                    <td><?php echo htmlspecialchars($item['product_category'] ?: ($is_fuel ? 'Fuel' : 'Lubricant')); ?></td>
                     <td class="r"><?php echo number_format($qty, $is_fuel ? 2 : 0); ?></td>
                     <td><?php echo $qty_unit; ?></td>
                     <td class="r">₱<?php echo number_format($price, 2); ?></td>

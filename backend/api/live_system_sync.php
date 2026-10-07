@@ -236,5 +236,16 @@ if ($role === 'staff') {
         $response['sidebar_badges']['admin_reports'] = 0;
     }
 
+// Real-Time Background Automated Database Backup Checker & Maintenance Timer Monitor
+try {
+    if (function_exists('check_and_run_scheduled_backup')) {
+        check_and_run_scheduled_backup($pdo);
+    }
+    if (function_exists('check_and_auto_conclude_maintenance')) {
+        check_and_auto_conclude_maintenance($pdo);
+    }
+} catch (Throwable $t) {
+    // Non-blocking for sync
+}
 
 echo json_encode($response, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

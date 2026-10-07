@@ -348,6 +348,19 @@ try {
                     $n['message'] = function_exists('clean_mojibake') ? clean_mojibake((string)($n['message'] ?? '')) : (string)($n['message'] ?? '');
                     $n['time_ago'] = time_ago($n['created_at']);
                     $n['is_unread'] = ($n['status'] === 'unread');
+                    // Dynamic sanitization & remapping for staff inventory notifications
+                    if (in_array($role, ['staff', 'cashier', 'pump_attendant'])) {
+                        $is_fuel = (stripos($n['title'], 'fuel') !== false || stripos($n['message'], 'fuel') !== false || in_array($n['event_type'], ['fuel','fuel_stock_in','fuel_delivery','fuel_management','fuel_reading']));
+                        $raw_red = (string)($n['redirect_url'] ?? '');
+                        if (stripos($raw_red, 'staff_fuel_deliveries.php') !== false || stripos($raw_red, 'staff_record_delivery.php') !== false) {
+                            $n['redirect_url'] = $is_fuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+                        } elseif (in_array($n['event_type'], ['stock_in', 'merchandise_stock_in', 'fuel_stock_in', 'delivery', 'purchase_order'])) {
+                            if (empty($raw_red) || $raw_red === '#' || stripos($raw_red, 'record_delivery') !== false || stripos($raw_red, 'admin_stock_confirmation') !== false) {
+                                $n['redirect_url'] = $is_fuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+                            }
+                        }
+                    }
+
                     if (empty($n['redirect_url']) || $n['redirect_url'] === '#' || $n['redirect_url'] === 'null') {
                         if (!empty($n['reference_type'])) {
                             $n['redirect_url'] = notification_redirect_url(

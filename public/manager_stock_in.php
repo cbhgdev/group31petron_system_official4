@@ -1561,8 +1561,8 @@ body .main,
 </div>
 
 <!-- Stock-In View Details Modal -->
-<div id="stockInViewModal" style="display:none; position:fixed; inset:0; z-index:99999; background:rgba(15,23,42,0.65); backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); align-items:flex-start; justify-content:center; padding:75px 20px 35px 20px; box-sizing:border-box; overflow-y:auto;" onclick="if(event.target===this) closeStockInViewModal();">
-    <div style="background:#fff; border-radius:14px; width:96%; max-width:920px; max-height:calc(100vh - 110px); display:flex; flex-direction:column; box-shadow:0 25px 60px rgba(0,0,0,0.35); overflow:hidden; margin:0 auto;" onclick="event.stopPropagation();">
+<div id="stockInViewModal" style="display:none; position:fixed; inset:0; z-index:99999; background:rgba(15,23,42,0.65); backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); align-items:flex-start; justify-content:center; padding:70px 16px 30px 16px; box-sizing:border-box; overflow-y:auto;" onclick="if(event.target===this) closeStockInViewModal();">
+    <div style="background:#fff; border-radius:14px; width:96%; max-width:1020px; max-height:calc(100vh - 100px); display:flex; flex-direction:column; box-shadow:0 25px 60px rgba(0,0,0,0.35); overflow:hidden; margin:0 auto;" onclick="event.stopPropagation();">
         <div style="background:#002F70; padding:18px 24px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
             <div style="display:flex; align-items:center; gap:12px;">
                 <i class="fas fa-boxes" style="color:#fff; font-size:18px;"></i>
@@ -1575,7 +1575,7 @@ body .main,
                 <i class="fas fa-times"></i>
             </button>
         </div>
-        <div style="overflow-y:auto; flex:1; padding:22px 24px;">
+        <div style="overflow-y:auto; flex:1; padding:20px 22px;">
             <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:14px; margin-bottom:16px;">
                 <div><div style="font-size:9.5px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">Reference / Batch No.</div><div style="font-weight:800;color:#002F70;font-family:Consolas,monospace;font-size:13px;" id="siv_batch_id">—</div></div>
                 <div><div style="font-size:9.5px;font-weight:800;color:#64748b;text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;">PO Number</div><div style="font-weight:800;color:#0f172a;font-family:Consolas,monospace;font-size:13px;" id="siv_po_number">—</div></div>
@@ -1606,17 +1606,17 @@ body .main,
             <div style="font-size:11px; font-weight:800; color:#002F70; text-transform:uppercase; letter-spacing:.5px; margin-bottom:8px;">
                 <i class="fas fa-list" style="margin-right:5px;"></i> Stocked Items Breakdown
             </div>
-            <div style="border:1px solid #e2e8f0; border-radius:10px; overflow-x:auto; margin-bottom:16px; background:#fff;">
-                <table style="width:100%; border-collapse:collapse; font-size:12px;">
+            <div style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; margin-bottom:16px; background:#fff; width:100%; box-sizing:border-box;">
+                <table style="width:100%; border-collapse:collapse; table-layout:fixed; font-size:11.5px; box-sizing:border-box; margin:0;">
                     <thead style="background:#002F70;">
                         <tr>
-                            <th style="padding:9px 10px; text-align:left; color:#fff; font-size:10.5px; font-weight:800; text-transform:uppercase;">Item / Product</th>
-                            <th style="padding:9px 10px; text-align:right; color:#fff; font-size:10.5px; font-weight:800; text-transform:uppercase;">Ordered</th>
-                            <th style="padding:9px 10px; text-align:right; color:#fff; font-size:10.5px; font-weight:800; text-transform:uppercase;">Received</th>
-                            <th style="padding:9px 10px; text-align:right; color:#fff; font-size:10.5px; font-weight:800; text-transform:uppercase;">Unit Cost</th>
-                            <th style="padding:9px 10px; text-align:right; color:#fff; font-size:10.5px; font-weight:800; text-transform:uppercase;">Selling Price</th>
-                            <th style="padding:9px 10px; text-align:right; color:#fff; font-size:10.5px; font-weight:800; text-transform:uppercase;">Total Cost</th>
-                            <th style="padding:9px 10px; text-align:center; color:#fff; font-size:10.5px; font-weight:800; text-transform:uppercase;">Condition</th>
+                            <th style="width:22%; padding:9px 8px; text-align:left; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Item / Product</th>
+                            <th style="width:12.5%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Ordered</th>
+                            <th style="width:13.5%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Received</th>
+                            <th style="width:11%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Unit Cost</th>
+                            <th style="width:11.5%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Selling Price</th>
+                            <th style="width:18.5%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Total Cost</th>
+                            <th style="width:11%; padding:9px 6px; text-align:center; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Condition</th>
                         </tr>
                     </thead>
                     <tbody id="siv_items_body"></tbody>
@@ -2159,11 +2159,27 @@ function openStockInViewModal(btn) {
     setText('siv_received_by', data.received_by);
     setText('siv_status', data.status);
 
-    const isFuel = (data.delivery_type === 'Fuel');
+    const statusEl = document.getElementById('siv_status');
+    if (statusEl) {
+        const stLower = String(data.status || '').toLowerCase();
+        if (stLower.includes('complete') || stLower.includes('approved') || stLower === 'ok') {
+            statusEl.style.color = '#15803d';
+        } else if (stLower.includes('pending')) {
+            statusEl.style.color = '#b45309';
+        } else if (stLower.includes('progress')) {
+            statusEl.style.color = '#0369a1';
+        } else if (stLower.includes('damage') || stLower.includes('reject') || stLower.includes('cancel')) {
+            statusEl.style.color = '#b91c1c';
+        } else {
+            statusEl.style.color = '#15803d';
+        }
+    }
+
+    const isFuel = (String(data.delivery_type || '').toLowerCase() === 'fuel');
     const unit = isFuel ? 'L' : 'pcs';
 
     setText('siv_total_items', String((data.items || []).length));
-    setText('siv_total_qty', (isFuel ? parseFloat(data.total_qty || 0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) : Math.round(parseFloat(data.total_qty || 0)).toLocaleString()) + ' ' + unit);
+    setText('siv_total_qty', (isFuel ? parseFloat(data.total_qty || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) : Math.round(parseFloat(data.total_qty || 0)).toLocaleString('en-US')) + ' ' + unit);
     setText('siv_total_cost', '₱ ' + parseFloat(data.total_cost || 0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}));
 
     // Render item rows
@@ -2177,20 +2193,32 @@ function openStockInViewModal(btn) {
             const sPrice = parseFloat(it.selling_price || 0);
             const tCost  = parseFloat(it.total_cost || (recQty * uCost));
 
+            const ordText = isFuel 
+                ? (ordQty.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' L') 
+                : (Math.round(ordQty).toLocaleString('en-US') + ' ' + siEscapeHtml(itUnit));
+            const recText = isFuel 
+                ? (recQty.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' L') 
+                : (Math.round(recQty).toLocaleString('en-US') + ' ' + siEscapeHtml(itUnit));
+            const uCostText = '₱ ' + uCost.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+            const sPriceText = '₱ ' + sPrice.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+            const tCostText = '₱ ' + tCost.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+
+            const isDamaged = String(it.condition || '').toLowerCase().includes('damag');
+
             return '<tr>' +
-                '<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; font-weight:700; color:#1e293b;">' + siEscapeHtml(it.name) + '</td>' +
-                '<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; text-align:right; color:#64748b; font-weight:600;">' + (isFuel ? ordQty.toFixed(2) : Math.round(ordQty)) + ' ' + siEscapeHtml(itUnit) + '</td>' +
-                '<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; text-align:right; color:#002F70; font-weight:800;">' + (isFuel ? recQty.toFixed(2) : Math.round(recQty)) + ' ' + siEscapeHtml(itUnit) + '</td>' +
-                '<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; text-align:right; color:#475569; font-weight:600;">₱ ' + uCost.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>' +
-                '<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; text-align:right; color:#002F70; font-weight:700;">₱ ' + sPrice.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>' +
-                '<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; text-align:right; color:#16a34a; font-weight:800;">₱ ' + tCost.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}) + '</td>' +
-                '<td style="padding:9px 10px; border-bottom:1px solid #f1f5f9; text-align:center;">' +
-                    '<span style="display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; background:' + (it.condition === 'Damaged' ? '#fee2e2;color:#b91c1c;' : '#dcfce7;color:#15803d;') + '">' +
+                '<td style="width:22%; padding:8px 8px; border-bottom:1px solid #f1f5f9; font-weight:700; color:#1e293b; font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; box-sizing:border-box;" title="' + siEscapeHtml(it.name) + '">' + siEscapeHtml(it.name) + '</td>' +
+                '<td style="width:12.5%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#64748b; font-weight:600; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + ordText + '</td>' +
+                '<td style="width:13.5%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#002F70; font-weight:800; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + recText + '</td>' +
+                '<td style="width:11%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#475569; font-weight:600; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + uCostText + '</td>' +
+                '<td style="width:11.5%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#002F70; font-weight:700; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + sPriceText + '</td>' +
+                '<td style="width:18.5%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#16a34a; font-weight:800; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + tCostText + '</td>' +
+                '<td style="width:11%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:center; white-space:nowrap; box-sizing:border-box;">' +
+                    '<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10.5px; font-weight:700; background:' + (isDamaged ? '#fee2e2;color:#b91c1c;' : '#dcfce7;color:#15803d;') + '">' +
                         siEscapeHtml(it.condition || 'Good') +
                     '</span>' +
                 '</td>' +
             '</tr>';
-        }).join('') || '<tr><td colspan="7" style="padding:20px;text-align:center;color:#94a3b8;">No items listed.</td></tr>';
+        }).join('') || '<tr><td colspan="7" style="padding:18px;text-align:center;color:#94a3b8;font-size:12px;">No items listed.</td></tr>';
     }
 
     // Remarks
@@ -2208,7 +2236,7 @@ function openStockInViewModal(btn) {
     const printBtn = document.getElementById('siv_print_btn');
     if (printBtn) {
         const batchRef = data.batch_id && data.batch_id !== '—' ? data.batch_id : data.po_number;
-        const bType = (data.delivery_type === 'Fuel') ? 'fuel' : 'merch';
+        const bType = isFuel ? 'fuel' : 'merch';
         printBtn.href = 'print_supplier_invoice.php?batch_id=' + encodeURIComponent(batchRef) + '&type=' + encodeURIComponent(bType);
     }
 

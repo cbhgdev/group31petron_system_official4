@@ -910,7 +910,8 @@ if (!empty($query)) {
                     } elseif ($role === 'manager') {
                         $del_link = 'manager_stock_in.php?search=' . $del_q;
                     } else {
-                        $del_link = 'staff_record_delivery.php';
+                        $is_fuel = (stripos($r['delivery_type'] ?? '', 'fuel') !== false || stripos($r['product'] ?? '', 'fuel') !== false);
+                        $del_link = $is_fuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
                     }
 
                     $results[] = [
@@ -1177,7 +1178,7 @@ if (!empty($query)) {
                     $po_q        = urlencode($po_num_disp);
                     $po_link     = $is_admin
                         ? 'admin_merchandise_deliveries_oversight.php?search=' . $po_q
-                        : ($role === 'manager' ? 'manager_stock_request_review.php?search=' . $po_q : 'staff_record_delivery.php?po=' . $po_q);
+                        : ($role === 'manager' ? 'manager_stock_request_review.php?search=' . $po_q : 'staff_inventory_merchandise.php');
 
                     $results[] = [
                         'type'     => 'Purchase Order',
@@ -1216,7 +1217,7 @@ if (!empty($query)) {
                     $fuel        = $r['fuel_type_display'] ?? 'Fuel';
                     $fpo_link    = $is_admin
                         ? 'admin_inventory_fuel.php'
-                        : ($role === 'manager' ? 'manager_fuel_purchase_orders.php' : 'staff_record_delivery.php');
+                        : ($role === 'manager' ? 'manager_fuel_purchase_orders.php' : 'staff_inventory_fuel.php');
 
                     $results[] = [
                         'type'     => 'Purchase Order',
