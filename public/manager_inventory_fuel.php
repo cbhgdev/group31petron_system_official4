@@ -1932,7 +1932,7 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
         </div>
         
         <!-- Body (Scrollable) -->
-        <div style="padding:20px; overflow-y:auto; flex:1;">
+        <div style="padding:20px; padding-bottom:30px; overflow-y:auto; flex:1;">
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
                     <label style="font-weight:700; font-size:14.5px; color:#334155;">Fuel Type *</label>
@@ -1990,6 +1990,7 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
                 <textarea id="afrRemarks" rows="2" placeholder="Additional remarks..." style="width:100%; padding:9px 11px; border:1px solid #cbd5e1; border-radius:6px; font-size:15.5px; box-sizing:border-box; resize:vertical;"></textarea>
             </div>
             <div id="afrError" style="color:#dc3545; font-size:14.5px; margin-top:8px; display:none; font-weight:600;"></div>
+            <div style="height: 10px;"></div>
         </div>
 
         <!-- Footer (Fixed, Clean Outline Buttons) -->

@@ -11786,20 +11786,21 @@ setTimeout(function() {
 
         // ── Reset Job Order form fields only ─────────────────────────────────
         function resetJobOrderForm() {
-            selectedCustomerIds.jo = null;
-
-            // Clear customer details
-            ['joFirstName','joLastName','joContactNumber'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) el.value = '';
-            });
+            // Unlock and clear customer fields completely
+            clearSelectedCustomerFull('jo');
             const fnResults = document.getElementById('joFirstNameResults');
             if (fnResults) fnResults.style.display = 'none';
 
-            // Clear vehicle details
+            // Clear & unlock vehicle details
             ['joVehicleType','joVehicleBrand','joVehicleModel','joVehiclePlate','joYearModel','joOdometer','joEngineNumber','joChassisNumber'].forEach(id => {
                 const el = document.getElementById(id);
-                if (el) el.value = '';
+                if (el) {
+                    el.value = '';
+                    el.removeAttribute('readonly');
+                    el.style.background = '';
+                    el.style.cursor = '';
+                    el.style.color = '';
+                }
             });
 
             // Clear JO Information
