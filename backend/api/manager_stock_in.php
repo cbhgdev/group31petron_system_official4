@@ -975,30 +975,40 @@ function fuel_inventory_before(PDO $pdo, int $station_id, int $fuel_type_id, str
 function upsert_fuel_inventory(PDO $pdo, int $station_id, int $fuel_type_id, string $fuel_type, float $liters, float $selling_price, int $user_id): void
 {
     $find = $pdo->prepare("
-        SELECT id
+        SELECT id, COALESCE(current_level, current_stock, 0) AS cur_level, COALESCE(capacity, 0) AS capacity
         FROM fuel_inventory
         WHERE station_id = ?
           AND (fuel_type_id = ? OR LOWER(TRIM(fuel_type)) = LOWER(TRIM(?)) OR LOWER(TRIM(fuel_type)) LIKE LOWER(CONCAT(TRIM(?), '%')))
         ORDER BY CASE WHEN fuel_type_id = ? THEN 0 ELSE 1 END
         LIMIT 1
+        FOR UPDATE
     ");
     $find->execute([$station_id, $fuel_type_id, $fuel_type, $fuel_type, $fuel_type_id]);
-    $inventory_id = (int)($find->fetchColumn() ?: 0);
+    $row = $find->fetch(PDO::FETCH_ASSOC);
 
-    if ($inventory_id > 0) {
+    if ($row) {
+        $inventory_id = (int)$row['id'];
+        $cur_level    = (float)$row['cur_level'];
+        $new_level    = $cur_level + $liters;
+        $capacity_val = (float)$row['capacity'];
+        if ($capacity_val > 0 && $new_level > $capacity_val) {
+            $new_level = $capacity_val;
+        }
+
         $pdo->prepare("
-        UPDATE fuel_inventory
-        SET current_level = COALESCE(current_level, 0) + ?,
-            current_stock = COALESCE(current_stock, 0) + ?,
-            price_per_liter = ?,
-            updated_by = ?,
-            status = CASE
-                WHEN COALESCE(current_level, 0) + ? <= COALESCE(critical_level, reorder_level, 0) THEN 'Low Stock'
-                ELSE 'Normal'
-            END,
-            last_updated = NOW()
-        WHERE id = ?
-        ")->execute([$liters, $liters, $selling_price, $user_id, $liters, $inventory_id]);
+            UPDATE fuel_inventory
+            SET current_level   = ?,
+                current_stock   = ?,
+                price_per_liter = CASE WHEN ? > 0 THEN ? ELSE price_per_liter END,
+                updated_by      = ?,
+                status = CASE
+                    WHEN ? <= 0 THEN 'Out of Stock'
+                    WHEN ? <= COALESCE(reorder_level, 500) THEN 'Low Stock'
+                    ELSE 'Normal'
+                END,
+                last_updated    = NOW()
+            WHERE id = ?
+        ")->execute([$new_level, $new_level, $selling_price, $selling_price, $user_id, $new_level, $new_level, $inventory_id]);
         return;
     }
 
@@ -1007,7 +1017,7 @@ function upsert_fuel_inventory(PDO $pdo, int $station_id, int $fuel_type_id, str
             (station_id, fuel_type_id, fuel_type, current_level, current_stock, capacity,
              reorder_level, critical_level, price_per_liter, latest_calibration, status,
              last_updated, updated_by)
-        VALUES (?, ?, ?, ?, ?, 0, 500, 200, ?, 0, 'Normal', NOW(), ?)
+        VALUES (?, ?, ?, ?, ?, 14000, 4200, 2100, ?, 0, 'Normal', NOW(), ?)
     ")->execute([$station_id, $fuel_type_id, $fuel_type, $liters, $liters, $selling_price, $user_id]);
 }
 

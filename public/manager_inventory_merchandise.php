@@ -1112,22 +1112,129 @@ $mov_variance_count = 0;
 
 if ($active_tab === 'movement' || in_array($active_tab, ['stockin', 'stockout', 'transfers', 'damaged', 'expired'])) {
     try {
-        $stmt = $pdo->prepare("
-            SELECT il.id AS log_id, il.created_at, il.action AS movement_type, il.quantity_change AS quantity, 
-                   il.quantity_before, il.quantity_after, il.reference_type, il.reference_id, il.notes, 
-                   COALESCE(il.product_name, ip.product_name, 'Merchandise Item') AS product_name,
-                   COALESCE(ip.sku, il.reference_id, 'N/A') AS sku,
-                   COALESCE(si.unit, ip.size, 'pcs') AS unit,
-                   COALESCE(il.performed_by, u.name, 'System') AS user_name 
-            FROM inventory_logs il 
-            LEFT JOIN inventory_products ip ON il.product_id = ip.id 
-            LEFT JOIN station_inventory si ON si.product_id = ip.id AND si.station_id = il.station_id 
-            LEFT JOIN users u ON il.user_id = u.id 
-            WHERE il.station_id = ? 
-            ORDER BY il.created_at DESC LIMIT 500
-        ");
-        $stmt->execute([$station_id]);
+        foreach ([
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS station_id INT NULL",
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS product_id INT NULL",
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS user_id INT NULL",
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS action VARCHAR(100) NULL",
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS quantity_change DECIMAL(12,2) NOT NULL DEFAULT 0",
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS quantity_before DECIMAL(12,2) NULL",
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS quantity_after DECIMAL(12,2) NULL",
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS notes TEXT NULL",
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS reference_no VARCHAR(100) NULL",
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS reference_type VARCHAR(100) NULL",
+            "ALTER TABLE inventory_logs ADD COLUMN IF NOT EXISTS reference_id INT NULL"
+        ] as $sql_alter) {
+            try { $pdo->exec($sql_alter); } catch (Exception $ignored) {}
+        }
+
+        $query = "
+            SELECT il.id AS log_id,
+                   il.created_at,
+                   COALESCE(NULLIF(il.action,''), 'Adjustment') AS movement_type,
+                   il.quantity_change AS quantity,
+                   COALESCE(NULLIF(il.notes,''), '—') AS notes,
+                   COALESCE(
+                       NULLIF(NULLIF(il.reference_no, ''), 'merchandise_transaction'),
+                       NULLIF(CONCAT_WS('-', NULLIF(il.reference_type, 'merchandise_transaction'), il.reference_id), ''),
+                       CONCAT('LOG-', LPAD(il.id, 5, '0'))
+                   ) AS reference_no,
+                   COALESCE(NULLIF(ip.product_name,''), NULLIF(p.name,''), 'Merchandise Item') AS product_name,
+                   COALESCE(NULLIF(ip.sku,''), NULLIF(p.sku,''), CONCAT('P', LPAD(COALESCE(p.id, il.product_id, 0),4,'0')), '') AS sku,
+                   COALESCE(NULLIF(si.unit,''), NULLIF(ip.size,''), 'pcs') AS unit,
+                   COALESCE(NULLIF(u.name,''), NULLIF(CONCAT(u.first_name, ' ', u.last_name),' '), u.username, 'System') AS user_name
+            FROM inventory_logs il
+            LEFT JOIN inventory_products ip ON ip.id = il.product_id
+            LEFT JOIN products p ON p.id = il.product_id AND (ip.id IS NULL)
+            LEFT JOIN station_inventory si ON si.product_id = il.product_id AND si.station_id = il.station_id
+            LEFT JOIN users u ON u.id = il.user_id
+            WHERE (il.station_id = ? OR il.station_id IS NULL OR il.station_id = 0)
+              AND (ip.id IS NOT NULL OR p.id IS NOT NULL OR il.product_id IS NOT NULL)
+
+            UNION ALL
+
+            SELECT (1000000 + msi.id) AS log_id,
+                   msi.encoded_at AS created_at,
+                   'Stock In' AS movement_type,
+                   msi.qty_received AS quantity,
+                   COALESCE(NULLIF(msi.remarks,''), CONCAT('PO: ', COALESCE(msi.po_number,'—'), ' | Batch: ', COALESCE(msi.batch_ref,'—'))) AS notes,
+                   COALESCE(NULLIF(msi.po_number, ''), NULLIF(msi.batch_ref, ''), CONCAT('SI-', LPAD(msi.id, 5, '0'))) AS reference_no,
+                   COALESCE(NULLIF(msi.product_name,''), NULLIF(ip.product_name,''), NULLIF(p.name,''), 'Merchandise Item') AS product_name,
+                   COALESCE(NULLIF(msi.sku,''), NULLIF(ip.sku,''), NULLIF(p.sku,''), CONCAT('P', LPAD(COALESCE(p.id, msi.product_id, 0),4,'0')), '') AS sku,
+                   COALESCE(NULLIF(si.unit,''), NULLIF(ip.size,''), 'pcs') AS unit,
+                   COALESCE(NULLIF(u.name,''), NULLIF(CONCAT(u.first_name, ' ', u.last_name),' '), 'Staff') AS user_name
+            FROM merchandise_stock_in msi
+            LEFT JOIN inventory_products ip ON ip.id = msi.product_id
+            LEFT JOIN products p ON p.id = msi.product_id AND (ip.id IS NULL)
+            LEFT JOIN station_inventory si ON si.product_id = msi.product_id AND si.station_id = msi.station_id
+            LEFT JOIN users u ON u.id = msi.encoded_by
+            WHERE msi.station_id = ?
+              AND msi.id NOT IN (
+                  SELECT COALESCE(reference_id, 0) FROM inventory_logs WHERE (station_id = ? OR station_id IS NULL) AND (reference_type LIKE '%delivery%' OR reference_type LIKE '%stock_in%')
+              )
+
+            UNION ALL
+
+            SELECT (2000000 + mti.id) AS log_id,
+                   mt.created_at,
+                   COALESCE(NULLIF(mt.transaction_type, ''), 'Stock Out') AS movement_type,
+                   -ABS(mti.quantity) AS quantity,
+                   COALESCE(NULLIF(mt.manager_notes,''), NULLIF(mt.staff_remarks,''), 'Sale Transaction') AS notes,
+                   COALESCE(NULLIF(mt.transaction_id, ''), CONCAT('SO-', LPAD(mt.id, 5, '0'))) AS reference_no,
+                   COALESCE(NULLIF(mti.product_name,''), NULLIF(ip.product_name,''), NULLIF(p.name,''), 'Merchandise Item') AS product_name,
+                   COALESCE(NULLIF(mti.item_sku,''), NULLIF(ip.sku,''), NULLIF(p.sku,''), CONCAT('P', LPAD(COALESCE(p.id, mti.product_id, 0),4,'0')), '') AS sku,
+                   COALESCE(NULLIF(si.unit,''), NULLIF(ip.size,''), 'pcs') AS unit,
+                   COALESCE(NULLIF(u.name,''), NULLIF(CONCAT(u.first_name, ' ', u.last_name),' '), 'Staff') AS user_name
+            FROM merchandise_transactions mt
+            JOIN merchandise_transaction_items mti ON mti.transaction_id = mt.id
+            LEFT JOIN inventory_products ip ON ip.id = mti.product_id
+            LEFT JOIN products p ON p.id = mti.product_id AND (ip.id IS NULL)
+            LEFT JOIN station_inventory si ON si.product_id = mti.product_id AND si.station_id = mt.station_id
+            LEFT JOIN users u ON u.id = mt.staff_id
+            WHERE mt.station_id = ?
+              AND mt.id NOT IN (
+                  SELECT COALESCE(reference_id, 0) FROM inventory_logs WHERE (station_id = ? OR station_id IS NULL) AND (reference_type LIKE '%transaction%' OR reference_type LIKE '%sale%')
+              )
+              AND mt.transaction_id NOT IN (
+                  SELECT COALESCE(reference_no, '') FROM inventory_logs WHERE (station_id = ? OR station_id IS NULL) AND reference_no IS NOT NULL AND reference_no != ''
+              )
+
+            ORDER BY created_at DESC
+            LIMIT 500
+        ";
+
+        $stmt = $pdo->prepare($query);
+        $stmt->execute([
+            $station_id,
+            $station_id, $station_id,
+            $station_id, $station_id, $station_id
+        ]);
         $movement_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        error_log("Error fetching manager movement history: " . $e->getMessage());
+        try {
+            $fallbackStmt = $pdo->prepare("
+                SELECT (1000000 + msi.id) AS log_id,
+                       msi.encoded_at AS created_at,
+                       'Stock In' AS movement_type,
+                       msi.qty_received AS quantity,
+                       COALESCE(NULLIF(msi.remarks,''), 'Stock In Delivery') AS notes,
+                       COALESCE(NULLIF(msi.po_number, ''), CONCAT('SI-', LPAD(msi.id, 5, '0'))) AS reference_no,
+                       COALESCE(NULLIF(msi.product_name,''), 'Merchandise Item') AS product_name,
+                       COALESCE(NULLIF(msi.sku,''), '') AS sku,
+                       'pcs' AS unit,
+                       'Staff' AS user_name
+                FROM merchandise_stock_in msi
+                WHERE msi.station_id = ?
+                ORDER BY msi.encoded_at DESC LIMIT 100
+            ");
+            $fallbackStmt->execute([$station_id]);
+            $movement_history = $fallbackStmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $fallbackErr) {
+            $movement_history = [];
+        }
+    }
+}
 
         $mov_total_count = count($movement_history);
         foreach ($movement_history as $log) {

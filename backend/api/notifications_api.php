@@ -347,9 +347,25 @@ try {
                     $n['title'] = function_exists('clean_mojibake') ? clean_mojibake((string)($n['title'] ?? '')) : (string)($n['title'] ?? '');
                     $n['message'] = function_exists('clean_mojibake') ? clean_mojibake((string)($n['message'] ?? '')) : (string)($n['message'] ?? '');
                     $n['time_ago'] = time_ago($n['created_at']);
-                    $n['is_unread'] = ($n['status'] === 'unread');
-                    // Dynamic sanitization & remapping for staff inventory notifications
-                    if (in_array($role, ['staff', 'cashier', 'pump_attendant'])) {
+                    // Dynamic sanitization & remapping for fuel adjustment notifications
+                    $is_fuel_adjustment = (
+                        stripos($n['title'], 'adjustment') !== false ||
+                        stripos($n['title'], 'tank dip') !== false ||
+                        stripos($n['message'], 'fuel reading adjustment') !== false ||
+                        stripos($n['message'], 'tank dip') !== false ||
+                        stripos($n['message'], 'physical dip') !== false ||
+                        in_array($n['event_type'], ['fuel_adjustment', 'fuel_adjustments', 'tank_dip', 'dip_adjustment'])
+                    );
+
+                    if ($is_fuel_adjustment) {
+                        if (in_array($role, ['admin', 'superadmin', 'developer'])) {
+                            $n['redirect_url'] = 'admin_fuel_adjustments_oversight.php';
+                        } elseif (in_array($role, ['manager', 'supervisor'])) {
+                            $n['redirect_url'] = 'manager_fuel_deliveries.php';
+                        } else {
+                            $n['redirect_url'] = 'staff_inventory_fuel.php';
+                        }
+                    } elseif (in_array($role, ['staff', 'cashier', 'pump_attendant'])) {
                         $is_fuel = (stripos($n['title'], 'fuel') !== false || stripos($n['message'], 'fuel') !== false || in_array($n['event_type'], ['fuel','fuel_stock_in','fuel_delivery','fuel_management','fuel_reading']));
                         $raw_red = (string)($n['redirect_url'] ?? '');
                         if (stripos($raw_red, 'staff_fuel_deliveries.php') !== false || stripos($raw_red, 'staff_record_delivery.php') !== false) {

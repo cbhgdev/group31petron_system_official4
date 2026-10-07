@@ -413,43 +413,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
                 $pdo->beginTransaction();
 
+                // Track inventory change amounts for success message
+                $level_before = 0.0;
+                $level_after  = 0.0;
+                $actual_added = 0.0;
+
                 if ($action === 'approve') {
                     $liters_to_add = $original_liters;
 
                     $pdo->prepare("
                         UPDATE fuel_deliveries
-                        SET status = 'Awaiting Stock-In', verified_by = ?, verified_at = NOW(),
-                            notes = CONCAT(IFNULL(notes,''), ' | Manager Approved: ', ?)
+                        SET status = 'Verified', verified_by = ?, verified_at = NOW(),
+                            notes = CONCAT(IFNULL(notes,''), ' | Manager Validated & Accepted: ', ?)
                         WHERE id = ?
                     ")->execute([$me['id'], $val_notes, $delivery_id]);
 
                 } elseif ($action === 'adjust') {
                     if ($adj_liters <= 0) throw new Exception('Adjusted volume must be greater than 0.');
                     $liters_to_add = $adj_liters;
-                    $full_notes = " | Manager Adjusted (Orig: {$original_liters}L → New: {$adj_liters}L): " . $val_notes;
+                    $full_notes = " | Manager Validated & Adjusted (Orig: {$original_liters}L → Accepted: {$adj_liters}L): " . $val_notes;
 
                     $pdo->prepare("
                         UPDATE fuel_deliveries
-                        SET status = 'Awaiting Stock-In', delivery_liters = ?, verified_by = ?, verified_at = NOW(),
+                        SET status = 'Verified', delivery_liters = ?, verified_by = ?, verified_at = NOW(),
                             notes = CONCAT(IFNULL(notes,''), ?)
                         WHERE id = ?
                     ")->execute([$adj_liters, $me['id'], $full_notes, $delivery_id]);
 
-                    // Insert into fuel_adjustments log for delivery adjustment
+                    // Insert into fuel_adjustments log for delivery volume adjustment
                     try {
                         $meta_notes = json_encode([
-                            'delivery_id' => $delivery_id,
-                            'supplier' => $del['supplier'] ?? '—',
-                            'fuel_type' => $del['fuel_type'],
+                            'delivery_id'   => $delivery_id,
+                            'supplier'      => $del['supplier'] ?? '—',
+                            'fuel_type'     => $del['fuel_type'],
                             'tanker_number' => $del['tanker_number'] ?? '—',
-                            'invoice_no' => $del['invoice_no'] ?? '—',
-                            'prev_liters' => $original_liters,
-                            'new_liters' => $adj_liters,
+                            'invoice_no'    => $del['invoice_no'] ?? '—',
+                            'prev_liters'   => $original_liters,
+                            'new_liters'    => $adj_liters,
                         ]);
 
                         $ins_adj = $pdo->prepare("
-                            INSERT INTO fuel_adjustments 
-                            (station_id, adjustment_date, fuel_type, fuel_type_id, adjustment_type, liters, previous_value, new_value, reason, user_id, notes, status, approved_by, approved_at, created_at)
+                            INSERT INTO fuel_adjustments
+                            (station_id, adjustment_date, fuel_type, fuel_type_id, adjustment_type, liters,
+                             previous_value, new_value, reason, user_id, notes, status, approved_by, approved_at, created_at)
                             VALUES (?, CURDATE(), ?, ?, 'delivery_adjustment', ?, ?, ?, ?, ?, ?, 'Approved', ?, NOW(), NOW())
                         ");
                         $liters_diff = $adj_liters - $original_liters;
@@ -465,8 +471,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             $meta_notes,
                             $me['id']
                         ]);
-                    } catch (Exception $e) {
-                        error_log("Failed to insert delivery adjustment log: " . $e->getMessage());
+                    } catch (Exception $eAdj) {
+                        error_log("Failed to insert delivery adjustment log: " . $eAdj->getMessage());
                     }
 
                 } elseif ($action === 'reject') {
@@ -479,12 +485,143 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     // Do NOT update stock on reject
                 }
 
-                log_activity($pdo, $me['id'], 'Validate Delivery',
-                    "Delivery #{$delivery_id} {$action}. Fuel: {$fuel_type}. Liters: {$liters_to_add}. Notes: {$val_notes}");
+                // ── IMMEDIATELY UPDATE FUEL INVENTORY on approve or adjust ──────────────
+                // When manager validates & accepts a delivery, stock increases right away.
+                if (in_array($action, ['approve', 'adjust']) && $liters_to_add > 0) {
+
+                    $clean_ft = trim($fuel_type);
+                    $tank_assigned = trim($del['tanker_number'] ?? ($del['tank_assigned'] ?? ''));
+
+                    // Smart search for existing fuel_inventory record
+                    $inv_before_row = null;
+
+                    // 1. Match by tank assigned / ugt_no if available
+                    if (!empty($tank_assigned)) {
+                        $stmtMatch = $pdo->prepare("
+                            SELECT id, COALESCE(current_level, current_stock, 0) AS cur_level, COALESCE(capacity, 0) AS capacity, fuel_type
+                            FROM fuel_inventory
+                            WHERE station_id = ?
+                              AND (LOWER(TRIM(ugt_no)) = LOWER(TRIM(?)) OR LOWER(TRIM(fuel_type)) LIKE LOWER(CONCAT('%', TRIM(?), '%')))
+                            LIMIT 1 FOR UPDATE
+                        ");
+                        $stmtMatch->execute([$station_id, $tank_assigned, $tank_assigned]);
+                        $inv_before_row = $stmtMatch->fetch(PDO::FETCH_ASSOC);
+                    }
+
+                    // 2. Exact match by fuel_type
+                    if (!$inv_before_row) {
+                        $stmtMatch = $pdo->prepare("
+                            SELECT id, COALESCE(current_level, current_stock, 0) AS cur_level, COALESCE(capacity, 0) AS capacity, fuel_type
+                            FROM fuel_inventory
+                            WHERE station_id = ? AND LOWER(TRIM(fuel_type)) = LOWER(TRIM(?))
+                            LIMIT 1 FOR UPDATE
+                        ");
+                        $stmtMatch->execute([$station_id, $clean_ft]);
+                        $inv_before_row = $stmtMatch->fetch(PDO::FETCH_ASSOC);
+                    }
+
+                    // 3. Prefix/Alias match (e.g., 'Diesel' matches 'Diesel 1')
+                    if (!$inv_before_row) {
+                        $stmtMatch = $pdo->prepare("
+                            SELECT id, COALESCE(current_level, current_stock, 0) AS cur_level, COALESCE(capacity, 0) AS capacity, fuel_type
+                            FROM fuel_inventory
+                            WHERE station_id = ?
+                              AND (
+                                LOWER(TRIM(fuel_type)) LIKE LOWER(CONCAT(TRIM(?), ' %'))
+                                OR LOWER(TRIM(fuel_type)) LIKE LOWER(CONCAT(TRIM(?), ' #%'))
+                                OR LOWER(TRIM(fuel_type)) LIKE LOWER(CONCAT(TRIM(?), '%'))
+                              )
+                            ORDER BY id ASC LIMIT 1 FOR UPDATE
+                        ");
+                        $stmtMatch->execute([$station_id, $clean_ft, $clean_ft, $clean_ft]);
+                        $inv_before_row = $stmtMatch->fetch(PDO::FETCH_ASSOC);
+                    }
+
+                    $level_before = $inv_before_row ? (float)$inv_before_row['cur_level'] : 0.0;
+                    $level_after  = $level_before + $liters_to_add;
+                    $capacity_val = $inv_before_row ? (float)$inv_before_row['capacity'] : 0.0;
+
+                    // Cap at tank capacity when capacity is defined
+                    if ($capacity_val > 0 && $level_after > $capacity_val) {
+                        $level_after = $capacity_val;
+                    }
+                    $actual_added = $level_after - $level_before;
+
+                    if ($inv_before_row) {
+                        // Increment existing fuel_inventory record by ID
+                        $pdo->prepare("
+                            UPDATE fuel_inventory
+                            SET current_level = ?,
+                                current_stock  = ?,
+                                status = CASE
+                                    WHEN ? <= 0 THEN 'Out of Stock'
+                                    WHEN ? <= COALESCE(reorder_level, 500) THEN 'Low Stock'
+                                    ELSE 'Normal'
+                                END,
+                                last_updated = NOW()
+                            WHERE id = ? AND station_id = ?
+                        ")->execute([
+                            $level_after,
+                            $level_after,
+                            $level_after,
+                            $level_after,
+                            (int)$inv_before_row['id'],
+                            $station_id
+                        ]);
+                    } else {
+                        // No inventory row yet — create one
+                        $pdo->prepare("
+                            INSERT INTO fuel_inventory
+                                (station_id, fuel_type_id, fuel_type, current_level, current_stock,
+                                 capacity, reorder_level, critical_level, price_per_liter,
+                                 latest_calibration, status, last_updated)
+                            VALUES (?, ?, ?, ?, ?, 14000, 4200, 2100, 0, 0, 'Normal', NOW())
+                        ")->execute([
+                            $station_id,
+                            $fuel_type_id ?? 0,
+                            $clean_ft,
+                            $level_after,
+                            $level_after
+                        ]);
+                    }
+
+                    // Insert fuel_adjustments audit record for this stock-in event
+                    try {
+                        $audit_reason = substr(
+                            "Fuel delivery validated & accepted by manager. " .
+                            "Invoice: " . ($del['invoice_no'] ?? '—') . ". " .
+                            "Delivery #DEL-{$delivery_id}. Notes: {$val_notes}",
+                            0, 255
+                        );
+                        $pdo->prepare("
+                            INSERT INTO fuel_adjustments
+                                (station_id, fuel_type_id, fuel_type, adjustment_type, liters,
+                                 previous_value, new_value, reason, user_id, status,
+                                 approved_by, approved_at, adjustment_date, created_at)
+                            VALUES (?, ?, ?, 'delivery_validated', ?, ?, ?, ?, ?, 'Approved', ?, NOW(), CURDATE(), NOW())
+                        ")->execute([
+                            $station_id,
+                            $fuel_type_id ?? 0,
+                            $fuel_type,
+                            $actual_added,
+                            $level_before,
+                            $level_after,
+                            $audit_reason,
+                            $me['id'],
+                            $me['id']
+                        ]);
+                    } catch (Exception $adjErr) {
+                        error_log("fuel_adjustments insert failed after delivery validation: " . $adjErr->getMessage());
+                    }
+                }
+                // ── END INVENTORY UPDATE ────────────────────────────────────────────────
+
+                log_activity($pdo, $me['id'], 'Validate & Accept Delivery',
+                    "Delivery #{$delivery_id} {$action}. Fuel: {$fuel_type}. Liters accepted: {$liters_to_add}. Inventory: {$level_before} L → {$level_after} L. Notes: {$val_notes}");
 
                 // ── Audit Trail (audit_trail table — read by manager_audit_trail.php) ──
                 try {
-                    // Ensure entity_type column exists (added for fuel delivery tracking)
+                    // Ensure entity_type column exists
                     try {
                         $pdo->exec("ALTER TABLE audit_trail ADD COLUMN IF NOT EXISTS entity_type VARCHAR(50) NOT NULL DEFAULT 'transaction'");
                     } catch (Exception $sch) { /* column may already exist */ }
@@ -496,8 +633,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         default   => ucfirst($action),
                     };
                     $at_detail = match($action) {
-                        'approve' => "Delivery #DEL-{$delivery_id} approved and forwarded to Stock-In | Fuel: {$fuel_type} | Volume: " . number_format($liters_to_add, 2) . " L | Invoice: " . ($del['invoice_no'] ?? '—') . " | Supplier: " . ($del['supplier'] ?? '—') . " | Encoded by: " . ($del['staff_name'] ?? '—') . " | Notes: {$val_notes}",
-                        'adjust'  => "Delivery #DEL-{$delivery_id} adjusted and forwarded to Stock-In | Fuel: {$fuel_type} | Original: " . number_format($original_liters, 2) . " L → Adjusted: " . number_format($liters_to_add, 2) . " L | Invoice: " . ($del['invoice_no'] ?? '—') . " | Notes: {$val_notes}",
+                        'approve' => "Delivery #DEL-{$delivery_id} validated & accepted | Fuel: {$fuel_type} | Volume: " . number_format($liters_to_add, 2) . " L | Invoice: " . ($del['invoice_no'] ?? '—') . " | Supplier: " . ($del['supplier'] ?? '—') . " | Encoded by: " . ($del['staff_name'] ?? '—') . " | Notes: {$val_notes} | Inventory: " . number_format($level_before, 2) . " L → " . number_format($level_after, 2) . " L",
+                        'adjust'  => "Delivery #DEL-{$delivery_id} adjusted & accepted | Fuel: {$fuel_type} | Original: " . number_format($original_liters, 2) . " L → Accepted: " . number_format($liters_to_add, 2) . " L | Invoice: " . ($del['invoice_no'] ?? '—') . " | Notes: {$val_notes} | Inventory: " . number_format($level_before, 2) . " L → " . number_format($level_after, 2) . " L",
                         'reject'  => "Delivery #DEL-{$delivery_id} returned to staff | Fuel: {$fuel_type} | Volume: " . number_format($original_liters, 2) . " L | Invoice: " . ($del['invoice_no'] ?? '—') . " | Supplier: " . ($del['supplier'] ?? '—') . " | Reason: {$val_notes}",
                         default   => "Delivery #DEL-{$delivery_id} {$action} | {$val_notes}",
                     };
@@ -510,8 +647,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         $me['id'],
                         "DEL-{$delivery_id}",
                         $at_action,
-                        $del['status'],   // old_value = previous status
-                        $at_detail,       // new_value = full detail string
+                        $del['status'],
+                        $at_detail,
                     ]);
                 } catch (Exception $ate) {
                     error_log("audit_trail insert failed: " . $ate->getMessage());
@@ -520,7 +657,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $pdo->commit();
 
                 if (in_array($action, ['approve', 'adjust'])) {
-                    $_SESSION['success'] = "Delivery #{$delivery_id} approved & forwarded to Stock-In. No inventory change was made yet.";
+                    $inv_msg = ($actual_added > 0)
+                        ? " Fuel inventory updated: " . number_format($level_before, 2) . " L → " . number_format($level_after, 2) . " L (+" . number_format($actual_added, 2) . " L)."
+                        : '';
+                    $_SESSION['success'] = "✅ Delivery #{$delivery_id} validated & accepted. Fuel inventory increased immediately.{$inv_msg}";
                 } else {
                     $_SESSION['success'] = "Delivery #{$delivery_id} returned to staff for correction.";
                 }

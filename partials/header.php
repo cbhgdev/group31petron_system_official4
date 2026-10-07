@@ -67,6 +67,33 @@ $header_time_ago = function($datetime) {
 };
 $header_notif_url = function($url, $context = []) use ($app_base_path, $public_base_url) {
     $url = trim((string)$url);
+
+    // Remap Fuel Adjustment notifications to Fuel Adjustments oversight instead of Transaction oversight
+    $title_check   = strtolower(trim((string)($context['title'] ?? '')));
+    $message_check = strtolower(trim((string)($context['message'] ?? '')));
+    $evt_check     = strtolower(trim((string)($context['event_type'] ?? '')));
+
+    $is_fuel_adj = (
+        strpos($title_check, 'adjustment') !== false ||
+        strpos($title_check, 'tank dip') !== false ||
+        strpos($message_check, 'fuel reading adjustment') !== false ||
+        strpos($message_check, 'tank dip') !== false ||
+        strpos($message_check, 'physical dip') !== false ||
+        in_array($evt_check, ['fuel_adjustment', 'fuel_adjustments', 'tank_dip', 'dip_adjustment'], true) ||
+        strpos($url, 'fuel_adjustments') !== false
+    );
+
+    if ($is_fuel_adj) {
+        $uRole = function_exists('role_key') ? role_key($_SESSION['user']['role'] ?? '') : '';
+        if (in_array($uRole, ['admin', 'superadmin', 'developer'], true)) {
+            $url = 'admin_fuel_adjustments_oversight.php';
+        } elseif (in_array($uRole, ['manager', 'supervisor'], true)) {
+            $url = 'manager_fuel_deliveries.php';
+        } else {
+            $url = 'staff_inventory_fuel.php';
+        }
+    }
+
     if ($url === '' || $url === '#') return '#';
 
     // Remap deprecated staff delivery URLs to Staff Inventory modules
