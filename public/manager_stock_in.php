@@ -1003,19 +1003,7 @@ body .main,
     <!-- Stock-In Section (Pending Deliveries) -->
     <div id="stockInPendingSection" style="<?= $active_main_tab === 'history' ? 'display:none;' : 'display:block;' ?>;">
 
-        <!-- Stock-In Success Banner -->
-        <div class="stock-banner stock-banner-success" id="stockSuccessBanner" style="<?= !empty($session_success) ? 'display:flex;' : 'display:none;' ?>">
-            <div class="stock-banner-icon">
-                <i class="fas fa-check-circle"></i>
-            </div>
-            <div class="stock-banner-content">
-                <div class="stock-banner-title" id="stockBannerTitle">Stock-In Approved Successfully!</div>
-                <div class="stock-banner-desc" id="stockBannerDesc">
-                    <?= !empty($session_success) ? htmlspecialchars($session_success) : 'The delivery stock-in has been approved. Official station inventory and prices have been updated.' ?>
-                </div>
-                <div class="stock-banner-meta" id="stockBannerMeta" style="display:none;"></div>
-            </div>
-        </div>
+
 
         <div class="summary-grid">
             <a href="<?= si_h(si_tab_url('merch', $filters)) ?>" class="summary-card" style="text-decoration:none;color:inherit;cursor:pointer;" title="Click to view Pending Merchandise">
@@ -1787,7 +1775,7 @@ function approveStockIn(type, groupId, poKey) {
                         sessionStorage.setItem('petron_stock_in_success', JSON.stringify(successObj));
                     } catch(e) {}
 
-                    showStockBanner(successObj);
+                    // showStockBanner(successObj);
                     showStockToast(successMsg, 'ok');
                     setTimeout(function() { window.location.reload(); }, 1200);
                 } else {
@@ -2268,7 +2256,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (stored) {
             var data = JSON.parse(stored);
             if (data && (Date.now() - (data.time || 0) < 600000)) {
-                showStockBanner(data);
+                // showStockBanner(data);
                 showStockToast(data.message || 'Stock-In Approved Successfully!', 'ok');
             }
             sessionStorage.removeItem('petron_stock_in_success');

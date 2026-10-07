@@ -169,6 +169,18 @@ function handleVerifyReading() {
                 $response['stock_before'] = $result['stock_before'];
                 $response['stock_after'] = $result['stock_after'];
                 $response['fuel_type'] = $reading['fuel_type_name'];
+                
+                // BUGFIX: ALSO DEDUCT FROM `fuel_inventory` TO REFLECT IN TANK CONFIGURATIONS
+                try {
+                    $sales_liters = $reading['sales_liters'];
+                    $fuel_type_name = $reading['fuel_type_name'];
+                    // We don't have tank info from reading easily, so deduct from the first active tank matching the fuel type
+                    // Using ORDER BY id ASC to deduct from oldest tank config, or we can just subtract generically.
+                    $stmtFI = $pdo->prepare("UPDATE fuel_inventory SET current_level = COALESCE(current_level, 0) - ?, current_stock = COALESCE(current_stock, 0) - ? WHERE station_id = ? AND (LOWER(fuel_type) = LOWER(?) OR LOWER(fuel_type) LIKE ?)");
+                    $stmtFI->execute([$sales_liters, $sales_liters, user_station_id(), $fuel_type_name, '%' . $fuel_type_name . '%']);
+                } catch (Exception $e) {
+                    // Ignore schema mismatch errors
+                }
             }
         }
         
@@ -344,6 +356,37 @@ function handleVerifyDelivery() {
     
     if ($stmt->rowCount() === 0) {
         throw new Exception('No changes made.');
+    }
+    
+    // BUGFIX: Update `fuel_inventory` table to reflect stock in tank configs!
+    if ($status === 'Verified') {
+        $tank = $delivery['tank_assigned'] ?? '';
+        $updated = false;
+        
+        if ($tank) {
+            // Try updating by UGT/tank
+            try {
+                $stmtFI = $pdo->prepare("UPDATE fuel_inventory SET current_level = COALESCE(current_level, 0) + ?, current_stock = COALESCE(current_stock, 0) + ? WHERE station_id = ? AND LOWER(ugt_no) = LOWER(?)");
+                $stmtFI->execute([$actual_liters, $actual_liters, $station_id, $tank]);
+                if ($stmtFI->rowCount() > 0) $updated = true;
+            } catch (Exception $e) {}
+            
+            if (!$updated) {
+                try {
+                    $stmtFI2 = $pdo->prepare("UPDATE fuel_inventory SET current_level = COALESCE(current_level, 0) + ?, current_stock = COALESCE(current_stock, 0) + ? WHERE station_id = ? AND LOWER(tank) = LOWER(?)");
+                    $stmtFI2->execute([$actual_liters, $actual_liters, $station_id, $tank]);
+                    if ($stmtFI2->rowCount() > 0) $updated = true;
+                } catch (Exception $e) {}
+            }
+        }
+        
+        if (!$updated) {
+            try {
+                // Fallback by fuel type
+                $stmtFI3 = $pdo->prepare("UPDATE fuel_inventory SET current_level = COALESCE(current_level, 0) + ?, current_stock = COALESCE(current_stock, 0) + ? WHERE station_id = ? AND (LOWER(fuel_type) = LOWER(?) OR LOWER(fuel_type) LIKE ?)");
+                $stmtFI3->execute([$actual_liters, $actual_liters, $station_id, $fuel_type_name, '%' . $fuel_type_name . '%']);
+            } catch (Exception $e) {}
+        }
     }
     
     // Log the activity

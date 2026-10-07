@@ -1144,7 +1144,7 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
     z-index: 9999;
     align-items: center;
     justify-content: center;
-    padding: 20px;
+    padding: 20px 20px 70px 20px;
 }
 .modal-overlay.open {
     display: flex;
@@ -1159,7 +1159,7 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    max-height: 90vh;
+    max-height: calc(100vh - 110px);
 }
 .modal-header {
     padding: 16px 20px;
@@ -1920,8 +1920,8 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
     </div>
 </div>
 <!-- â•â• FUEL STOCK ADJUSTMENT REQUEST MODAL (STEP 5: MANAGER REQUEST) â•â• -->
-<div class="modal-overlay" id="adjustReadingModal" style="z-index:10005; display:none; align-items:center; justify-content:center; padding:20px; box-sizing:border-box;">
-    <div style="background:#fff; border-radius:14px; width:96%; max-width:580px; max-height:calc(100vh - 40px); display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 40px rgba(0,0,0,.25); position:relative; z-index:10006; margin:auto;">
+<div class="modal-overlay" id="adjustReadingModal" style="z-index:10005; display:none; align-items:center; justify-content:center; padding:20px 20px 70px 20px; box-sizing:border-box;">
+    <div style="background:#fff; border-radius:14px; width:96%; max-width:580px; max-height:calc(100vh - 110px); display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 40px rgba(0,0,0,.25); position:relative; z-index:10006; margin:auto;">
 
 
         <!-- Header (Fixed) -->
@@ -2397,7 +2397,7 @@ function openAdjustReadingModal(r) {
     modal.style.bottom = '0';
     modal.style.alignItems = 'center';
     modal.style.justifyContent = 'center';
-    modal.style.padding = '20px';
+    modal.style.padding = '20px 20px 70px 20px';
     modal.style.boxSizing = 'border-box';
     modal.style.zIndex = '10005';
 

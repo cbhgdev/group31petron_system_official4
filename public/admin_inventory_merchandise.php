@@ -1483,6 +1483,14 @@ table.merch-tbl td:nth-child(4) {
     box-sizing: border-box !important;
 }
 
+#adminMovTable td:nth-child(7),
+#adminMovTable td:nth-child(8) {
+    white-space: normal !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    overflow: hidden !important;
+}
+
 /* Explicit per-column alignment matching headers and data perfectly */
 #adminMovTable th:nth-child(1), #adminMovTable td:nth-child(1) { text-align: center !important; }
 #adminMovTable th:nth-child(2), #adminMovTable td:nth-child(2) { text-align: center !important; }
