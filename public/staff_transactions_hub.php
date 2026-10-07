@@ -6579,7 +6579,8 @@ setTimeout(function() {
                             </div>
                             <div class="txn-field">
                                 <label>Expected Release Date</label>
-                                <input type="date" id="joExpectedRelease" class="txn-input">
+                                <input type="date" id="joExpectedRelease" class="txn-input"
+                                       value="<?php echo date('Y-m-d'); ?>" min="<?php echo date('Y-m-d'); ?>">
                             </div>
                         </div>
 
@@ -6676,6 +6677,25 @@ setTimeout(function() {
                                 selAll.checked = (allBoxes.length === checkedBoxes.length);
                                 selAll.indeterminate = (checkedBoxes.length > 0 && checkedBoxes.length < allBoxes.length);
                             }
+                        };
+                        window.resetVehicleInspection = function() {
+                            var boxes = document.querySelectorAll('input[name="jo_inspection[]"]');
+                            boxes.forEach(function(cb) {
+                                cb.checked = false;
+                                var lbl = cb.closest('label');
+                                if (lbl) {
+                                    lbl.style.background = '#ffffff';
+                                    lbl.style.borderColor = '#e2e8f0';
+                                    lbl.style.fontWeight = '500';
+                                }
+                            });
+                            var selAll = document.getElementById('joInspectSelectAll');
+                            if (selAll) {
+                                selAll.checked = false;
+                                selAll.indeterminate = false;
+                            }
+                            var inspRemarks = document.getElementById('joInspectionRemarks');
+                            if (inspRemarks) inspRemarks.value = '';
                         };
                         </script>
 
@@ -11807,25 +11827,29 @@ setTimeout(function() {
             const joDate = document.getElementById('joDate');
             if (joDate) joDate.value = new Date().toISOString().split('T')[0];
             const joExpectedRelease = document.getElementById('joExpectedRelease');
-            if (joExpectedRelease) joExpectedRelease.value = '';
+            if (joExpectedRelease) joExpectedRelease.value = new Date().toISOString().split('T')[0];
             // Reset priority to Normal
             const priNormal = document.getElementById('joPriorityNormal');
             if (priNormal) priNormal.checked = true;
 
             // Clear Vehicle Inspection
-            document.querySelectorAll('input[name="jo_inspection[]"]').forEach(cb => {
-                cb.checked = false;
-                const lbl = cb.closest('label');
-                if (lbl) {
-                    lbl.style.background = '#fff';
-                    lbl.style.borderColor = '#e2e8f0';
-                    lbl.style.fontWeight = '500';
-                }
-            });
-            const selAll = document.getElementById('joInspectSelectAll');
-            if (selAll) { selAll.checked = false; selAll.indeterminate = false; }
-            const inspRemarks = document.getElementById('joInspectionRemarks');
-            if (inspRemarks) inspRemarks.value = '';
+            if (typeof window.resetVehicleInspection === 'function') {
+                window.resetVehicleInspection();
+            } else {
+                document.querySelectorAll('input[name="jo_inspection[]"]').forEach(cb => {
+                    cb.checked = false;
+                    const lbl = cb.closest('label');
+                    if (lbl) {
+                        lbl.style.background = '#fff';
+                        lbl.style.borderColor = '#e2e8f0';
+                        lbl.style.fontWeight = '500';
+                    }
+                });
+                const selAll = document.getElementById('joInspectSelectAll');
+                if (selAll) { selAll.checked = false; selAll.indeterminate = false; }
+                const inspRemarks = document.getElementById('joInspectionRemarks');
+                if (inspRemarks) inspRemarks.value = '';
+            }
 
             // Clear Complaint & Recommendation
             const joComplaint = document.getElementById('joCustomerComplaint');
@@ -12362,12 +12386,47 @@ setTimeout(function() {
         function resetAll() {
             if (!confirm('Reset all fields and clear the cart?')) return;
 
+            // Completely reset Job Order form & Vehicle Inspection
+            if (typeof resetJobOrderForm === 'function') {
+                resetJobOrderForm();
+            }
+            if (typeof resetMerchandiseForm === 'function') {
+                resetMerchandiseForm();
+            }
+            if (typeof window.resetVehicleInspection === 'function') {
+                window.resetVehicleInspection();
+            } else {
+                document.querySelectorAll('input[name="jo_inspection[]"]').forEach(cb => {
+                    cb.checked = false;
+                    const lbl = cb.closest('label');
+                    if (lbl) {
+                        lbl.style.background = '#ffffff';
+                        lbl.style.borderColor = '#e2e8f0';
+                        lbl.style.fontWeight = '500';
+                    }
+                });
+                const selAll = document.getElementById('joInspectSelectAll');
+                if (selAll) { selAll.checked = false; selAll.indeterminate = false; }
+                const inspRemarks = document.getElementById('joInspectionRemarks');
+                if (inspRemarks) inspRemarks.value = '';
+            }
+
+            selectedCustomerIds.jo = null;
+            selectedCustomerIds.merch = null;
+
             // ── Job Order fields ──────────────────────────────────────────────
             const joFields = ['joFirstName','joLastName','joContactNumber',
-                              'joVehiclePlate','joServicePrice','joNotes'];
+                              'joVehiclePlate','joServicePrice','joLaborCharge','joNotes',
+                              'joEstimatedDuration','joYearModel','joEngineNumber',
+                              'joChassisNumber','joOdometerReading','joCustomerComplaint',
+                              'joRepairRecommendation'];
             joFields.forEach(id => {
                 const el = document.getElementById(id);
-                if (el) el.value = '';
+                if (el) {
+                    el.value = '';
+                    el.readOnly = false;
+                    el.style.background = '';
+                }
             });
             // Reset service type input and hidden value
             const joServiceInput = document.getElementById('joServiceType');
@@ -12391,8 +12450,15 @@ setTimeout(function() {
             if (partsWrap) partsWrap.style.display = 'none';
             window._joSuggestedParts = [];
 
+            const todayStrAll = new Date().toISOString().split('T')[0];
+            const joDateEl = document.getElementById('joDate');
+            if (joDateEl) joDateEl.value = todayStrAll;
+            const joExpEl = document.getElementById('joExpectedRelease');
+            if (joExpEl) joExpEl.value = todayStrAll;
+            const priNorm = document.getElementById('joPriorityNormal');
+            if (priNorm) priNorm.checked = true;
+
             // ── Merchandise fields ────────────────────────────────────────────
-            resetMerchandiseForm();
             const mFields = ['merchFirstName','merchLastName','merchContactNumber'];
             mFields.forEach(id => {
                 const el = document.getElementById(id);
@@ -12976,16 +13042,46 @@ setTimeout(function() {
                     cart = [];
                     renderCart();
                     updateCheckoutBtn();
-                    resetMerchandiseForm();
+
+                    // Completely reset Job Order form & Vehicle Inspection
+                    if (typeof resetJobOrderForm === 'function') {
+                        resetJobOrderForm();
+                    }
+                    if (typeof resetMerchandiseForm === 'function') {
+                        resetMerchandiseForm();
+                    }
+                    if (typeof window.resetVehicleInspection === 'function') {
+                        window.resetVehicleInspection();
+                    } else {
+                        document.querySelectorAll('input[name="jo_inspection[]"]').forEach(cb => {
+                            cb.checked = false;
+                            const lbl = cb.closest('label');
+                            if (lbl) {
+                                lbl.style.background = '#ffffff';
+                                lbl.style.borderColor = '#e2e8f0';
+                                lbl.style.fontWeight = '500';
+                            }
+                        });
+                        const selAll = document.getElementById('joInspectSelectAll');
+                        if (selAll) { selAll.checked = false; selAll.indeterminate = false; }
+                        const inspRemarks = document.getElementById('joInspectionRemarks');
+                        if (inspRemarks) inspRemarks.value = '';
+                    }
+
                     selectedCustomerIds.jo = null;
                     selectedCustomerIds.merch = null;
 
-                    // Reset JO fields
+                    // Extra reset safeguard for JO inputs
                     ['joFirstName','joLastName','joContactNumber','joVehiclePlate',
                      'joServicePrice','joLaborCharge','joNotes','joEstimatedDuration',
-                     'joYearModel','joEngineNumber','joChassisNumber','joOdometerReading'].forEach(id => {
+                     'joYearModel','joEngineNumber','joChassisNumber','joOdometerReading',
+                     'joCustomerComplaint','joRepairRecommendation'].forEach(id => {
                         const el = document.getElementById(id);
-                        if (el) el.value = '';
+                        if (el) {
+                            el.value = '';
+                            el.readOnly = false;
+                            el.style.background = '';
+                        }
                     });
                     const joSvcInput = document.getElementById('joServiceType');
                     const joSvcHidden = document.getElementById('joServiceTypeValue');
@@ -13000,12 +13096,20 @@ setTimeout(function() {
                     if (joMechId) joMechId.value = '';
                     const joMechNm = document.getElementById('joMechanicName');
                     if (joMechNm) joMechNm.value = '';
-                    hideMechanicDropdown();
+                    if (typeof hideMechanicDropdown === 'function') hideMechanicDropdown();
                     const notesWrap = document.getElementById('joServicePriceNotes');
                     if (notesWrap) notesWrap.style.display = 'none';
                     const mechBusyWarn = document.getElementById('joMechanicBusyWarn');
                     if (mechBusyWarn) mechBusyWarn.style.display = 'none';
-                    clearSuggestedParts();
+                    if (typeof clearSuggestedParts === 'function') clearSuggestedParts();
+
+                    const todayStrTxn = new Date().toISOString().split('T')[0];
+                    const joDateTxn = document.getElementById('joDate');
+                    if (joDateTxn) joDateTxn.value = todayStrTxn;
+                    const joExpTxn = document.getElementById('joExpectedRelease');
+                    if (joExpTxn) joExpTxn.value = todayStrTxn;
+                    const priNormTxn = document.getElementById('joPriorityNormal');
+                    if (priNormTxn) priNormTxn.checked = true;
 
                     // Reset merch customer fields
                     ['merchFirstName','merchLastName','merchContactNumber'].forEach(id => {
@@ -13014,7 +13118,7 @@ setTimeout(function() {
                     });
                     const pmSel = document.getElementById('paymentMethod');
                     if (pmSel) pmSel.selectedIndex = 0;
-                    onPaymentChange();
+                    if (typeof onPaymentChange === 'function') onPaymentChange();
 
                     // If job order (has service), show clean banner alert without redundant buttons
                     if (hasService) {
@@ -13068,6 +13172,27 @@ setTimeout(function() {
         document.addEventListener('DOMContentLoaded', function() {
             cart = [];
             window.cart = [];
+
+            // Reset vehicle inspection to default unchecked state
+            if (typeof window.resetVehicleInspection === 'function') {
+                window.resetVehicleInspection();
+            }
+
+            // Set default date and priority for Job Order
+            const todayStrInit = new Date().toISOString().split('T')[0];
+            const joDateInit = document.getElementById('joDate');
+            if (joDateInit && !joDateInit.value) {
+                joDateInit.value = todayStrInit;
+            }
+            const joExpInit = document.getElementById('joExpectedRelease');
+            if (joExpInit && !joExpInit.value) {
+                joExpInit.value = todayStrInit;
+            }
+            const priNormInit = document.getElementById('joPriorityNormal');
+            if (priNormInit && !document.querySelector('input[name="joPriority"]:checked')) {
+                priNormInit.checked = true;
+            }
+
             loadServiceTypes();
             loadVehicleTypes();
             renderCart();
@@ -13086,12 +13211,27 @@ setTimeout(function() {
         });
 
         window.addEventListener('load', function() {
+            const todayStrLoad = new Date().toISOString().split('T')[0];
+            const joDateLoad = document.getElementById('joDate');
+            if (joDateLoad && !joDateLoad.value) {
+                joDateLoad.value = todayStrLoad;
+            }
+            const joExpLoad = document.getElementById('joExpectedRelease');
+            if (joExpLoad && !joExpLoad.value) {
+                joExpLoad.value = todayStrLoad;
+            }
             if (!cart || cart.length === 0) {
                 cart = [];
                 window.cart = [];
                 renderCart();
                 updateTotals(0, 0, 0);
                 updateCheckoutBtn();
+            }
+        });
+
+        window.addEventListener('pageshow', function() {
+            if (typeof window.resetVehicleInspection === 'function') {
+                window.resetVehicleInspection();
             }
         });
         </script>

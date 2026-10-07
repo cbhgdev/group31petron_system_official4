@@ -2306,9 +2306,53 @@ table.pricing-table tbody tr:hover {
 <div id="tab-services" class="tab-panel <?php echo $active_tab === 'services' ? 'active' : ''; ?>">
     
     <div class="card" style="padding:0;overflow:hidden;">
-        <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">
-            <strong style="font-size:15px;color:#002F6C;"><i class="fas fa-wrench"></i> Service Types</strong>
-            <button type="button" onclick="openAddServiceModal()" style="background:linear-gradient(135deg,#002F6C 0%,#004494 100%);color:#fff;border:none;padding:9px 18px;border-radius:6px;font-size:15.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;box-shadow:0 2px 4px rgba(0,47,108,0.2);transition:all 0.2s;">
+        <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <strong style="font-size:15px;color:#002F6C;"><i class="fas fa-wrench"></i> Service Types</strong>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input type="text" id="svcSearchInput" oninput="debouncedFilterAdminServiceTable()" placeholder="&#x1F50D; Search services..." style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;color:#334155;background:#fff;min-width:180px;">
+                <select id="serviceCategoryFilter" onchange="filterAdminServiceTable()" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;color:#334155;background:#fff;">
+                    <option value="">All Categories</option>
+                    <?php
+                    $preset_categories = [
+                        'Lubrication', 'Preventive Maintenance', 'Oil & Lubrication Services',
+                        'Engine Services', 'Brake Services', 'Tire Services', 'Battery Services',
+                        'Cooling System', 'Electrical Services', 'Air Conditioning',
+                        'Undercarriage Services', 'Cleaning Services', 'Emergency Services',
+                        'Others', 'Custom Services'
+                    ];
+                    $cat_options = [];
+                    foreach ($preset_categories as $pc) {
+                        $cat_options[$pc] = $pc;
+                    }
+                    foreach ($service_types as $st_opt) {
+                        $c = trim($st_opt['category'] ?? '');
+                        if ($c !== '' && !isset($cat_options[$c])) {
+                            $cat_options[$c] = $c;
+                        }
+                    }
+                    foreach ($cat_options as $cat_opt): ?>
+                        <option value="<?php echo htmlspecialchars($cat_opt); ?>"><?php echo htmlspecialchars($cat_opt); ?></option>
+                    <?php endforeach; ?>
+                </select>
+                <select id="svcStatusFilter" onchange="filterAdminServiceTable()" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;color:#334155;background:#fff;">
+                    <option value="">All Status</option>
+                    <option value="1">Active</option>
+                    <option value="0">Inactive</option>
+                </select>
+                <select id="svcPriceReqFilter" onchange="filterAdminServiceTable()" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;color:#334155;background:#fff;">
+                    <option value="">All Requests</option>
+                    <option value="pending">Pending Only</option>
+                    <option value="approved">None / Approved</option>
+                </select>
+                <button type="button" onclick="resetAdminServiceFilters()" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:13.5px;color:#475569;background:#fff;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all 0.2s;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='#fff'" title="Reset filters">
+                    <i class="fas fa-undo"></i> Reset
+                </button>
+            </div>
+        </div>
+        <div style="padding:10px 20px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;justify-content:flex-end;">
+            <button type="button" onclick="openAddServiceModal()" style="background:linear-gradient(135deg,#002F6C 0%,#004494 100%);color:#fff;border:none;padding:9px 18px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;box-shadow:0 2px 4px rgba(0,47,108,0.2);transition:all 0.2s;">
                 <i class="fas fa-plus-circle"></i> Add Service
             </button>
         </div>
@@ -2320,7 +2364,7 @@ table.pricing-table tbody tr:hover {
             </div>
         <?php else: ?>
             <div class="table-wrap" style="width:100% !important;overflow-x:hidden !important;box-sizing:border-box !important;">
-                <table class="pricing-table" style="width:100% !important;table-layout:fixed !important;border-collapse:collapse !important;">
+                <table class="pricing-table" id="servicePricingTable" style="width:100% !important;table-layout:fixed !important;border-collapse:collapse !important;">
                     <colgroup>
                         <col style="width:7%;">    <!-- Code -->
                         <col style="width:19%;">   <!-- Service Name -->
@@ -2345,7 +2389,7 @@ table.pricing-table tbody tr:hover {
                             <th style="color:#fff;width:15%;text-align:center;">Action</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="serviceTableBody">
                         <?php foreach ($service_types as $svc):
                             $svcId        = (int)$svc['id'];
                             $svcCode      = htmlspecialchars($svc['service_code'] ?? ('SRV-' . str_pad($svcId, 4, '0', STR_PAD_LEFT)));
@@ -2385,7 +2429,13 @@ table.pricing-table tbody tr:hover {
                                 'updated_at'         => $updatedAt,
                             ], JSON_HEX_APOS | JSON_HEX_QUOT);
                         ?>
-                        <tr>
+                        <tr class="service-row admin-svc-row"
+                            data-category="<?php echo htmlspecialchars($svcCat); ?>"
+                            data-active="<?php echo $isActive ? '1' : '0'; ?>"
+                            data-name="<?php echo strtolower(htmlspecialchars($svc['service_name'])); ?>"
+                            data-code="<?php echo strtolower(htmlspecialchars($svcCode)); ?>"
+                            data-req="<?php echo $hasPending ? 'pending' : 'approved'; ?>"
+                            <?php if (!$isActive): ?>style="background:#fff5f5;"<?php endif; ?>>
                             <!-- Code -->
                             <td style="vertical-align:middle;">
                                 <span style="font-family:monospace;font-size:13px;color:#0369a1;font-weight:700;background:#e0f2fe;padding:4px 7px;border-radius:4px;white-space:nowrap;border:1px solid #bae6fd;display:inline-block;"><?php echo $svcCode; ?></span>
@@ -2499,6 +2549,10 @@ table.pricing-table tbody tr:hover {
                         <?php endforeach; ?>
                     </tbody>
                 </table>
+            </div>
+            <div id="svcNoResults" style="display:none;padding:30px;text-align:center;color:#94a3b8;">
+                <i class="fas fa-search" style="font-size:28px;margin-bottom:8px;display:block;"></i>
+                No service types match your search/filter criteria.
             </div>
         <?php endif; ?>
     </div>
@@ -3874,6 +3928,98 @@ function filterAdminFuelByCard(type) {
     filterAdminFuelTable();
 }
 
+// ── Admin Service Types Filter (Cached & Debounced) ────────────────────────
+var _adminSvcCache = null;
+
+function invalidateAdminSvcCache() {
+    _adminSvcCache = null;
+}
+
+function getAdminSvcCache() {
+    if (_adminSvcCache === null) {
+        var rows = document.querySelectorAll('#servicePricingTable tr.service-row, #serviceTableBody tr.service-row, #tab-services tr.service-row');
+        _adminSvcCache = [];
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            _adminSvcCache.push({
+                el: row,
+                name: (row.getAttribute('data-name') || '').toLowerCase(),
+                code: (row.getAttribute('data-code') || '').toLowerCase(),
+                cat: (row.getAttribute('data-category') || '').trim(),
+                catLower: (row.getAttribute('data-category') || '').toLowerCase().trim(),
+                active: (row.getAttribute('data-active') || '').trim(),
+                req: (row.getAttribute('data-req') || '').trim()
+            });
+        }
+    }
+    return _adminSvcCache;
+}
+
+window.filterAdminServiceTable = function filterAdminServiceTable() {
+    var searchEl  = document.getElementById('svcSearchInput');
+    var q         = searchEl ? (searchEl.value || '').toLowerCase().trim() : '';
+    var catFilter = document.getElementById('serviceCategoryFilter') ? document.getElementById('serviceCategoryFilter').value.trim().toLowerCase() : '';
+    var stFilter  = document.getElementById('svcStatusFilter') ? document.getElementById('svcStatusFilter').value.trim() : '';
+    var reqFilter = document.getElementById('svcPriceReqFilter') ? document.getElementById('svcPriceReqFilter').value.trim() : '';
+
+    try {
+        sessionStorage.setItem('petron_admin_svc_q', q);
+        sessionStorage.setItem('petron_admin_svc_cat', catFilter);
+        sessionStorage.setItem('petron_admin_svc_st', stFilter);
+        sessionStorage.setItem('petron_admin_svc_req', reqFilter);
+    } catch(e) {}
+
+    var rows = getAdminSvcCache();
+    var visible = 0;
+
+    for (var i = 0; i < rows.length; i++) {
+        var item = rows[i];
+        var matchQ = !q || item.name.indexOf(q) !== -1 || item.code.indexOf(q) !== -1 || item.catLower.indexOf(q) !== -1;
+        var matchCat = !catFilter || item.catLower === catFilter;
+        var matchSt = true;
+        if (stFilter === '1') matchSt = (item.active === '1');
+        else if (stFilter === '0') matchSt = (item.active === '0');
+
+        var matchReq = true;
+        if (reqFilter === 'pending') matchReq = (item.req === 'pending');
+        else if (reqFilter === 'approved') matchReq = (item.req === 'approved' || item.req === '');
+
+        var show = matchQ && matchCat && matchSt && matchReq;
+        item.el.style.display = show ? '' : 'none';
+        if (show) visible++;
+    }
+
+    var noRes = document.getElementById('svcNoResults');
+    if (noRes) noRes.style.display = (visible === 0 && rows.length > 0) ? 'block' : 'none';
+};
+
+window.filterServiceTable = window.filterAdminServiceTable;
+
+var _debouncedAdminSvcTimer = null;
+window.debouncedFilterAdminServiceTable = function debouncedFilterAdminServiceTable() {
+    clearTimeout(_debouncedAdminSvcTimer);
+    _debouncedAdminSvcTimer = setTimeout(window.filterAdminServiceTable, 160);
+};
+
+window.resetAdminServiceFilters = function resetAdminServiceFilters() {
+    var searchEl  = document.getElementById('svcSearchInput');
+    var catFilter = document.getElementById('serviceCategoryFilter');
+    var stFilter  = document.getElementById('svcStatusFilter');
+    var reqFilter = document.getElementById('svcPriceReqFilter');
+    if (searchEl) searchEl.value = '';
+    if (catFilter) catFilter.value = '';
+    if (stFilter) stFilter.value = '';
+    if (reqFilter) reqFilter.value = '';
+    try {
+        sessionStorage.removeItem('petron_admin_svc_q');
+        sessionStorage.removeItem('petron_admin_svc_cat');
+        sessionStorage.removeItem('petron_admin_svc_st');
+        sessionStorage.removeItem('petron_admin_svc_req');
+    } catch(e) {}
+    window.filterAdminServiceTable();
+};
+window.resetServiceFilters = window.resetAdminServiceFilters;
+
 var _currentAdminViewFuel = null;
 
 // ── Admin View Fuel Modal ──────────────────────────────────────────────────
@@ -4619,6 +4765,10 @@ function switchTab(tabName) {
     try {
         sessionStorage.setItem('petron_admin_active_tab', tabName);
     } catch (e) {}
+
+    if (tabName === 'services' && typeof window.filterAdminServiceTable === 'function') {
+        window.filterAdminServiceTable();
+    }
 }
 
 (function() {
@@ -6347,6 +6497,33 @@ document.addEventListener('DOMContentLoaded', function() {
                 }, 2500);
             }
         }, 350);
+    }
+
+    // Restore Service Filters from sessionStorage
+    try {
+        var savedAdminSvcQ   = sessionStorage.getItem('petron_admin_svc_q');
+        var savedAdminSvcCat = sessionStorage.getItem('petron_admin_svc_cat');
+        var savedAdminSvcSt  = sessionStorage.getItem('petron_admin_svc_st');
+        var savedAdminSvcReq = sessionStorage.getItem('petron_admin_svc_req');
+
+        var asQEl   = document.getElementById('svcSearchInput');
+        var asCatEl = document.getElementById('serviceCategoryFilter');
+        var asStEl  = document.getElementById('svcStatusFilter');
+        var asReqEl = document.getElementById('svcPriceReqFilter');
+
+        if (asQEl   && savedAdminSvcQ   !== null && savedAdminSvcQ !== '')   asQEl.value   = savedAdminSvcQ;
+        if (asCatEl && savedAdminSvcCat !== null && savedAdminSvcCat !== '') asCatEl.value = savedAdminSvcCat;
+        if (asStEl  && savedAdminSvcSt  !== null && savedAdminSvcSt !== '')  asStEl.value  = savedAdminSvcSt;
+        if (asReqEl && savedAdminSvcReq !== null && savedAdminSvcReq !== '') asReqEl.value = savedAdminSvcReq;
+    } catch(e) {}
+
+    var adminSvcQInput = document.getElementById('svcSearchInput');
+    if (adminSvcQInput && typeof window.debouncedFilterAdminServiceTable === 'function') {
+        adminSvcQInput.addEventListener('input', window.debouncedFilterAdminServiceTable);
+    }
+
+    if (tab === 'services' && typeof window.filterAdminServiceTable === 'function') {
+        window.filterAdminServiceTable();
     }
 });
 </script>

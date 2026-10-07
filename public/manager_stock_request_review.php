@@ -1473,32 +1473,76 @@ body .main,
     background: #fff;
     border: 1px solid #e2e8f0;
     border-radius: 14px;
-    overflow-x: auto;
+    overflow-x: hidden !important;
+    width: 100% !important;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
     margin-bottom: 24px;
 }
+.purchase-history-table-wrap {
+    overflow-x: hidden !important;
+    width: 100% !important;
+}
 .table-pr {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13.5px;
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 13px !important;
+    table-layout: auto !important;
 }
 .table-pr th {
-    background: #f8fafc;
-    color: #475569;
-    font-weight: 700;
-    text-transform: uppercase;
-    font-size: 11px;
-    letter-spacing: .5px;
-    padding: 16px 20px;
-    border-bottom: 1px solid #e2e8f0;
-    text-align: left;
+    background: #002F6C !important;
+    color: #ffffff !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    font-size: 11px !important;
+    letter-spacing: .4px !important;
+    padding: 11px 9px !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    text-align: left !important;
+    white-space: nowrap !important;
 }
 .table-pr td {
-    padding: 16px 20px;
-    border-bottom: 1px solid #e2e8f0;
-    color: #334155;
-    vertical-align: middle;
-    text-decoration: none;
+    padding: 11px 9px !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    color: #334155 !important;
+    vertical-align: middle !important;
+    text-decoration: none !important;
+    font-size: 12.5px !important;
+}
+#purchaseHistoryTable {
+    width: 100% !important;
+    table-layout: auto !important;
+}
+#purchaseHistoryTable th,
+#purchaseHistoryTable td {
+    padding: 11px 8px !important;
+}
+#purchaseHistoryTable th:first-child,
+#purchaseHistoryTable td:first-child {
+    padding-left: 14px !important;
+}
+#purchaseHistoryTable th:last-child,
+#purchaseHistoryTable td:last-child {
+    padding-right: 14px !important;
+    text-align: center !important;
+}
+#purchaseHistoryTable .btn-pr {
+    padding: 5px 8px !important;
+    font-size: 11px !important;
+    gap: 4px !important;
+    margin-right: 2px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    line-height: 1 !important;
+    height: auto !important;
+    white-space: nowrap !important;
+}
+#purchaseHistoryTable .btn-pr:last-child {
+    margin-right: 0 !important;
+}
+#purchaseHistoryTable .status-badge {
+    padding: 3px 8px !important;
+    font-size: 10.5px !important;
+    white-space: nowrap !important;
 }
 .table-pr td a,
 .table-pr td span,
@@ -1573,26 +1617,43 @@ body.sidebar-collapsed .modal-overlay {
     to { opacity: 1; transform: scale(1); }
 }
 .modal-header {
-    padding: 20px 24px;
-    background: #002F6C;
-    color: #fff;
-    border-radius: 16px 16px 0 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
+    padding: 18px 24px !important;
+    background: #002F6C !important;
+    color: #ffffff !important;
+    border-radius: 16px 16px 0 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    flex-shrink: 0 !important;
 }
+.modal-header h2,
+.modal-header h3,
+.modal-header h4,
+.modal-header .modal-title,
+.modal-header #modalPoTitle,
+.modal-header span,
 .modal-title {
-    font-size: 17px;
-    font-weight: 800;
-    margin: 0;
-    display: flex;
-    align-items: flex-end;
-    gap: 10px;
-    color: #ffffff !important; /* Force title text to be white */
+    font-size: 18px !important;
+    font-weight: 800 !important;
+    margin: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    color: #ffffff !important; /* Force title text to be clearly visible white */
+    line-height: 1.2 !important;
+}
+.modal-header i {
+    color: #60a5fa !important;
+    font-size: 19px !important;
+}
+.modal-header button {
+    color: #ffffff !important;
+}
+.modal-header button i {
+    color: #ffffff !important;
 }
 .modal-close {
-    display: none; /* Hide X button as requested */
+    display: none;
 }
 .modal-body {
     padding: 24px;
@@ -2534,8 +2595,8 @@ body.sidebar-collapsed .modal-overlay {
 
         <!-- Purchase History Table -->
 
-        <div style="overflow-x: auto;">
-            <table class="table-pr" id="purchaseHistoryTable">
+        <div class="purchase-history-table-wrap" style="width: 100%; overflow-x: hidden; border-radius: 8px;">
+            <table class="table-pr" id="purchaseHistoryTable" style="width: 100%; table-layout: auto;">
                 <thead>
                     <tr style="background: #002F6C; color: #fff;">
                         <th style="color: #fff;">PO No.</th>
@@ -2544,7 +2605,7 @@ body.sidebar-collapsed .modal-overlay {
                         <th style="color: #fff;">Date Ordered</th>
                         <th style="color: #fff;">Date Received</th>
                         <th style="color: #fff;">Total Amount</th>
-                        <th style="color: #fff;">Status</th>
+                        <th style="color: #fff; text-align: center;">Status</th>
                         <th style="color: #fff; text-align: center;">Actions</th>
                     </tr>
                 </thead>
@@ -2558,21 +2619,21 @@ body.sidebar-collapsed .modal-overlay {
                             $ph_batch_param = !empty($ph_item['batch_id']) ? $ph_item['batch_id'] : $ph_item['po_number'];
                         ?>
                         <tr data-po="<?= htmlspecialchars($ph_item['po_number']) ?>" data-batch="<?= htmlspecialchars($ph_batch_param) ?>" data-category="<?= $ph_item['category_type'] ?>" data-supplier="<?= htmlspecialchars($ph_item['supplier_name']) ?>" data-status="<?= htmlspecialchars($ph_item['status']) ?>" data-date="<?= date('Y-m-d', strtotime($ph_item['date_ordered'])) ?>">
-                            <td style="font-weight: 800; color: #002F6C; font-family: monospace; font-size: 14px;">
+                            <td style="font-weight: 800; color: #002F6C; font-family: monospace; font-size: 13.5px;">
                                 <?= htmlspecialchars($ph_item['po_number']) ?>
                             </td>
                             <td>
                                 <?php if ($ph_item['category_type'] === 'fuel'): ?>
-                                    <span style="background:#eff6ff; color:#1d4ed8; font-weight:700; padding:4px 10px; border-radius:12px; font-size:12px;"><i class="fas fa-gas-pump"></i> Fuel</span>
+                                    <span style="background:#eff6ff; color:#1d4ed8; font-weight:700; padding:3px 8px; border-radius:12px; font-size:11.5px;"><i class="fas fa-gas-pump"></i> Fuel</span>
                                 <?php else: ?>
-                                    <span style="background:#f0fdf4; color:#16a34a; font-weight:700; padding:4px 10px; border-radius:12px; font-size:12px;"><i class="fas fa-box"></i> Merchandise</span>
+                                    <span style="background:#f0fdf4; color:#16a34a; font-weight:700; padding:3px 8px; border-radius:12px; font-size:11.5px;"><i class="fas fa-box"></i> Merchandise</span>
                                 <?php endif; ?>
                             </td>
-                            <td style="font-weight: 600; color: #334155;"><?= htmlspecialchars($ph_item['supplier_name']) ?></td>
-                            <td style="color: #64748b; white-space: nowrap;"><?= date('M d, Y', strtotime($ph_item['date_ordered'])) ?></td>
-                            <td style="color: #64748b; white-space: nowrap;"><?= !empty($ph_item['date_received']) && $ph_item['date_received'] !== '0000-00-00 00:00:00' ? date('M d, Y', strtotime($ph_item['date_received'])) : '—' ?></td>
-                            <td style="font-weight: 800; color: #002F6C;">₱<?= number_format((float)$ph_item['total_amount'], 2) ?></td>
-                            <td>
+                            <td style="font-weight: 600; color: #334155; font-size: 12.5px;"><?= htmlspecialchars($ph_item['supplier_name']) ?></td>
+                            <td style="color: #64748b; white-space: nowrap; font-size: 12px;"><?= date('M d, Y', strtotime($ph_item['date_ordered'])) ?></td>
+                            <td style="color: #64748b; white-space: nowrap; font-size: 12px;"><?= !empty($ph_item['date_received']) && $ph_item['date_received'] !== '0000-00-00 00:00:00' ? date('M d, Y', strtotime($ph_item['date_received'])) : '—' ?></td>
+                            <td style="font-weight: 800; color: #002F6C; font-size: 13px;">₱<?= number_format((float)$ph_item['total_amount'], 2) ?></td>
+                            <td style="text-align: center;">
                                 <?php
                                 $st = strtolower($ph_item['status']);
                                 $badge_class = 'status-pending';
@@ -2583,15 +2644,9 @@ body.sidebar-collapsed .modal-overlay {
                                 <span class="status-badge <?= $badge_class ?>"><?= htmlspecialchars($ph_item['status']) ?></span>
                             </td>
                             <td style="text-align: center; white-space: nowrap;">
-                                <button type="button" onclick="openPurchaseHistoryModal(<?= htmlspecialchars(json_encode($ph_item), ENT_QUOTES, 'UTF-8') ?>)" class="btn-pr btn-outline-pr" title="View Details" style="padding:5px 12px; font-size:12px; margin-right:4px;">
+                                <button type="button" onclick="openPurchaseHistoryModal(<?= htmlspecialchars(json_encode($ph_item), ENT_QUOTES, 'UTF-8') ?>)" class="btn-pr btn-outline-pr" title="View Details" style="padding:4px 10px; font-size:11px;">
                                     <i class="fas fa-eye"></i> View
                                 </button>
-                                <a href="print_po_new.php?po_id=<?= urlencode($ph_item['po_number']) ?>&batch_id=<?= urlencode($ph_batch_param) ?>&type=<?= urlencode($ph_item['category_type']) ?>" target="_blank" class="btn-pr btn-outline-pr" title="Print Purchase Order" style="padding:5px 12px; font-size:12px; text-decoration:none; margin-right:4px;">
-                                    <i class="fas fa-print"></i> Print PO
-                                </a>
-                                <a href="print_supplier_invoice.php?po_id=<?= urlencode($ph_item['po_number']) ?>&batch_id=<?= urlencode($ph_batch_param) ?>&type=<?= urlencode($ph_item['category_type']) ?>" target="_blank" class="btn-pr btn-outline-pr" title="Print Invoice" style="padding:5px 12px; font-size:12px; text-decoration:none;">
-                                    <i class="fas fa-file-invoice"></i> Invoice
-                                </a>
                             </td>
                         </tr>
                         <?php endforeach; ?>
@@ -2634,11 +2689,11 @@ body.sidebar-collapsed .modal-overlay {
     <!-- View Purchase History Modal -->
     <div id="viewPurchaseHistoryModal" class="modal-overlay">
         <div class="modal-box" style="max-width: 900px;">
-            <div class="modal-header" style="background: #002F6C; color: #fff; padding: 18px 24px; display: flex; justify-content: space-between; align-items: flex-end; border-radius: 16px 16px 0 0;">
-                <h3 style="margin: 0; font-size: 18px; font-weight: 800; display: flex; align-items: flex-end; gap: 10px;">
-                    <i class="fas fa-file-invoice"></i> <span id="modalPoTitle">Purchase History Details</span>
+            <div class="modal-header" style="background: #002F6C; color: #ffffff !important; padding: 18px 24px; display: flex; align-items: center; border-radius: 16px 16px 0 0;">
+                <h3 class="modal-title" style="margin: 0; font-size: 18px; font-weight: 800; color: #ffffff !important; display: flex; align-items: center; gap: 10px;">
+                    <i class="fas fa-file-invoice" style="color: #60a5fa !important; font-size: 20px;"></i>
+                    <span id="modalPoTitle" style="color: #ffffff !important; font-weight: 800; font-size: 18px;">Purchase Order Details</span>
                 </h3>
-                <button type="button" onclick="closePurchaseHistoryModal()" style="background: none; border: none; color: #fff; font-size: 20px; cursor: pointer;"><i class="fas fa-times"></i></button>
             </div>
             
             <div class="modal-body" style="padding: 24px; overflow-y: auto; max-height: calc(100vh - 180px);">
@@ -2701,8 +2756,13 @@ body.sidebar-collapsed .modal-overlay {
     <!-- Return Request Modal -->
     <div class="modal-overlay" id="returnPrModal" style="z-index: 10030;">
         <div class="modal-box" style="max-width: 480px;">
-            <div class="modal-header" style="background: #b91c1c;">
-                <h3 class="modal-title"><i class="fas fa-undo"></i> Return Purchase Request</h3>
+            <div class="modal-header" style="background: #b91c1c; color: #ffffff !important; padding: 18px 24px; display: flex; justify-content: space-between; align-items: center; border-radius: 16px 16px 0 0;">
+                <h3 class="modal-title" style="margin: 0; font-size: 18px; font-weight: 800; color: #ffffff !important; display: flex; align-items: center; gap: 10px;">
+                    <i class="fas fa-undo" style="color: #fca5a5 !important; font-size: 19px;"></i> Return Purchase Request
+                </h3>
+                <button type="button" onclick="closeModal('returnPrModal')" style="background: none; border: none; color: #ffffff !important; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 6px; transition: background 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.18)'" onmouseout="this.style.background='none'" title="Close">
+                    <i class="fas fa-times" style="color: #ffffff !important;"></i>
+                </button>
             </div>
             <form method="POST" action="" id="returnPrForm">
                 <input type="hidden" name="action" value="return_pr_to_staff">
@@ -2959,8 +3019,13 @@ document.addEventListener('DOMContentLoaded', function() {
 function openPurchaseHistoryModal(item) {
     currentPoItemForModal = item;
     
-    document.getElementById('modalPoTitle').innerText = 'Purchase History - ' + (item.po_number || 'N/A');
-    document.getElementById('mPoNo').innerText = item.po_number || 'N/A';
+    var poNum = item.po_number || 'N/A';
+    var titleEl = document.getElementById('modalPoTitle');
+    if (titleEl) {
+        titleEl.textContent = 'Purchase Order Details — ' + poNum;
+        titleEl.style.color = '#ffffff';
+    }
+    document.getElementById('mPoNo').innerText = poNum;
     document.getElementById('mCategory').innerHTML = item.category_type === 'fuel' ? '<i class="fas fa-gas-pump"></i> Fuel' : '<i class="fas fa-box"></i> Merchandise';
     document.getElementById('mSupplier').innerText = item.supplier_name || 'Petron Corporation';
     document.getElementById('mRequestedBy').innerText = item.requested_by_name || 'Manager';
@@ -3731,10 +3796,13 @@ function onDirectFuelSelect(selectElem) {
 <!-- DIRECT CREATE PURCHASE ORDER MODAL -->
 <div id="directPoModal" class="modal-overlay">
     <div class="modal-box" style="max-width: 980px; width: 100%; margin: auto; max-height: calc(100vh - 130px);">
-        <div class="modal-header" style="background: #002F6C; padding: 18px 24px; border-radius: 16px 16px 0 0;">
-            <h2 class="modal-title" style="margin: 0; font-size: 18px; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 10px;">
-                <i class="fas fa-file-invoice" style="color: #60a5fa;"></i> Create Direct Purchase Order
+        <div class="modal-header" style="background: #002F6C; color: #ffffff !important; padding: 18px 24px; border-radius: 16px 16px 0 0; display: flex; justify-content: space-between; align-items: center;">
+            <h2 class="modal-title" style="margin: 0; font-size: 18px; font-weight: 800; color: #ffffff !important; display: flex; align-items: center; gap: 10px;">
+                <i class="fas fa-file-invoice" style="color: #60a5fa !important; font-size: 20px;"></i> Create Direct Purchase Order
             </h2>
+            <button type="button" onclick="closeModal('directPoModal')" style="background: none; border: none; color: #ffffff !important; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 6px; transition: background 0.15s;" onmouseover="this.style.background='rgba(255,255,255,0.18)'" onmouseout="this.style.background='none'" title="Close">
+                <i class="fas fa-times" style="color: #ffffff !important;"></i>
+            </button>
         </div>
 
         <!-- PO Type Switcher Buttons — matches sub-tab-nav design -->
