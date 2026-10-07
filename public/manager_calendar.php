@@ -15,153 +15,7 @@ if (!$station_id) { die('Error: Not assigned to a station.'); }
 $user_id = $me['id'];
 
 // Handle AJAX requests
-if (isset($_POST['action']) && $_POST['action'] === 'save_event') {
-    header('Content-Type: application/json');
-    
-    try {
-        $event_id = $_POST['event_id'] ?? '';
-        $event_date = calendar_normalize_date($_POST['event_date'] ?? '');
-        $event_type = calendar_normalize_event_type($_POST['event_type'] ?? '');
-        $work_description = calendar_clean_text($_POST['work_description'] ?? '');
-        $start_time = calendar_normalize_time($_POST['start_time'] ?? '');
-        $end_time = calendar_normalize_time($_POST['end_time'] ?? '', $start_time);
-        $status = calendar_normalize_status($_POST['status'] ?? 'pending');
 
-        if ($event_date === '' || $event_type === '' || $work_description === '') {
-            echo json_encode(['success' => false, 'message' => 'Please complete the date, type, and description.']);
-            exit;
-        }
-
-        if ($start_time !== '00:00:00' && $end_time !== '00:00:00' && $end_time < $start_time) {
-            echo json_encode(['success' => false, 'message' => 'End time must be later than start time.']);
-            exit;
-        }
-        
-        // Collect all dynamic fields into metadata JSON
-        $metadata = [];
-        
-        // Event type specific fields
-        switch($event_type) {
-            case 'staff_shift':
-                $metadata['shift_type'] = $_POST['shift_type'] ?? '';
-                $metadata['shift_status'] = $_POST['shift_status'] ?? '';
-                break;
-                
-            case 'job_order':
-                $metadata['service_type'] = $_POST['service_type'] ?? '';
-                $metadata['customer_name'] = $_POST['customer_name'] ?? '';
-                $metadata['job_status'] = $_POST['job_status'] ?? '';
-                break;
-                
-            case 'fuel_delivery':
-            case 'merchandise_delivery':
-                $metadata['supplier'] = $_POST['supplier'] ?? '';
-                $metadata['product'] = $_POST['product'] ?? '';
-                $metadata['expected_qty'] = $_POST['expected_qty'] ?? 0;
-                $metadata['actual_qty'] = $_POST['actual_qty'] ?? 0;
-                $metadata['variance_qty'] = floatval($_POST['actual_qty'] ?? 0) - floatval($_POST['expected_qty'] ?? 0);
-                break;
-                
-            case 'fuel_calibration':
-            case 'meter_reading':
-                $metadata['pump_number'] = $_POST['pump_number'] ?? '';
-                $metadata['expected_reading'] = $_POST['expected_reading'] ?? 0;
-                $metadata['actual_reading'] = $_POST['actual_reading'] ?? 0;
-                $expected = floatval($_POST['expected_reading'] ?? 0);
-                $actual = floatval($_POST['actual_reading'] ?? 0);
-                $variance = $actual - $expected;
-                $metadata['variance'] = $variance;
-                $metadata['variance_percent'] = $expected > 0 ? ($variance / $expected) * 100 : 0;
-                break;
-                
-            case 'customer_transaction':
-            case 'payment_collection':
-                $metadata['customer_id'] = $_POST['customer_id'] ?? '';
-                $metadata['amount'] = $_POST['amount'] ?? 0;
-                $metadata['payment_status'] = $_POST['payment_status'] ?? 'unpaid';
-                break;
-        }
-        
-        $metadata_json = json_encode($metadata);
-        
-        // Check for schedule conflicts before saving
-        if (calendar_has_time_range($start_time, $end_time) && $status !== 'cancelled' && empty($_POST['force_save'])) {
-            $conflict_check = $pdo->prepare("SELECT COUNT(*) FROM staff_calendar_events 
-                WHERE staff_encoder_id = ? 
-                AND event_date = ? 
-                AND start_time IS NOT NULL 
-                AND end_time IS NOT NULL
-                AND status != 'cancelled'
-                AND id != ?
-                AND (
-                    (start_time < ? AND end_time > ?)
-                    OR (start_time < ? AND end_time > ?)
-                    OR (start_time >= ? AND end_time <= ?)
-                )");
-            $conflict_check->execute([
-                $user_id, 
-                $event_date, 
-                $event_id ?: 0,
-                $end_time, $start_time,  // Check if new event overlaps existing
-                $end_time, $start_time,  // Check if new event overlaps existing
-                $start_time, $end_time   // Check if new event contains existing
-            ]);
-            
-            $conflict_count = $conflict_check->fetchColumn();
-            if ($conflict_count > 0) {
-                echo json_encode([
-                    'success' => false, 
-                    'message' => 'Schedule conflict detected! You have overlapping events on this date.',
-                    'conflict' => true
-                ]);
-                exit;
-            }
-        }
-        
-        // Get or create event_type_id
-        $event_type_id = calendar_event_type_id($pdo, $event_type);
-        
-        // Check if metadata column exists, if not add it
-        try {
-            $pdo->query("SELECT metadata FROM staff_calendar_events LIMIT 1");
-        } catch (Exception $e) {
-            // Add metadata column if it doesn't exist
-            try {
-                $pdo->exec("ALTER TABLE staff_calendar_events ADD COLUMN metadata TEXT NULL");
-            } catch (Exception $e2) {}
-        }
-        
-        if ($event_id) {
-            // Update existing event
-            $update_stmt = $pdo->prepare("UPDATE staff_calendar_events SET 
-                event_date = ?, event_type_id = ?, work_description = ?, 
-                start_time = ?, end_time = ?, status = ?, metadata = ?
-                WHERE id = ? AND staff_encoder_id = ?");
-            $update_stmt->execute([
-                $event_date, $event_type_id, $work_description, 
-                $start_time, $end_time, $status, $metadata_json,
-                $event_id, $user_id
-            ]);
-            
-            echo json_encode(['success' => true, 'message' => 'Event updated successfully']);
-        } else {
-            // Create new event
-            $insert_stmt = $pdo->prepare("INSERT INTO staff_calendar_events 
-                (station_id, staff_encoder_id, event_type_id, event_date, work_description, 
-                start_time, end_time, status, metadata, created_at) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-            $insert_stmt->execute([
-                $station_id, $user_id, $event_type_id, $event_date, $work_description, 
-                $start_time, $end_time, $status, $metadata_json
-            ]);
-            
-            echo json_encode(['success' => true, 'message' => 'Event created successfully']);
-        }
-    } catch (Exception $e) {
-        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
-    }
-    exit;
-}
 
 if (isset($_POST['action']) && $_POST['action'] === 'validate_event') {
     header('Content-Type: application/json');
@@ -1413,6 +1267,7 @@ function closeDetailsModal() {
 // Click on day — Always shows Day Overview modal with all events & quick add
 function clickDay(date) {
     const dayEvts = (allCalendarEvents && allCalendarEvents[date]) ? allCalendarEvents[date] : [];
+    if (dayEvts.length === 0) return;
     showDayOverviewModal(date, dayEvts);
 }
 
@@ -1436,9 +1291,6 @@ function showDayOverviewModal(date, events) {
                 </div>
                 <div style="font-weight:700; font-size:14px; color:#1e293b; margin-bottom:4px;">No scheduled events on this date</div>
                 <div style="font-size:12px; color:#64748b; margin-bottom:18px;">There are no operational events scheduled for this day.</div>
-                <button type="button" onclick="closeDayOverviewModal(); showEventModal('${date}');" style="padding:8px 16px; background:#002F70; color:#fff; border:none; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:6px;">
-                    <i class="fas fa-plus"></i> Schedule Event on this Day
-                </button>
             </div>
         `;
     } else {
@@ -1846,88 +1698,6 @@ function handleEventTypeChange() {
                 <!-- Only Close button rendered via JS -->
             </div>
         </div>
-    </div>
-</div>
-
-<!-- Event Modal -->
-<div id="eventModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
-    <div style="background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.2); width: 90%; max-width: 500px; max-height: 90vh; overflow-y: auto;">
-        <div style="padding: 24px; border-bottom: 1px solid #dadce0;">
-            <h2 id="modalTitle" style="margin: 0; font-size: 22px; color: #3c4043; font-weight: 400;">Create Event</h2>
-        </div>
-        
-        <form id="eventForm" style="padding: 24px;">
-            <input type="hidden" id="eventId" name="event_id">
-            
-            <div style="margin-bottom: 20px;">
-                <label style="display: block; margin-bottom: 8px; font-size: 14px; color: #3c4043; font-weight: 500;">Date</label>
-                <input type="date" id="eventDate" name="event_date" required style="width: 100%; padding: 10px; border: 1px solid #dadce0; border-radius: 4px; font-size: 14px;">
-            </div>
-            
-            <div style="margin-bottom: 20px;">
-                <label style="display: block; margin-bottom: 8px; font-size: 14px; color: #3c4043; font-weight: 500;">Event Type</label>
-                <select id="eventType" name="event_type" required onchange="handleEventTypeChange()" style="width: 100%; padding: 10px; border: 1px solid #dadce0; border-radius: 4px; font-size: 14px;">
-                    <option value="">Select type...</option>
-                    <optgroup label="Work Assignments">
-                        <option value="job_order">Job Order</option>
-                        <option value="fuel_calibration">Fuel Calibration</option>
-                        <option value="meter_reading">Meter Reading</option>
-                    </optgroup>
-                    <optgroup label="Deliveries">
-                        <option value="fuel_delivery">Fuel Delivery</option>
-                        <option value="merchandise_delivery">Merchandise Delivery</option>
-                    </optgroup>
-                    <optgroup label="Customer & Payments">
-                        <option value="customer_transaction">Customer Transaction</option>
-                        <option value="payment_collection">Payment Collection</option>
-                    </optgroup>
-                    <optgroup label="Other">
-                        <option value="maintenance">Maintenance</option>
-                        <option value="meeting">Meeting</option>
-                        <option value="training">Training</option>
-                        <option value="other">Other</option>
-                    </optgroup>
-                </select>
-            </div>
-            
-            <!-- Dynamic fields based on event type -->
-            <div id="dynamicFields"></div>
-            
-            <div style="margin-bottom: 20px;">
-                <label style="display: block; margin-bottom: 8px; font-size: 14px; color: #3c4043; font-weight: 500;">Description</label>
-                <textarea id="eventDescription" name="work_description" required rows="3" style="width: 100%; padding: 10px; border: 1px solid #dadce0; border-radius: 4px; font-size: 14px; resize: vertical;"></textarea>
-            </div>
-            
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px;">
-                <div>
-                    <label style="display: block; margin-bottom: 8px; font-size: 14px; color: #3c4043; font-weight: 500;">Start Time</label>
-                    <input type="time" id="eventStartTime" name="start_time" style="width: 100%; padding: 10px; border: 1px solid #dadce0; border-radius: 4px; font-size: 14px;">
-                </div>
-                <div>
-                    <label style="display: block; margin-bottom: 8px; font-size: 14px; color: #3c4043; font-weight: 500;">End Time</label>
-                    <input type="time" id="eventEndTime" name="end_time" style="width: 100%; padding: 10px; border: 1px solid #dadce0; border-radius: 4px; font-size: 14px;">
-                </div>
-            </div>
-            
-            <div style="margin-bottom: 20px;">
-                <label style="display: block; margin-bottom: 8px; font-size: 14px; color: #3c4043; font-weight: 500;">Status</label>
-                <select id="eventStatus" name="status" style="width: 100%; padding: 10px; border: 1px solid #dadce0; border-radius: 4px; font-size: 14px;">
-                    <option value="pending">Pending</option>
-                    <option value="approved">Approved</option>
-                    <option value="completed">Completed</option>
-                    <option value="cancelled">Cancelled</option>
-                </select>
-            </div>
-            
-            <div style="display: flex; gap: 12px; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #dadce0;">
-                <button type="button" onclick="closeModal()" style="padding: 10px 24px; border: 1px solid #dadce0; background: #fff; color: #3c4043; border-radius: 4px; font-size: 14px; cursor: pointer; font-weight: 500;">
-                    Cancel
-                </button>
-                <button type="submit" style="padding: 10px 24px; border: none; background: #1a73e8; color: #fff; border-radius: 4px; font-size: 14px; cursor: pointer; font-weight: 500;">
-                    Save
-                </button>
-            </div>
-        </form>
     </div>
 </div>
 

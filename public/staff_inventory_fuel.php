@@ -123,7 +123,8 @@ try {
 // â”€â”€ Fetch today's calibration/adjustments per fuel_type â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $adj_lookup = [];
 try {
-    $s = $pdo->prepare("SELECT fi.fuel_type, COALESCE(SUM(fa.liters),0) AS total_adj FROM fuel_adjustments fa JOIN fuel_inventory fi ON fa.fuel_type_id=fi.fuel_type_id AND fi.station_id=fa.station_id WHERE fa.station_id=? AND DATE(fa.adjustment_date)=CURDATE() GROUP BY fi.fuel_type");
+    // NOTE: Stock-In / tank-dip / approved adjustments already update fuel_inventory.current_level; do not subtract them again (AND 1=0).
+    $s = $pdo->prepare("SELECT fi.fuel_type, COALESCE(SUM(fa.liters),0) AS total_adj FROM fuel_adjustments fa JOIN fuel_inventory fi ON fa.fuel_type_id=fi.fuel_type_id AND fi.station_id=fa.station_id WHERE fa.station_id=? AND 1=0 AND DATE(fa.adjustment_date)=CURDATE() GROUP BY fi.fuel_type");
     $s->execute([$station_id]);
     foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $adj_lookup[strtolower(trim($row['fuel_type']))] = (float)$row['total_adj'];
@@ -1585,7 +1586,22 @@ body.sidebar-collapsed .modal-overlay,
         </div>
 
         <div class="sr-modal-body">
-            <div style="display:grid; grid-template-columns:280px minmax(0,1fr); gap:20px;">
+            <style>
+                .sr-table {
+                    width: 100% !important;
+                    min-width: 0 !important;
+                    table-layout: fixed !important;
+                }
+                .sr-table td, .sr-table th {
+                    white-space: normal !important;
+                    word-wrap: break-word !important;
+                    overflow-wrap: break-word !important;
+                }
+                #fsrCheckList > div {
+                    overflow-x: hidden !important;
+                }
+            </style>
+            <div style="display:grid; grid-template-columns:240px minmax(0,1fr); gap:20px;">
                 <!-- LEFT COLUMN: Request Information -->
                 <div>
                     <div style="background:#f8fafc; padding:14px; border:1px solid #e2e8f0; border-radius:8px; margin-bottom:14px;">
@@ -1613,7 +1629,7 @@ body.sidebar-collapsed .modal-overlay,
                 </div>
 
                 <!-- RIGHT COLUMN: Fuel Selection -->
-                <div style="display:flex; flex-direction:column;">
+                <div style="display:flex; flex-direction:column; min-width: 0;">
                     <label style="display:block;font-size:12.5px;font-weight:700;color:#374151;margin-bottom:6px;">
                         <i class="fas fa-gas-pump" style="color:#eab308;margin-right:4px;"></i> Fuel Types <span style="color:#dc2626;">*</span>
                     </label>
@@ -1626,7 +1642,7 @@ body.sidebar-collapsed .modal-overlay,
                     </div>
 
                     <!-- Fuel list with checkboxes -->
-                    <div id="fsrCheckList"></div>
+                    <div id="fsrCheckList" style="min-width: 0;"></div>
                 </div>
             </div>
 
@@ -1703,7 +1719,7 @@ function renderFsrCheckList() {
         '</tr>';
     }).join('');
     var html = '<div style="max-height:360px;overflow:auto;border:1px solid #e2e8f0;border-radius:8px;">' +
-        '<table class="sr-table" style="width:100%;border-collapse:collapse;font-size:12px;">' +
+        '<table class="sr-table" style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;">' +
             '<thead><tr style="background:#002F70;color:#fff;position:sticky;top:0;z-index:5;">' +
                 '<th style="width:7%;text-align:center;padding:8px 6px;font-size:11.5px;font-weight:800;text-transform:uppercase;">Select</th>' +
                 '<th style="width:24%;text-align:left;padding:8px 6px;font-size:11.5px;font-weight:800;text-transform:uppercase;">Fuel Type</th>' +

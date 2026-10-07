@@ -146,7 +146,8 @@ try {
 
 $adj_lookup = [];
 try {
-    $s = $pdo->prepare("SELECT fi.fuel_type, COALESCE(SUM(fa.liters),0) AS tot FROM fuel_adjustments fa JOIN fuel_inventory fi ON fa.fuel_type_id=fi.fuel_type_id AND fi.station_id=fa.station_id WHERE fa.station_id=? AND DATE(fa.adjustment_date)=CURDATE() GROUP BY fi.fuel_type");
+    // NOTE: Stock-In / tank-dip / approved adjustments already update fuel_inventory.current_level; do not subtract them again (AND 1=0).
+    $s = $pdo->prepare("SELECT fi.fuel_type, COALESCE(SUM(fa.liters),0) AS tot FROM fuel_adjustments fa JOIN fuel_inventory fi ON fa.fuel_type_id=fi.fuel_type_id AND fi.station_id=fa.station_id WHERE fa.station_id=? AND 1=0 AND DATE(fa.adjustment_date)=CURDATE() GROUP BY fi.fuel_type");
     $s->execute([$station_id]);
     foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $row)
         $adj_lookup[strtolower(trim($row['fuel_type']))] = (float)$row['tot'];

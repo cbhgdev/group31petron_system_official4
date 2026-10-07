@@ -1250,8 +1250,6 @@ if ($active_tab === 'movement' || in_array($active_tab, ['stockin', 'stockout', 
                 }
             }
         }
-    } catch (Exception $e) {}
-}
 
 // Stock-In list (manager full view with PO No., Status)
 $mgr_stock_in_list = [];

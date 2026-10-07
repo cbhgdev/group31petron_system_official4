@@ -164,7 +164,9 @@ try {
 
 $adj_lookup = [];
 try {
-    $s = $pdo->prepare("SELECT fi.fuel_type, COALESCE(SUM(fa.liters),0) AS total_adj FROM fuel_adjustments fa JOIN fuel_inventory fi ON fa.fuel_type_id = fi.fuel_type_id AND fi.station_id = fa.station_id WHERE fa.station_id = ? AND DATE(fa.adjustment_date) = CURDATE() GROUP BY fi.fuel_type");
+    // NOTE: Stock-In approvals, tank-dip calibrations and approved adjustments ALREADY write to fuel_inventory.current_level.
+    // Summing fuel_adjustments again (incl. Pending + 'stock_in' log rows) double-counted them => 0.00 L after approved Stock-In. Hence AND 1=0.
+    $s = $pdo->prepare("SELECT fi.fuel_type, COALESCE(SUM(fa.liters),0) AS total_adj FROM fuel_adjustments fa JOIN fuel_inventory fi ON fa.fuel_type_id = fi.fuel_type_id AND fi.station_id = fa.station_id WHERE fa.station_id = ? AND 1 = 0 AND DATE(fa.adjustment_date) = CURDATE() GROUP BY fi.fuel_type");
     $s->execute([$station_id]);
     foreach ($s->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $adj_lookup[strtolower(trim($row['fuel_type']))] = (float)$row['total_adj'];
@@ -669,6 +671,29 @@ try {
     $fuel_movement_history = array_merge($fuel_movement_history, $stmt->fetchAll(PDO::FETCH_ASSOC));
 } catch (Exception $e) {}
 
+// Approved Fuel Stock-Ins (manager_stock_in.php writes to fuel_stock_in, not fuel_deliveries)
+try {
+    $stmt = $pdo->prepare("
+        SELECT
+            fsi.encoded_at AS date,
+            fsi.fuel_type,
+            COALESCE(NULLIF(fsi.batch_ref,''), NULLIF(fsi.invoice_no,''), CONCAT('FSI-', LPAD(fsi.id, 5, '0'))) AS ref_no,
+            'Delivery (IN)' AS movement_type,
+            fsi.qty_received AS inflow,
+            0 AS outflow,
+            fsi.qty_received AS net_change,
+            COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Manager') AS user_name,
+            CONCAT('Stock-In', CASE WHEN COALESCE(fsi.invoice_no,'') <> '' THEN CONCAT(' | PO: ', fsi.invoice_no) ELSE '' END,
+                   CASE WHEN COALESCE(fsi.condition_flag,'') NOT IN ('', 'Good') THEN CONCAT(' | ', fsi.condition_flag) ELSE '' END) AS remarks
+        FROM fuel_stock_in fsi
+        LEFT JOIN users u ON fsi.encoded_by = u.id
+        WHERE fsi.station_id = ?
+        ORDER BY fsi.encoded_at DESC LIMIT 150
+    ");
+    $stmt->execute([$station_id]);
+    $fuel_movement_history = array_merge($fuel_movement_history, $stmt->fetchAll(PDO::FETCH_ASSOC));
+} catch (Exception $e) {}
+
 try {
     $stmt = $pdo->prepare("
         SELECT
@@ -680,7 +705,7 @@ try {
             ft.liters_sold AS outflow,
             -1 * ft.liters_sold AS net_change,
             COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Pump Attendant') AS user_name,
-            CONCAT('Pump ', COALESCE(ft.pump_number, '1'), ' Shift Sales') AS remarks
+            CONCAT('Pump ', COALESCE(ft.pump_id, '1'), ' Shift Sales') AS remarks
         FROM fuel_transactions ft
         LEFT JOIN users u ON ft.staff_id = u.id
         WHERE ft.station_id = ?
@@ -694,19 +719,28 @@ try {
 try {
     $stmt = $pdo->prepare("
         SELECT
-            fa.adjustment_date AS date,
+            COALESCE(fa.created_at, fa.adjustment_date) AS date,
             fa.fuel_type,
-            COALESCE(NULLIF(fa.reference_no,''), CONCAT('FADJ-', LPAD(fa.id, 5, '0'))) AS ref_no,
+            CONCAT('FADJ-', LPAD(fa.id, 5, '0')) AS ref_no,
             'Calibration / Dip' AS movement_type,
-            CASE WHEN fa.variance > 0 THEN fa.variance ELSE 0 END AS inflow,
-            CASE WHEN fa.variance < 0 THEN ABS(fa.variance) ELSE 0 END AS outflow,
-            fa.variance AS net_change,
+            CASE WHEN LOWER(COALESCE(fa.status,'')) <> 'approved' THEN 0
+                 WHEN (CASE WHEN LOWER(COALESCE(fa.adjustment_type,'')) LIKE 'meter%' THEN fa.liters WHEN COALESCE(fa.variance,0) <> 0 THEN fa.variance WHEN LOWER(COALESCE(fa.adjustment_direction,'')) = 'increase' THEN fa.liters ELSE -fa.liters END) > 0
+                 THEN (CASE WHEN LOWER(COALESCE(fa.adjustment_type,'')) LIKE 'meter%' THEN fa.liters WHEN COALESCE(fa.variance,0) <> 0 THEN fa.variance WHEN LOWER(COALESCE(fa.adjustment_direction,'')) = 'increase' THEN fa.liters ELSE -fa.liters END)
+                 ELSE 0 END AS inflow,
+            CASE WHEN LOWER(COALESCE(fa.status,'')) <> 'approved' THEN 0
+                 WHEN (CASE WHEN LOWER(COALESCE(fa.adjustment_type,'')) LIKE 'meter%' THEN fa.liters WHEN COALESCE(fa.variance,0) <> 0 THEN fa.variance WHEN LOWER(COALESCE(fa.adjustment_direction,'')) = 'increase' THEN fa.liters ELSE -fa.liters END) < 0
+                 THEN ABS(CASE WHEN LOWER(COALESCE(fa.adjustment_type,'')) LIKE 'meter%' THEN fa.liters WHEN COALESCE(fa.variance,0) <> 0 THEN fa.variance WHEN LOWER(COALESCE(fa.adjustment_direction,'')) = 'increase' THEN fa.liters ELSE -fa.liters END)
+                 ELSE 0 END AS outflow,
+            CASE WHEN LOWER(COALESCE(fa.status,'')) <> 'approved' THEN 0
+                 ELSE (CASE WHEN LOWER(COALESCE(fa.adjustment_type,'')) LIKE 'meter%' THEN fa.liters WHEN COALESCE(fa.variance,0) <> 0 THEN fa.variance WHEN LOWER(COALESCE(fa.adjustment_direction,'')) = 'increase' THEN fa.liters ELSE -fa.liters END) END AS net_change,
             COALESCE(NULLIF(CONCAT(TRIM(COALESCE(u.first_name,'')), ' ', TRIM(COALESCE(u.last_name,''))), ' '), u.username, 'Manager') AS user_name,
-            COALESCE(NULLIF(fa.reason,''), NULLIF(fa.notes,''), 'Routine Calibration') AS remarks
+            CONCAT(COALESCE(NULLIF(fa.reason,''), NULLIF(fa.notes,''), 'Routine Calibration'),
+                   CASE WHEN LOWER(COALESCE(fa.status,'')) = 'approved' THEN '' ELSE CONCAT(' [', COALESCE(NULLIF(fa.status,''),'Pending'), ']') END) AS remarks
         FROM fuel_adjustments fa
         LEFT JOIN users u ON fa.user_id = u.id
         WHERE fa.station_id = ?
-        ORDER BY fa.adjustment_date DESC LIMIT 100
+          AND LOWER(COALESCE(fa.adjustment_type,'')) <> 'stock_in'
+        ORDER BY fa.created_at DESC LIMIT 100
     ");
     $stmt->execute([$station_id]);
     $fuel_movement_history = array_merge($fuel_movement_history, $stmt->fetchAll(PDO::FETCH_ASSOC));
@@ -1569,6 +1603,7 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
     <option value="turbo diesel">Turbo Diesel</option>
     <option value="xcs">XCS</option>
     <option value="xtra advance">Xtra Advance</option>
+    <option value="xtra unl">Xtra UNL</option>
   </select>
   <select id="mgrFmovMoveFilter" onchange="filterMgrFuelMovementTable()" style="padding:7px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:15.5px; color:#334155; outline:none; background:#fff;">
     <option value="">All Movement Types</option>
@@ -1920,8 +1955,8 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
     </div>
 </div>
 <!-- â•â• FUEL STOCK ADJUSTMENT REQUEST MODAL (STEP 5: MANAGER REQUEST) â•â• -->
-<div class="modal-overlay" id="adjustReadingModal" style="z-index:10005; display:none; align-items:center; justify-content:center; padding:20px 20px 70px 20px; box-sizing:border-box;">
-    <div style="background:#fff; border-radius:14px; width:96%; max-width:580px; max-height:calc(100vh - 110px); display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 40px rgba(0,0,0,.25); position:relative; z-index:10006; margin:auto;">
+<div class="modal-overlay" id="adjustReadingModal" style="z-index:10005; display:none; align-items:center; justify-content:center; padding:20px; box-sizing:border-box;">
+    <div style="background:#fff; border-radius:14px; width:96%; max-width:580px; max-height:65vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 40px rgba(0,0,0,.25); position:relative; z-index:10006; margin:auto; margin-bottom: 50px;">
 
 
         <!-- Header (Fixed) -->
@@ -1932,7 +1967,7 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
         </div>
         
         <!-- Body (Scrollable) -->
-        <div style="padding:20px; padding-bottom:30px; overflow-y:auto; flex:1;">
+        <div style="padding:20px; padding-bottom:30px; overflow-y:auto; flex:1; min-height:0;">
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
                     <label style="font-weight:700; font-size:14.5px; color:#334155;">Fuel Type *</label>
@@ -2397,7 +2432,7 @@ function openAdjustReadingModal(r) {
     modal.style.bottom = '0';
     modal.style.alignItems = 'center';
     modal.style.justifyContent = 'center';
-    modal.style.padding = '20px 20px 70px 20px';
+    modal.style.padding = '20px';
     modal.style.boxSizing = 'border-box';
     modal.style.zIndex = '10005';
 

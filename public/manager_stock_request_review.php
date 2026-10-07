@@ -216,6 +216,39 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_direct_po_catalog') {
         $stmt2->execute([$station_id]);
         $fuel = $stmt2->fetchAll(PDO::FETCH_ASSOC);
 
+        $fuel_sales = [];
+        $stmt_s = $pdo->prepare("SELECT fuel_type, SUM(liters_sold) AS tot FROM fuel_transactions WHERE station_id = ? AND DATE(transaction_date) = CURDATE() AND status = 'Verified' GROUP BY fuel_type");
+        $stmt_s->execute([$station_id]);
+        foreach ($stmt_s->fetchAll(PDO::FETCH_ASSOC) as $r) $fuel_sales[strtolower(trim($r['fuel_type']))] = (float)$r['tot'];
+
+        $fuel_del = [];
+        $stmt_d = $pdo->prepare("SELECT tank_assigned, SUM(delivery_liters) AS tot FROM fuel_deliveries WHERE station_id = ? AND DATE(delivery_date) = CURDATE() AND status = 'Verified' GROUP BY tank_assigned");
+        $stmt_d->execute([$station_id]);
+        foreach ($stmt_d->fetchAll(PDO::FETCH_ASSOC) as $r) $fuel_del[strtolower(trim($r['tank_assigned']))] = (float)$r['tot'];
+
+        $fuel_adj = [];
+        $stmt_a = $pdo->prepare("SELECT fi.fuel_type, COALESCE(SUM(fa.liters),0) AS tot FROM fuel_adjustments fa JOIN fuel_inventory fi ON fa.fuel_type_id = fi.fuel_type_id AND fi.station_id = fa.station_id WHERE fa.station_id = ? AND 1 = 0 AND DATE(fa.adjustment_date) = CURDATE() GROUP BY fi.fuel_type");
+        $stmt_a->execute([$station_id]);
+        foreach ($stmt_a->fetchAll(PDO::FETCH_ASSOC) as $r) $fuel_adj[strtolower(trim($r['fuel_type']))] = (float)$r['tot'];
+
+        $tank_counts = [];
+        foreach ($fuel as $f) {
+            $fk = strtolower(trim($f['fuel_type']));
+            $tank_counts[$fk] = ($tank_counts[$fk] ?? 0) + 1;
+        }
+
+        foreach ($fuel as &$f) {
+            $fk = strtolower(trim($f['fuel_type']));
+            $uk = strtolower(trim($f['ugt_no']));
+            $sales = $fuel_sales[$fk] ?? 0;
+            $adj = $fuel_adj[$fk] ?? 0;
+            $count = $tank_counts[$fk] ?? 1;
+            $tank_sales = $count > 0 ? (($sales + $adj) / $count) : 0;
+            $tank_del = $fuel_del[$uk] ?? 0;
+            $f['current_level'] = max(0, (float)$f['current_level'] + $tank_del - $tank_sales);
+        }
+        unset($f);
+
         echo json_encode(['success' => true, 'merch' => $merch, 'fuel' => $fuel]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'error' => $e->getMessage()]);
@@ -1242,6 +1275,39 @@ try {
     ");
     $stmt->execute([$station_id]);
     $direct_fuel_types = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $fuel_sales = [];
+    $stmt_s = $pdo->prepare("SELECT fuel_type, SUM(liters_sold) AS tot FROM fuel_transactions WHERE station_id = ? AND DATE(transaction_date) = CURDATE() AND status = 'Verified' GROUP BY fuel_type");
+    $stmt_s->execute([$station_id]);
+    foreach ($stmt_s->fetchAll(PDO::FETCH_ASSOC) as $r) $fuel_sales[strtolower(trim($r['fuel_type']))] = (float)$r['tot'];
+
+    $fuel_del = [];
+    $stmt_d = $pdo->prepare("SELECT tank_assigned, SUM(delivery_liters) AS tot FROM fuel_deliveries WHERE station_id = ? AND DATE(delivery_date) = CURDATE() AND status = 'Verified' GROUP BY tank_assigned");
+    $stmt_d->execute([$station_id]);
+    foreach ($stmt_d->fetchAll(PDO::FETCH_ASSOC) as $r) $fuel_del[strtolower(trim($r['tank_assigned']))] = (float)$r['tot'];
+
+    $fuel_adj = [];
+    $stmt_a = $pdo->prepare("SELECT fi.fuel_type, COALESCE(SUM(fa.liters),0) AS tot FROM fuel_adjustments fa JOIN fuel_inventory fi ON fa.fuel_type_id = fi.fuel_type_id AND fi.station_id = fa.station_id WHERE fa.station_id = ? AND 1 = 0 AND DATE(fa.adjustment_date) = CURDATE() GROUP BY fi.fuel_type");
+    $stmt_a->execute([$station_id]);
+    foreach ($stmt_a->fetchAll(PDO::FETCH_ASSOC) as $r) $fuel_adj[strtolower(trim($r['fuel_type']))] = (float)$r['tot'];
+
+    $tank_counts = [];
+    foreach ($direct_fuel_types as $f) {
+        $fk = strtolower(trim($f['fuel_type']));
+        $tank_counts[$fk] = ($tank_counts[$fk] ?? 0) + 1;
+    }
+
+    foreach ($direct_fuel_types as &$f) {
+        $fk = strtolower(trim($f['fuel_type']));
+        $uk = strtolower(trim($f['ugt_no']));
+        $sales = $fuel_sales[$fk] ?? 0;
+        $adj = $fuel_adj[$fk] ?? 0;
+        $count = $tank_counts[$fk] ?? 1;
+        $tank_sales = $count > 0 ? (($sales + $adj) / $count) : 0;
+        $tank_del = $fuel_del[$uk] ?? 0;
+        $f['current_level'] = max(0, (float)$f['current_level'] + $tank_del - $tank_sales);
+    }
+    unset($f);
 } catch (Exception $e) {
     try {
         $stmt = $pdo->query("SELECT id AS fuel_type_id, name AS fuel_type, price_per_liter AS current_price, 0 AS current_level, 0 AS capacity, '' AS ugt_no, 5000 AS reorder_level, 2000 AS critical_level FROM fuel_types ORDER BY id ASC");
@@ -3213,8 +3279,10 @@ function autoPopulateLowStockRows() {
     const lowStockItems = directMerchCatalog.filter(function(p) {
         const stock   = parseFloat(p.current_stock  || 0);
         let reorder   = parseFloat(p.reorder_level  || 24);
+        let crit      = parseFloat(p.critical_level || 10);
         if (reorder <= 0) reorder = 24;
-        return stock <= reorder || stock <= 0; // low stock or out of stock
+        if (crit <= 0) crit = 10;
+        return stock <= reorder || stock <= crit || stock <= 0; // low stock, critical, or out of stock
     });
 
     if (lowStockItems.length === 0) {
@@ -3501,8 +3569,10 @@ function autoPopulateLowStockFuelRows() {
     const lowStockFuels = directFuelCatalog.filter(function(ft) {
         const cur = parseFloat(ft.current_level || 0);
         let reorder = parseFloat(ft.reorder_level || 5000);
+        let crit = parseFloat(ft.critical_level || 2000);
         if (reorder <= 0) reorder = 5000;
-        return cur <= reorder || cur <= 0;
+        if (crit <= 0) crit = 2000;
+        return cur <= reorder || cur <= crit || cur <= 0;
     });
 
     if (lowStockFuels.length === 0) {
