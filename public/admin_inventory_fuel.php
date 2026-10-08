@@ -2348,8 +2348,16 @@ function execApproveFuelAdjustment() {
     fd.append('action', 'approve_adjustment');
     fd.append('adjustment_id', _selectedAdjustmentId);
 
-    fetch('../backend/api/fuel_adjustments.php', { method: 'POST', body: fd })
-    .then(function(r) { return r.json(); })
+    fetch('../backend/api/fuel_adjustments.php', { method: 'POST', body: fd, credentials: 'same-origin' })
+    .then(function(r) {
+        return r.text().then(function(txt) {
+            try { return JSON.parse(txt); }
+            catch (e) {
+                console.error('approve_adjustment non-JSON response:', txt);
+                return { success: false, message: 'Server returned an invalid response (HTTP ' + r.status + '). Please refresh and try again.' };
+            }
+        });
+    })
     .then(function(data) {
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Approve Adjustment'; }
         if (!data.success) {
@@ -2364,6 +2372,7 @@ function execApproveFuelAdjustment() {
         setTimeout(function() { location.reload(); }, 1200);
     })
     .catch(function(err) {
+        console.error('approve_adjustment error:', err);
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check"></i> Approve Adjustment'; }
         var errEl = document.getElementById('adminApproveError');
         if (errEl) { errEl.textContent = 'Network error. Please try again.'; errEl.style.display = 'block'; }

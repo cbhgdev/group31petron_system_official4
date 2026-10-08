@@ -316,6 +316,8 @@ try {
                     $me['id'],
                     "Submitted {$adjustment_type} request for {$fuel_type} ({$direction} {$adj_liters}L). Variance: {$variance}L. Reason: {$reason}"
                 ]);
+            } catch (Exception $e) {}
+
             // Create notification for Station Admin & Superadmin users
             try {
                 $adm_stmt = $pdo->prepare("
@@ -374,8 +376,12 @@ try {
             $adj = $stmt->fetch(PDO::FETCH_ASSOC);
 
             if (!$adj) respond(false, 'Adjustment request record not found.');
-            if (strtolower(trim($adj['status'])) === 'approved') {
+            $adj_status = strtolower(trim($adj['status'] ?? ''));
+            if ($adj_status === 'approved') {
                 respond(false, 'This adjustment request has already been approved.');
+            }
+            if ($adj_status === 'rejected') {
+                respond(false, 'This adjustment request has already been rejected.');
             }
 
             $fuel_type = $adj['fuel_type'];
@@ -384,17 +390,37 @@ try {
 
             $pdo->beginTransaction();
 
-            // Fetch current tank volume
-            $inv_stmt = $pdo->prepare("
-                SELECT id, current_level, capacity FROM fuel_inventory
-                WHERE station_id = ?
-                  AND LOWER(TRIM(fuel_type)) = LOWER(TRIM(?))
-                LIMIT 1
-            ");
-            $inv_stmt->execute([$station_id, $fuel_type]);
-            $inv = $inv_stmt->fetch(PDO::FETCH_ASSOC);
+            // Fetch current tank volume — prefer exact UGT match (several tanks can share a fuel type)
+            $inv = false;
+            $adj_ugt = trim($adj['ugt_no'] ?? '');
+            if ($adj_ugt !== '') {
+                $ugt_num = (int)preg_replace('/[^0-9]/', '', $adj_ugt);
+                $inv_stmt = $pdo->prepare("
+                    SELECT id, current_level, capacity FROM fuel_inventory
+                    WHERE station_id = ?
+                      AND (LOWER(TRIM(ugt_no)) = LOWER(TRIM(?))
+                           OR CAST(REGEXP_REPLACE(COALESCE(ugt_no,''), '[^0-9]', '') AS UNSIGNED) = ?)
+                      AND LOWER(TRIM(fuel_type)) LIKE LOWER(CONCAT('%', ?, '%'))
+                    LIMIT 1 FOR UPDATE
+                ");
+                $inv_stmt->execute([$station_id, $adj_ugt, $ugt_num, explode(' ', trim($fuel_type))[0]]);
+                $inv = $inv_stmt->fetch(PDO::FETCH_ASSOC);
+            }
+            if (!$inv) {
+                $inv_stmt = $pdo->prepare("
+                    SELECT id, current_level, capacity FROM fuel_inventory
+                    WHERE station_id = ?
+                      AND LOWER(TRIM(fuel_type)) = LOWER(TRIM(?))
+                    LIMIT 1 FOR UPDATE
+                ");
+                $inv_stmt->execute([$station_id, $fuel_type]);
+                $inv = $inv_stmt->fetch(PDO::FETCH_ASSOC);
+            }
 
-            if (!$inv) respond(false, 'Fuel inventory record not found for ' . htmlspecialchars($fuel_type));
+            if (!$inv) {
+                $pdo->rollBack();
+                respond(false, 'Fuel inventory record not found for ' . htmlspecialchars($fuel_type));
+            }
 
             $old_vol = (float)$inv['current_level'];
             if (strtolower($direction) === 'increase') {
