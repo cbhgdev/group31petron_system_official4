@@ -499,8 +499,20 @@
             if (count > 0) {
                 badge.textContent = count > 99 ? '99+' : count;
                 badge.style.display = 'inline-flex';
+                badge.style.setProperty('background', '#dc2626', 'important');
             } else {
+                badge.textContent = '';
                 badge.style.display = 'none';
+            }
+        }
+        var ddBadge = document.getElementById('notifDropdownBadge');
+        if (ddBadge) {
+            if (count > 0) {
+                ddBadge.textContent = count + ' New';
+                ddBadge.style.background = '#dc2626';
+            } else {
+                ddBadge.textContent = '0 New';
+                ddBadge.style.background = '#002F6C';
             }
         }
     });

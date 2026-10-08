@@ -22,6 +22,24 @@ if ((int)$station_id <= 0 && $role === 'admin') {
     render_no_station_page('admin_dashboard.php');
 }
 
+// ── Top-Level Permanent Deletion of all TEST Fuel Products (UGT-08, UGT-09, UGT-10, etc.) ──
+try {
+    $stmt_del_fi = $pdo->prepare("SELECT id FROM fuel_inventory WHERE LOWER(TRIM(fuel_type)) LIKE '%test%' OR LOWER(TRIM(ugt_no)) IN ('ugt-08', 'ugt-09', 'ugt-10', 'ugt #8', 'ugt #9', 'ugt #10', 'ugt-8', 'ugt-9', 'ugt-10', 'ugt 08', 'ugt 09', 'ugt 10', 'ugt 8', 'ugt 9', 'ugt 10')");
+    $stmt_del_fi->execute();
+    $target_del_ids = $stmt_del_fi->fetchAll(PDO::FETCH_COLUMN);
+
+    if (!empty($target_del_ids)) {
+        $in_del = implode(',', array_fill(0, count($target_del_ids), '?'));
+        try { $pdo->prepare("DELETE FROM nozzles WHERE pump_id IN (SELECT id FROM fuel_pumps WHERE tank_id IN ($in_del)) OR LOWER(TRIM(ugt_no)) IN ('ugt-08', 'ugt-09', 'ugt-10', 'ugt #8', 'ugt #9', 'ugt #10', 'ugt-8', 'ugt-9', 'ugt-10', 'ugt 08', 'ugt 09', 'ugt 10', 'ugt 8', 'ugt 9', 'ugt 10')")->execute($target_del_ids); } catch (Exception $e) {}
+        try { $pdo->prepare("DELETE FROM fuel_pumps WHERE tank_id IN ($in_del) OR LOWER(TRIM(ugt_no)) IN ('ugt-08', 'ugt-09', 'ugt-10', 'ugt #8', 'ugt #9', 'ugt #10', 'ugt-8', 'ugt-9', 'ugt-10', 'ugt 08', 'ugt 09', 'ugt 10', 'ugt 8', 'ugt 9', 'ugt 10')")->execute($target_del_ids); } catch (Exception $e) {}
+        try { $pdo->prepare("DELETE FROM pending_price_approvals WHERE (product_type IN ('fuel','fuel_inventory') AND product_id IN ($in_del)) OR LOWER(TRIM(product_name)) LIKE '%test%'")->execute($target_del_ids); } catch (Exception $e) {}
+        try { $pdo->prepare("DELETE FROM fuel_price_history WHERE fuel_id IN ($in_del)")->execute($target_del_ids); } catch (Exception $e) {}
+        try { $pdo->prepare("DELETE FROM fuel_config_history WHERE fuel_inventory_id IN ($in_del)")->execute($target_del_ids); } catch (Exception $e) {}
+        try { $pdo->prepare("DELETE FROM fuel_status_history WHERE fuel_inventory_id IN ($in_del)")->execute($target_del_ids); } catch (Exception $e) {}
+        $pdo->prepare("DELETE FROM fuel_inventory WHERE id IN ($in_del)")->execute($target_del_ids);
+    }
+} catch (Exception $e) {}
+
 if (!function_exists('get_canonical_fuel_name')) {
     function get_canonical_fuel_name($name) {
         $name_lower = strtolower(trim($name));
@@ -62,6 +80,198 @@ if (!function_exists('get_matching_fuel_ids')) {
             $ids = [(int)$fuel_id];
         }
         return array_values(array_unique($ids));
+    }
+}
+
+if (!function_exists('fetch_pumps_for_fuel_product')) {
+    function fetch_pumps_for_fuel_product($pdo, $station_id, $fuel) {
+        $pumps = [];
+        $ft_id = (int)($fuel['fuel_type_id'] ?? 0);
+        $raw_ugt = trim($fuel['ugt_no'] ?? '');
+        $ugt_num = (int)preg_replace('/[^0-9]/', '', $raw_ugt);
+        $fname = strtolower(trim($fuel['fuel_type'] ?? ''));
+
+        $ugt_list = array_filter(array_unique([
+            $raw_ugt,
+            $ugt_num ? sprintf('UGT-%02d', $ugt_num) : '',
+            $ugt_num ? sprintf('UGT #%d', $ugt_num) : '',
+            $ugt_num ? sprintf('UGT-%d', $ugt_num) : '',
+            $ugt_num ? sprintf('UGT %d', $ugt_num) : '',
+            $ugt_num ? (string)$ugt_num : '',
+        ]));
+
+        $prefix = '';
+        if (strpos($fname, 'turbo') !== false) {
+            $prefix = 'TURBO DIESEL - %';
+        } elseif (strpos($fname, 'diesel 1') !== false || $ugt_num === 1) {
+            $prefix = 'DIESEL 1 - %';
+        } elseif (strpos($fname, 'diesel 2') !== false || $ugt_num === 2) {
+            $prefix = 'DIESEL 2 - %';
+        } elseif (strpos($fname, 'xcs') !== false || $ugt_num === 4) {
+            $prefix = 'XCS PLUS - %';
+        } elseif (strpos($fname, 'xtra unl 1') !== false || (strpos($fname, 'xtra') !== false && strpos($fname, '1') !== false) || $ugt_num === 5) {
+            $prefix = 'XTRA UNL 1 - %';
+        } elseif (strpos($fname, 'xtra unl 2') !== false || (strpos($fname, 'xtra') !== false && strpos($fname, '2') !== false) || $ugt_num === 6) {
+            $prefix = 'XTRA UNL 2 - %';
+        } elseif (strpos($fname, 'kero') !== false || $ugt_num === 7) {
+            $prefix = 'KEROSENE - %';
+        }
+
+        $inv_id = (int)($fuel['id'] ?? 0);
+        // 1. Direct tank_id lookup first (guarantees exact 1:1 match with fuel management)
+        if ($inv_id > 0) {
+            try {
+                $p_stmt = $pdo->prepare("SELECT id, pump_number, pump_name, nozzle_number, status 
+                                          FROM fuel_pumps 
+                                          WHERE station_id = ? AND tank_id = ?
+                                          ORDER BY pump_number ASC, id ASC");
+                $p_stmt->execute([$station_id, $inv_id]);
+                $pumps = $p_stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $e) { $pumps = []; }
+        }
+
+        // 2. If no direct tank_id linkage, fallback to fuel_type_id + ugt_no matching
+        if (empty($pumps)) {
+            try {
+                $sql = "SELECT id, pump_number, pump_name, nozzle_number, status 
+                        FROM fuel_pumps 
+                        WHERE station_id = ? 
+                          AND (
+                            (? > 0 AND fuel_type_id = ?)
+                            " . (!empty($ugt_list) ? " OR ugt_no IN (" . implode(',', array_fill(0, count($ugt_list), '?')) . ")" : "") . "
+                            " . ($prefix !== '' ? " OR UPPER(pump_number) LIKE ?" : "") . "
+                          )
+                        ORDER BY pump_number ASC, id ASC";
+                $params = [$station_id, $ft_id, $ft_id];
+                if (!empty($ugt_list)) {
+                    $params = array_merge($params, array_values($ugt_list));
+                }
+                if ($prefix !== '') {
+                    $params[] = $prefix;
+                }
+                $p_stmt = $pdo->prepare($sql);
+                $p_stmt->execute($params);
+                $pumps = $p_stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $e) { $pumps = []; }
+        }
+
+        if (empty($pumps)) {
+            try {
+                $n_sql = "SELECT n.id, n.pump_id, 
+                                 COALESCE(fp.pump_number, CONCAT(n.pump_name, ' - ', n.nozzle_number)) AS pump_number,
+                                 n.pump_name, n.nozzle_number, n.status
+                          FROM nozzles n
+                          LEFT JOIN fuel_pumps fp ON fp.id = n.pump_id
+                          WHERE n.station_id = ?
+                            AND (
+                              (? > 0 AND fp.tank_id = ?)
+                              OR (? > 0 AND n.fuel_type_id = ?)
+                              " . (!empty($ugt_list) ? " OR n.ugt_no IN (" . implode(',', array_fill(0, count($ugt_list), '?')) . ")" : "") . "
+                              " . ($prefix !== '' ? " OR UPPER(fp.pump_number) LIKE ?" : "") . "
+                            )
+                          ORDER BY n.id ASC";
+                $n_params = [$station_id, $inv_id, $inv_id, $ft_id, $ft_id];
+                if (!empty($ugt_list)) {
+                    $n_params = array_merge($n_params, array_values($ugt_list));
+                }
+                if ($prefix !== '') {
+                    $n_params[] = $prefix;
+                }
+                $n_stmt = $pdo->prepare($n_sql);
+                $n_stmt->execute($n_params);
+                $pumps = $n_stmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Exception $e) { $pumps = []; }
+        }
+
+        foreach ($pumps as &$p) {
+            $p['id'] = (int)($p['id'] ?? 0);
+            $p['pump_number'] = trim($p['pump_number'] ?? '');
+            $p['pump_name'] = trim($p['pump_name'] ?? '');
+            $p['nozzle_number'] = trim($p['nozzle_number'] ?? '');
+            $p['status'] = ucfirst(strtolower($p['status'] ?? 'Active'));
+        }
+        unset($p);
+
+        // Auto-backfill missing pump/nozzle records if num_pumps in fuel_inventory exceeds matched pumps
+        $expected_pumps = isset($fuel['num_pumps']) && $fuel['num_pumps'] !== null ? max(0, (int)$fuel['num_pumps']) : 0;
+        if ($expected_pumps <= 0 && $inv_id > 0) {
+            try {
+                $stmt_np = $pdo->prepare("SELECT num_pumps FROM fuel_inventory WHERE id = ? LIMIT 1");
+                $stmt_np->execute([$inv_id]);
+                $expected_pumps = (int)$stmt_np->fetchColumn();
+            } catch (Exception $e) {}
+        }
+
+
+
+        if ($inv_id > 0 && $expected_pumps > count($pumps) && (int)$station_id > 0) {
+            $clean_fuel_tag = strtoupper(trim($fuel['fuel_type'] ?? 'FUEL'));
+            $capacity = (float)($fuel['capacity'] ?? 0);
+            for ($pi = count($pumps) + 1; $pi <= $expected_pumps; $pi++) {
+                $p_num_idx = (int)ceil($pi / 2);
+                $n_num_idx = (int)((($pi - 1) % 2) + 1);
+                $code = "{$p_num_idx}-{$n_num_idx}";
+                $pump_num = "{$clean_fuel_tag} - {$code}";
+                $pump_name = "Pump {$p_num_idx}";
+                $nozzle_num = "Nozzle {$n_num_idx}";
+
+                $chk_pump = $pdo->prepare("SELECT id FROM fuel_pumps WHERE station_id = ? AND tank_id = ? AND pump_number = ? LIMIT 1");
+                $chk_pump->execute([$station_id, $inv_id, $pump_num]);
+                $existing_pump_id = (int)$chk_pump->fetchColumn();
+
+                if (!$existing_pump_id) {
+                    try {
+                        $ins_pump = $pdo->prepare("
+                            INSERT INTO fuel_pumps (station_id, tank_id, pump_number, pump_name, nozzle_number, fuel_type_id, ugt_no, capacity, status, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active', NOW())
+                        ");
+                        $ins_pump->execute([$station_id, $inv_id, $pump_num, $pump_name, $nozzle_num, $ft_id, $raw_ugt, $capacity]);
+                        $existing_pump_id = (int)$pdo->lastInsertId();
+                    } catch (Exception $e) {}
+                }
+
+                if ($existing_pump_id > 0) {
+                    try {
+                        $chk_noz = $pdo->prepare("SELECT id FROM nozzles WHERE station_id = ? AND pump_id = ? LIMIT 1");
+                        $chk_noz->execute([$station_id, $existing_pump_id]);
+                        if (!$chk_noz->fetchColumn()) {
+                            $pdo->prepare("
+                                INSERT INTO nozzles (station_id, pump_id, pump_name, nozzle_number, fuel_type_id, ugt_no, status, created_at)
+                                VALUES (?, ?, ?, ?, ?, ?, 'Active', NOW())
+                            ")->execute([$station_id, $existing_pump_id, $pump_name, $nozzle_num, $ft_id, $raw_ugt]);
+                        }
+                    } catch (Exception $e) {}
+                }
+            }
+
+            try {
+                $p_stmt = $pdo->prepare("SELECT id, pump_number, pump_name, nozzle_number, status 
+                                          FROM fuel_pumps 
+                                          WHERE station_id = ? AND tank_id = ?
+                                          ORDER BY pump_number ASC, id ASC");
+                $p_stmt->execute([$station_id, $inv_id]);
+                $pumps = $p_stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($pumps as &$p) {
+                    $p['id'] = (int)($p['id'] ?? 0);
+                    $p['pump_number'] = trim($p['pump_number'] ?? '');
+                    $p['pump_name'] = trim($p['pump_name'] ?? '');
+                    $p['nozzle_number'] = trim($p['nozzle_number'] ?? '');
+                    $p['status'] = ucfirst(strtolower($p['status'] ?? 'Active'));
+                }
+                unset($p);
+            } catch (Exception $e) {}
+        }
+
+        if ($inv_id > 0 && !empty($raw_ugt)) {
+            try {
+                $pdo->prepare("UPDATE fuel_pumps SET ugt_no = ? WHERE station_id = ? AND tank_id = ? AND (ugt_no IS NULL OR TRIM(ugt_no) = '' OR ugt_no != ?)")
+                    ->execute([$raw_ugt, $station_id, $inv_id, $raw_ugt]);
+                $pdo->prepare("UPDATE nozzles SET ugt_no = ? WHERE station_id = ? AND pump_id IN (SELECT id FROM fuel_pumps WHERE station_id = ? AND tank_id = ?) AND (ugt_no IS NULL OR TRIM(ugt_no) = '' OR ugt_no != ?)")
+                    ->execute([$raw_ugt, $station_id, $station_id, $inv_id, $raw_ugt]);
+            } catch (Exception $e) {}
+        }
+
+        return $pumps;
     }
 }
 
@@ -810,10 +1020,17 @@ try {
             $price = (float)$price_lookup[$ft_key];
         }
 
-        // Pump count — num_pumps stored directly on the fuel inventory record, fallback to matched pumps
-        $p_count = (isset($row['num_pumps']) && $row['num_pumps'] !== null && (int)$row['num_pumps'] > 0)
-            ? (int)$row['num_pumps']
-            : count($pumps_by_fi_id[$r_id] ?? []);
+        // Dynamically fetch exact pumps for this fuel product and auto-backfill missing child pumps/nozzles if num_pumps > count(pumps)
+        $actual_pumps = fetch_pumps_for_fuel_product($pdo, $target_sid, $row);
+        $actual_count = count($actual_pumps);
+        $p_count = max((int)($row['num_pumps'] ?? 0), $actual_count);
+
+        if ($p_count > (int)($row['num_pumps'] ?? 0)) {
+            try {
+                $pdo->prepare("UPDATE fuel_inventory SET num_pumps = ? WHERE id = ? AND station_id = ?")
+                    ->execute([$p_count, $r_id, $target_sid]);
+            } catch (Exception $e_np) {}
+        }
 
         // Pending approval check
         $app = null;
@@ -849,7 +1066,7 @@ try {
             'approval_status'=> $app ? $app['status'] : null,
             'approval_id'    => $app ? $app['approval_id'] : null,
             'pump_count'     => $p_count,
-            'num_pumps'      => (int)($row['num_pumps'] ?? $p_count)
+            'num_pumps'      => $p_count
         ];
     }
 
@@ -1421,6 +1638,25 @@ table.pricing-table tbody tr:hover {
     color: #0f172a !important;
     -webkit-text-fill-color: #0f172a !important;
     border-color: #94a3b8 !important;
+}
+
+/* ── Completely Hide/Remove any Filter Reset Buttons ── */
+button[onclick*="resetAdminMerchFilters"],
+button[onclick*="resetAdminServiceFilters"],
+button[onclick*="resetMerchFilters"],
+button[onclick*="resetServiceFilters"],
+button[title*="Reset filters"],
+button[title*="Reset"],
+.btn-filter-reset {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
 }
 
 /* ── Pump card edit & save buttons (Remove dark blue button background, high visibility) ── */
@@ -2346,9 +2582,6 @@ table.pricing-table tbody tr:hover {
                     <option value="pending">Pending Only</option>
                     <option value="approved">None / Approved</option>
                 </select>
-                <button type="button" onclick="resetAdminServiceFilters()" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:13.5px;color:#475569;background:#fff;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all 0.2s;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='#fff'" title="Reset filters">
-                    <i class="fas fa-undo"></i> Reset
-                </button>
             </div>
         </div>
         <div style="padding:10px 20px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;justify-content:flex-end;">
@@ -3005,21 +3238,24 @@ function getAdminMerchCache() {
             var row = rowEls[i];
             _adminMerchCache.push({
                 el: row,
-                name: (row.getAttribute('data-name') || '').toLowerCase(),
-                sku: (row.getAttribute('data-sku') || '').toLowerCase(),
-                brand: (row.getAttribute('data-brand') || '').toLowerCase(),
-                unit: (row.getAttribute('data-unit') || '').toLowerCase(),
-                cat: row.getAttribute('data-cat') || '',
-                pStatus: row.getAttribute('data-prodstatus') || '',
-                rStatus: row.getAttribute('data-reqstatus') || ''
+                name: (row.getAttribute('data-name') || '').toLowerCase().trim(),
+                sku: (row.getAttribute('data-sku') || '').toLowerCase().trim(),
+                brand: (row.getAttribute('data-brand') || '').toLowerCase().trim(),
+                unit: (row.getAttribute('data-unit') || '').toLowerCase().trim(),
+                catKey: (row.getAttribute('data-cat') || '').toLowerCase().trim(),
+                pStatus: (row.getAttribute('data-prodstatus') || '').toLowerCase().trim(),
+                rStatus: (row.getAttribute('data-reqstatus') || '').toLowerCase().trim()
             });
         }
         var hdrEls = document.querySelectorAll('#adminMerchBody .cat-row');
         _adminCatHeaderCache = [];
         for (var j = 0; j < hdrEls.length; j++) {
+            var rawCat = hdrEls[j].getAttribute('data-cat-header') || '';
+            var countSpan = hdrEls[j].querySelector('.cat-count');
             _adminCatHeaderCache.push({
                 el: hdrEls[j],
-                cat: hdrEls[j].getAttribute('data-cat-header') || ''
+                catKey: rawCat.toLowerCase().trim(),
+                countSpan: countSpan
             });
         }
     }
@@ -3028,11 +3264,11 @@ function getAdminMerchCache() {
 
 function filterAdminMerchTable() {
     var q          = (document.getElementById('adminSearchInput') ? document.getElementById('adminSearchInput').value : '').toLowerCase().trim();
-    var catFilter  = document.getElementById('adminCatFilter') ? document.getElementById('adminCatFilter').value : '';
-    var brandFilter= (document.getElementById('adminBrandFilter') ? document.getElementById('adminBrandFilter').value : '').toLowerCase();
-    var unitFilter = (document.getElementById('adminUnitFilter') ? document.getElementById('adminUnitFilter').value : '').toLowerCase();
-    var pStFilter  = document.getElementById('adminProdStatusFilter') ? document.getElementById('adminProdStatusFilter').value : '';
-    var rStFilter  = document.getElementById('adminReqStatusFilter') ? document.getElementById('adminReqStatusFilter').value : '';
+    var catFilter  = (document.getElementById('adminCatFilter') ? document.getElementById('adminCatFilter').value : '').toLowerCase().trim();
+    var brandFilter= (document.getElementById('adminBrandFilter') ? document.getElementById('adminBrandFilter').value : '').toLowerCase().trim();
+    var unitFilter = (document.getElementById('adminUnitFilter') ? document.getElementById('adminUnitFilter').value : '').toLowerCase().trim();
+    var pStFilter  = (document.getElementById('adminProdStatusFilter') ? document.getElementById('adminProdStatusFilter').value : '').toLowerCase().trim();
+    var rStFilter  = (document.getElementById('adminReqStatusFilter') ? document.getElementById('adminReqStatusFilter').value : '').toLowerCase().trim();
 
     var cache = getAdminMerchCache();
     var rows = cache.rows;
@@ -3042,8 +3278,8 @@ function filterAdminMerchTable() {
 
     for (var i = 0; i < rows.length; i++) {
         var item = rows[i];
-        var matchQ      = !q || item.name.indexOf(q) !== -1 || item.sku.indexOf(q) !== -1 || item.brand.indexOf(q) !== -1;
-        var matchCat    = !catFilter || item.cat === catFilter;
+        var matchQ      = !q || item.name.indexOf(q) !== -1 || item.sku.indexOf(q) !== -1 || item.brand.indexOf(q) !== -1 || item.catKey.indexOf(q) !== -1;
+        var matchCat    = !catFilter || item.catKey === catFilter;
         var matchBrand  = !brandFilter || item.brand === brandFilter;
         var matchUnit   = !unitFilter || item.unit === unitFilter;
         var matchPStatus= !pStFilter || item.pStatus === pStFilter || (pStFilter === 'inactive' && (item.pStatus === 'disabled' || item.pStatus === 'deactivated'));
@@ -3053,18 +3289,33 @@ function filterAdminMerchTable() {
         item.el.style.display = show ? '' : 'none';
         if (show) {
             visible++;
-            catVisibleCount[item.cat] = (catVisibleCount[item.cat] || 0) + 1;
+            catVisibleCount[item.catKey] = (catVisibleCount[item.catKey] || 0) + 1;
         }
     }
 
     for (var j = 0; j < catHeaders.length; j++) {
         var hdr = catHeaders[j];
-        var count = catVisibleCount[hdr.cat] || 0;
-        hdr.el.style.display = count > 0 ? '' : 'none';
+        var count = catVisibleCount[hdr.catKey] || 0;
+        if (count > 0) {
+            hdr.el.style.display = '';
+            if (hdr.countSpan) {
+                hdr.countSpan.textContent = '(' + count + ' item' + (count === 1 ? '' : 's') + ')';
+            }
+        } else {
+            hdr.el.style.display = 'none';
+        }
     }
 
     var noRes = document.getElementById('adminMerchNoResults');
     if (noRes) noRes.style.display = (visible === 0 && rows.length > 0) ? 'block' : 'none';
+}
+
+function resetAdminMerchFilters() {
+    ['adminSearchInput', 'adminCatFilter', 'adminBrandFilter', 'adminUnitFilter', 'adminProdStatusFilter', 'adminReqStatusFilter'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    filterAdminMerchTable();
 }
 
 var _debouncedFilterAdminMerchTimer = null;
@@ -3074,6 +3325,7 @@ function debouncedFilterAdminMerchTable() {
 }
 window.filterAdminMerchTable = filterAdminMerchTable;
 window.debouncedFilterAdminMerchTable = debouncedFilterAdminMerchTable;
+window.resetAdminMerchFilters = resetAdminMerchFilters;
 
 // ── Professional Toast Banner ─────────────────────────────────────────────
 var adminToastDismissTimer = null;
@@ -6429,6 +6681,16 @@ window.addEventListener('resize', syncAdminModalLayout);
 window.addEventListener('load', syncAdminModalLayout);
 document.addEventListener('DOMContentLoaded', function() {
     syncAdminModalLayout();
+
+    // Ensure absolutely no filter Reset button exists anywhere in the DOM
+    document.querySelectorAll('button').forEach(function(b) {
+        var oc = (b.getAttribute('onclick') || '').toLowerCase();
+        var txt = (b.textContent || '').trim().toLowerCase();
+        var title = (b.getAttribute('title') || '').toLowerCase();
+        if ((oc.includes('reset') && !oc.includes('close')) || txt === 'reset' || title.includes('reset filter')) {
+            b.remove();
+        }
+    });
 
     // Check for flash toast from previous action (e.g. Add Fuel/Merchandise/Service)
     try {

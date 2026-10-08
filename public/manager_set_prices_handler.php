@@ -204,6 +204,84 @@ if (!function_exists('fetch_pumps_for_fuel_product')) {
         }
         unset($p);
 
+        // Auto-backfill missing pump/nozzle records if num_pumps in fuel_inventory exceeds matched pumps
+        $expected_pumps = isset($fuel['num_pumps']) && $fuel['num_pumps'] !== null ? max(0, (int)$fuel['num_pumps']) : 0;
+        if ($expected_pumps <= 0 && $inv_id > 0) {
+            try {
+                $stmt_np = $pdo->prepare("SELECT num_pumps FROM fuel_inventory WHERE id = ? LIMIT 1");
+                $stmt_np->execute([$inv_id]);
+                $expected_pumps = (int)$stmt_np->fetchColumn();
+            } catch (Exception $e) {}
+        }
+
+
+        if ($inv_id > 0 && $expected_pumps > count($pumps) && (int)$station_id > 0) {
+            $clean_fuel_tag = strtoupper(trim($fuel['fuel_type'] ?? 'FUEL'));
+            $capacity = (float)($fuel['capacity'] ?? 0);
+            for ($pi = count($pumps) + 1; $pi <= $expected_pumps; $pi++) {
+                $p_num_idx = (int)ceil($pi / 2);
+                $n_num_idx = (int)((($pi - 1) % 2) + 1);
+                $code = "{$p_num_idx}-{$n_num_idx}";
+                $pump_num = "{$clean_fuel_tag} - {$code}";
+                $pump_name = "Pump {$p_num_idx}";
+                $nozzle_num = "Nozzle {$n_num_idx}";
+
+                $chk_pump = $pdo->prepare("SELECT id FROM fuel_pumps WHERE station_id = ? AND tank_id = ? AND pump_number = ? LIMIT 1");
+                $chk_pump->execute([$station_id, $inv_id, $pump_num]);
+                $existing_pump_id = (int)$chk_pump->fetchColumn();
+
+                if (!$existing_pump_id) {
+                    try {
+                        $ins_pump = $pdo->prepare("
+                            INSERT INTO fuel_pumps (station_id, tank_id, pump_number, pump_name, nozzle_number, fuel_type_id, ugt_no, capacity, status, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Active', NOW())
+                        ");
+                        $ins_pump->execute([$station_id, $inv_id, $pump_num, $pump_name, $nozzle_num, $ft_id, $raw_ugt, $capacity]);
+                        $existing_pump_id = (int)$pdo->lastInsertId();
+                    } catch (Exception $e) {}
+                }
+
+                if ($existing_pump_id > 0) {
+                    try {
+                        $chk_noz = $pdo->prepare("SELECT id FROM nozzles WHERE station_id = ? AND pump_id = ? LIMIT 1");
+                        $chk_noz->execute([$station_id, $existing_pump_id]);
+                        if (!$chk_noz->fetchColumn()) {
+                            $pdo->prepare("
+                                INSERT INTO nozzles (station_id, pump_id, pump_name, nozzle_number, fuel_type_id, ugt_no, status, created_at)
+                                VALUES (?, ?, ?, ?, ?, ?, 'Active', NOW())
+                            ")->execute([$station_id, $existing_pump_id, $pump_name, $nozzle_num, $ft_id, $raw_ugt]);
+                        }
+                    } catch (Exception $e) {}
+                }
+            }
+
+            try {
+                $p_stmt = $pdo->prepare("SELECT id, pump_number, pump_name, nozzle_number, status 
+                                          FROM fuel_pumps 
+                                          WHERE station_id = ? AND tank_id = ?
+                                          ORDER BY pump_number ASC, id ASC");
+                $p_stmt->execute([$station_id, $inv_id]);
+                $pumps = $p_stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($pumps as &$p) {
+                    $p['id'] = (int)($p['id'] ?? 0);
+                    $p['pump_number'] = trim($p['pump_number'] ?? '');
+                    $p['pump_name'] = trim($p['pump_name'] ?? '');
+                    $p['nozzle_number'] = trim($p['nozzle_number'] ?? '');
+                    $p['status'] = ucfirst(strtolower($p['status'] ?? 'Active'));
+                }
+                unset($p);
+            } catch (Exception $e) {}
+        }
+
+        if ($inv_id > 0 && !empty($raw_ugt)) {
+            try {
+                $pdo->prepare("UPDATE fuel_pumps SET ugt_no = ? WHERE station_id = ? AND tank_id = ? AND (ugt_no IS NULL OR TRIM(ugt_no) = '' OR ugt_no != ?)")
+                    ->execute([$raw_ugt, $station_id, $inv_id, $raw_ugt]);
+                $pdo->prepare("UPDATE nozzles SET ugt_no = ? WHERE station_id = ? AND pump_id IN (SELECT id FROM fuel_pumps WHERE station_id = ? AND tank_id = ?) AND (ugt_no IS NULL OR TRIM(ugt_no) = '' OR ugt_no != ?)")
+                    ->execute([$raw_ugt, $station_id, $station_id, $inv_id, $raw_ugt]);
+            } catch (Exception $e) {}
+        }
+
         return $pumps;
     }
 }
@@ -371,6 +449,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? '') === 'GET') {
 
             $pumps = fetch_pumps_for_fuel_product($pdo, $station_id, $fuel);
             $fuel['clean_fuel_type'] = get_canonical_fuel_name($fuel['fuel_type']);
+            $fuel['num_pumps']       = max((int)($fuel['num_pumps'] ?? 0), count($pumps));
+            $fuel['pump_count']      = count($pumps);
             echo json_encode(['success'=>true,'fuel'=>$fuel,'pumps'=>$pumps,'history'=>$history,'config_history'=>$config_history,'status_history'=>$status_history]); exit;
         } catch (Exception $e) { echo json_encode(['success'=>false,'message'=>$e->getMessage()]); exit; }
     }
@@ -846,8 +926,8 @@ try {
                 $stmt = $pdo->prepare("
                     INSERT INTO fuel_inventory
                     (station_id, fuel_type_id, fuel_type, ugt_no, price_per_liter, capacity, critical_level, reorder_level,
-                     current_level, current_stock, status, updated_by, last_updated)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                     current_level, current_stock, status, num_pumps, updated_by, last_updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
                 $stmt->execute([
                     $station_id,
@@ -861,6 +941,7 @@ try {
                     $current_volume,
                     $current_volume,
                     $status,
+                    $num_pumps,
                     $me['id']
                 ]);
                 $new_fuel_id = (int)$pdo->lastInsertId();
@@ -877,14 +958,23 @@ try {
                         if (!in_array($p_status, ['Active', 'Inactive', 'Maintenance'])) {
                             $p_status = 'Active';
                         }
-                        $pump_num = "{$clean_fuel_tag} - {$pi}";
-                        $pump_name = "Pump {$pi}";
-                        $nozzle_num = "Nozzle {$pi}";
+                        $p_num_idx = (int)ceil($pi / 2);
+                        $n_num_idx = (int)((($pi - 1) % 2) + 1);
+                        $code = "{$p_num_idx}-{$n_num_idx}";
+                        $pump_num = "{$clean_fuel_tag} - {$code}";
+                        $pump_name = "Pump {$p_num_idx}";
+                        $nozzle_num = "Nozzle {$n_num_idx}";
                         
-                        // Check if pump exists for this station and tank
-                        $chk_pump = $pdo->prepare("SELECT id FROM fuel_pumps WHERE station_id = ? AND (tank_id = ? OR pump_number = ?) LIMIT 1");
+                        // Check if pump exists for this station and tank with this specific pump_number
+                        $chk_pump = $pdo->prepare("SELECT id FROM fuel_pumps WHERE station_id = ? AND tank_id = ? AND pump_number = ? LIMIT 1");
                         $chk_pump->execute([$station_id, $new_fuel_id, $pump_num]);
                         $existing_pump_id = (int)$chk_pump->fetchColumn();
+
+                        if (!$existing_pump_id) {
+                            $chk_unlinked = $pdo->prepare("SELECT id FROM fuel_pumps WHERE station_id = ? AND pump_number = ? AND (tank_id IS NULL OR tank_id = 0) LIMIT 1");
+                            $chk_unlinked->execute([$station_id, $pump_num]);
+                            $existing_pump_id = (int)$chk_unlinked->fetchColumn();
+                        }
                         
                         if (!$existing_pump_id) {
                             $ins_pump = $pdo->prepare("
@@ -894,8 +984,8 @@ try {
                             $ins_pump->execute([$station_id, $new_fuel_id, $pump_num, $pump_name, $nozzle_num, $fuel_type_id, $ugt_no, $capacity, $p_status]);
                             $existing_pump_id = (int)$pdo->lastInsertId();
                         } else {
-                            $pdo->prepare("UPDATE fuel_pumps SET tank_id = ?, pump_name = ?, nozzle_number = ?, ugt_no = ?, status = ? WHERE id = ?")
-                                ->execute([$new_fuel_id, $pump_name, $nozzle_num, $ugt_no, $p_status, $existing_pump_id]);
+                            $pdo->prepare("UPDATE fuel_pumps SET tank_id = ?, pump_name = ?, nozzle_number = ?, fuel_type_id = ?, ugt_no = ?, status = ? WHERE id = ?")
+                                ->execute([$new_fuel_id, $pump_name, $nozzle_num, $fuel_type_id, $ugt_no, $p_status, $existing_pump_id]);
                         }
 
                         // Sync into nozzles table

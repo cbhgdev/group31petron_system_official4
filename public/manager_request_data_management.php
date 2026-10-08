@@ -478,7 +478,7 @@ table.tbl-requests tbody tr:hover td {
     align-items: center !important;
     justify-content: center !important;
     gap: 4px !important;
-    padding: 6px 8px !important;
+    padding: 6px 12px !important;
     font-size: 12px !important;
     font-weight: 800 !important;
     border-radius: 6px !important;
@@ -486,7 +486,8 @@ table.tbl-requests tbody tr:hover td {
     color: #ffffff !important;
     border: none !important;
     cursor: pointer !important;
-    width: 100% !important;
+    width: auto !important;
+    min-width: 80px !important;
     box-sizing: border-box !important;
     transition: all 0.15s ease !important;
     box-shadow: 0 1px 2px rgba(0,47,112,0.2) !important;
@@ -725,33 +726,29 @@ if (!empty($_SESSION['success'])) unset($_SESSION['success']);
     <div class="table-responsive vt-table-wrapper" style="width:100% !important;max-width:100% !important;overflow-x:hidden !important;overflow-y:visible !important;box-sizing:border-box !important;">
         <table class="tbl-requests report-table rpt-table no-min-width print-table" style="width:100% !important;max-width:100% !important;min-width:0 !important;table-layout:fixed !important;margin:0 !important;border-collapse:collapse !important;">
             <colgroup>
-                <col style="width:8.5%;"> <!-- REQ NO. -->
-                <col style="width:9.5%;"> <!-- CATEGORY -->
-                <col style="width:11%;">  <!-- REQUESTER -->
-                <col style="width:24%;">  <!-- REQUESTED DETAILS -->
-                <col style="width:9%;">   <!-- STATUS -->
-                <col style="width:11%;">  <!-- DATE SUBMITTED -->
-                <col style="width:10%;">  <!-- DATE PROCESSED -->
-                <col style="width:10%;">  <!-- PROCESSED BY -->
-                <col style="width:7%;">   <!-- ACTIONS -->
+                <col style="width:11%;"> <!-- REQ NO. -->
+                <col style="width:16%;"> <!-- CATEGORY -->
+                <col style="width:16%;"> <!-- REQUESTER -->
+                <col style="width:27%;"> <!-- REQUESTED DETAILS -->
+                <col style="width:10%;"> <!-- STATUS -->
+                <col style="width:11%;"> <!-- DATE SUBMITTED -->
+                <col style="width:9%;">  <!-- ACTIONS -->
             </colgroup>
             <thead>
                 <tr>
-                    <th style="width:8.5%;text-align:left;padding:10px 6px;box-sizing:border-box;">REQ NO.</th>
-                    <th style="width:9.5%;text-align:left;padding:10px 6px;box-sizing:border-box;">CATEGORY</th>
-                    <th style="width:11%;text-align:left;padding:10px 6px;box-sizing:border-box;">REQUESTER</th>
-                    <th style="width:24%;text-align:left;padding:10px 6px;box-sizing:border-box;">REQUESTED DETAILS</th>
-                    <th style="width:9%;text-align:center;padding:10px 4px;box-sizing:border-box;">STATUS</th>
-                    <th style="width:11%;text-align:left;padding:10px 6px;box-sizing:border-box;">DATE<br>SUBMITTED</th>
-                    <th style="width:10%;text-align:left;padding:10px 6px;box-sizing:border-box;">DATE<br>PROCESSED</th>
-                    <th style="width:10%;text-align:left;padding:10px 6px;box-sizing:border-box;">PROCESSED<br>BY</th>
-                    <th style="width:7%;text-align:center;padding:10px 4px;box-sizing:border-box;">ACTIONS</th>
+                    <th style="width:11%;text-align:left;padding:10px 8px;box-sizing:border-box;">REQ NO.</th>
+                    <th style="width:16%;text-align:left;padding:10px 8px;box-sizing:border-box;">CATEGORY</th>
+                    <th style="width:16%;text-align:left;padding:10px 8px;box-sizing:border-box;">REQUESTER</th>
+                    <th style="width:27%;text-align:left;padding:10px 8px;box-sizing:border-box;">REQUESTED DETAILS</th>
+                    <th style="width:10%;text-align:center;padding:10px 4px;box-sizing:border-box;">STATUS</th>
+                    <th style="width:11%;text-align:center;padding:10px 4px;box-sizing:border-box;">DATE<br>SUBMITTED</th>
+                    <th style="width:9%;text-align:center;padding:10px 4px;box-sizing:border-box;">ACTIONS</th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($rows)): ?>
                     <tr>
-                        <td colspan="9" style="text-align: center; padding: 48px; color: #94a3b8; font-size: 14px; font-weight: 600;">
+                        <td colspan="7" style="text-align: center; padding: 48px; color: #94a3b8; font-size: 14px; font-weight: 600;">
                             <i class="fas fa-inbox" style="font-size: 36px; display: block; margin-bottom: 10px;"></i>
                             No requests found matching the filters.
                         </td>
@@ -769,7 +766,6 @@ if (!empty($_SESSION['success'])) unset($_SESSION['success']);
 
                         // Status Check & Processing Status
                         $status = trim($row['status'] ?? 'Pending');
-                        $is_processed = ($status !== 'Pending');
 
                         // Status Badge (Enlarged & high-contrast matching Transaction Module)
                         if ($status === 'Approved') {
@@ -779,39 +775,20 @@ if (!empty($_SESSION['success'])) unset($_SESSION['success']);
                         } else {
                             $statusBadge = '<span class="badge badge-pending" style="font-size:12px;font-weight:800;padding:4px 8px;"><i class="fas fa-clock"></i> Pending</span>';
                         }
-
-                        // Date Processed Formatting
-                        if ($is_processed && !empty($row['updated_at'])) {
-                            $date_processed_main = date('M d, Y', strtotime($row['updated_at']));
-                            $time_processed_sub  = date('h:i A', strtotime($row['updated_at']));
-                        } else {
-                            $date_processed_main = '—';
-                            $time_processed_sub  = '';
-                        }
-
-                        // Processed By Formatting
-                        if ($is_processed) {
-                            $processed_by_name = trim($row['reviewer_name'] ?? '');
-                            if ($processed_by_name === '' || $processed_by_name === '—') {
-                                $processed_by_name = !empty($row['reviewed_by']) ? 'Manager' : 'Manager';
-                            }
-                        } else {
-                            $processed_by_name = '—';
-                        }
                     ?>
                         <tr class="mdr-row">
                             <!-- 1. REQ NO. -->
-                            <td style="vertical-align:middle;padding:10px 6px;box-sizing:border-box;">
+                            <td style="vertical-align:middle;padding:10px 8px;box-sizing:border-box;">
                                 <strong style="color:#002F70;font-family:Consolas, 'Courier New', monospace;font-size:13.5px;font-weight:800;letter-spacing:0.2px;display:block;white-space:nowrap;"><?= htmlspecialchars($row['request_no']) ?></strong>
                             </td>
 
                             <!-- 2. CATEGORY -->
-                            <td style="vertical-align:middle;padding:10px 6px;box-sizing:border-box;">
-                                <span class="badge <?= $catClass ?>" style="display:inline-block;white-space:normal;line-height:1.2;font-size:12px;font-weight:800;padding:4px 8px;"><?= htmlspecialchars($row['category']) ?></span>
+                            <td style="vertical-align:middle;padding:10px 8px;box-sizing:border-box;">
+                                <span class="badge <?= $catClass ?>" style="display:inline-block;white-space:nowrap;line-height:1.2;font-size:12px;font-weight:800;padding:4px 8px;"><?= htmlspecialchars($row['category']) ?></span>
                             </td>
 
                             <!-- 3. REQUESTER -->
-                            <td style="vertical-align:middle;padding:10px 6px;box-sizing:border-box;">
+                            <td style="vertical-align:middle;padding:10px 8px;box-sizing:border-box;">
                                 <div style="font-weight:800;font-size:13.5px;color:#0f172a;line-height:1.25;word-break:break-word;"><?= htmlspecialchars($row['requester_name']) ?></div>
                                 <?php if (!empty($row['station_name'])): ?>
                                     <div style="font-size:11.5px;font-weight:600;color:#64748b;margin-top:2px;"><?= htmlspecialchars($row['station_name']) ?></div>
@@ -819,7 +796,7 @@ if (!empty($_SESSION['success'])) unset($_SESSION['success']);
                             </td>
 
                             <!-- 4. REQUESTED DETAILS -->
-                            <td style="vertical-align:middle;padding:10px 6px;box-sizing:border-box;word-break:break-word;overflow-wrap:break-word;">
+                            <td style="vertical-align:middle;padding:10px 8px;box-sizing:border-box;word-break:break-word;overflow-wrap:break-word;">
                                 <div class="payload-struct">
                                     <?php 
                                         $reqReason = $payload['reason'] ?? $payload['remarks'] ?? $payload['notes'] ?? '';
@@ -882,31 +859,12 @@ if (!empty($_SESSION['success'])) unset($_SESSION['success']);
                             </td>
 
                             <!-- 6. DATE SUBMITTED (Stacked Date & Time) -->
-                            <td style="vertical-align:middle;padding:10px 6px;box-sizing:border-box;">
+                            <td style="vertical-align:middle;text-align:center;padding:10px 6px;box-sizing:border-box;">
                                 <div style="font-weight:800;font-size:13px;color:#0f172a;line-height:1.2;white-space:nowrap;"><?= date('M d, Y', strtotime($row['created_at'])) ?></div>
                                 <div style="color:#64748b;font-size:12px;font-weight:700;margin-top:2px;white-space:nowrap;"><?= date('h:i A', strtotime($row['created_at'])) ?></div>
                             </td>
 
-                            <!-- 7. DATE PROCESSED (Stacked Date & Time or Dash) -->
-                            <td style="vertical-align:middle;padding:10px 6px;box-sizing:border-box;">
-                                <?php if ($is_processed): ?>
-                                    <div style="font-weight:800;font-size:13px;color:#0f172a;line-height:1.2;white-space:nowrap;"><?= $date_processed_main ?></div>
-                                    <div style="color:#64748b;font-size:12px;font-weight:700;margin-top:2px;white-space:nowrap;"><?= $time_processed_sub ?></div>
-                                <?php else: ?>
-                                    <span style="color:#94a3b8;font-size:16px;font-weight:800;">—</span>
-                                <?php endif; ?>
-                            </td>
-
-                            <!-- 8. PROCESSED BY -->
-                            <td style="vertical-align:middle;padding:10px 6px;box-sizing:border-box;">
-                                <?php if ($is_processed): ?>
-                                    <div style="font-weight:800;font-size:13px;color:#0f172a;line-height:1.25;word-break:break-word;"><?= htmlspecialchars($processed_by_name) ?></div>
-                                <?php else: ?>
-                                    <span style="color:#94a3b8;font-size:16px;font-weight:800;">—</span>
-                                <?php endif; ?>
-                            </td>
-
-                            <!-- 9. ACTIONS -->
+                            <!-- 7. ACTIONS -->
                             <td style="vertical-align:middle;text-align:center;padding:10px 4px;box-sizing:border-box;">
                                 <?php if ($status === 'Pending'): ?>
                                     <button class="btn-review-action" 

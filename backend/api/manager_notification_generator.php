@@ -185,7 +185,7 @@ try {
                 $key, 'manager_validated_transactions.php?type=job_order'
             );
         } elseif (in_array(strtolower($status), ['completed', 'done', 'finished'])) {
-            $key = 'mgr_jo_completed_' . $r['id'] . '_' . date('Ymd');
+            $key = 'mgr_jo_completed_' . $r['id'];
             $generated += mgr_push($pdo, $user_id, 'success', 'job_order', 'low',
                 "Job Order {$jo_num} Completed",
                 "Staff {$staff} completed Job Order {$jo_num} ({$svc}) for {$cust}.",
@@ -222,7 +222,7 @@ try {
         $pct  = $r['capacity'] > 0 ? round(($r['current_level'] / $r['capacity']) * 100) : 0;
         $sev  = $pct <= 5 ? 'critical' : ($pct <= 10 ? 'high' : 'medium');
         $type = $pct <= 5 ? 'error' : 'warning';
-        $key  = 'mgr_fuel_low_' . $r['id'] . '_' . date('Ymd');
+        $key  = 'mgr_fuel_low_' . $r['id'];
         $generated += mgr_push($pdo, $user_id, $type, 'fuel_management', $sev,
             "Low Fuel Alert: {$r['fuel_type']}",
             "{$r['fuel_type']} is at {$pct}% capacity ({$r['current_level']}L remaining). Refill needed.",
@@ -303,7 +303,7 @@ try {
         $sev   = $stock <= 0 ? 'critical' : ($stock <= 5 ? 'high' : 'medium');
         $type  = $stock <= 0 ? 'error' : 'warning';
         $label = $stock <= 0 ? 'Out of stock' : "Low stock ({$stock} remaining)";
-        $key   = 'mgr_inv_low_' . $r['id'] . '_' . date('Ymd');
+        $key   = 'mgr_inv_low_' . $r['id'];
         $generated += mgr_push($pdo, $user_id, $type, 'inventory', $sev,
             "Inventory Alert: {$r['product_name']}",
             "{$r['product_name']} ({$code})  -  {$label}.",
@@ -499,14 +499,21 @@ try {
     )->execute([$user_id]);
 } catch (Exception $e) {}
 
-// -------------------------------------------------------------Cleanup old fuel low alerts (keep only today's) ----------------------
+// -------------------------------------------------------------Cleanup restored fuel low alerts (>20% capacity) ----------------------
 try {
-    $pdo->prepare(
-        "DELETE FROM notifications
-         WHERE user_id = ?
-           AND source_key LIKE 'mgr_fuel_low_%'
-           AND source_key NOT LIKE '%" . date('Ymd') . "'"
-    )->execute([$user_id]);
+    if ($sw) {
+        $pdo->prepare("
+            DELETE n FROM notifications n
+            INNER JOIN fuel_inventory fi ON (n.source_key = CONCAT('mgr_fuel_low_', fi.id) OR n.source_key LIKE CONCAT('mgr_fuel_low_', fi.id, '_%'))
+            WHERE n.user_id = ?
+              AND fi.station_id = ?
+              AND fi.current_level > (fi.capacity * 0.20)
+        ")->execute([$user_id, $sw]);
+    }
+    // Clean up legacy date-stamped keys
+    $pdo->prepare("DELETE FROM notifications WHERE user_id = ? AND source_key LIKE 'mgr_fuel_low_%_%'")->execute([$user_id]);
+    $pdo->prepare("DELETE FROM notifications WHERE user_id = ? AND source_key LIKE 'mgr_inv_low_%_%'")->execute([$user_id]);
+    $pdo->prepare("DELETE FROM notifications WHERE user_id = ? AND source_key LIKE 'mgr_jo_completed_%_%'")->execute([$user_id]);
 } catch (Exception $e) {}
 
 // -------------------------------------------------------------Cleanup old fuel shift notifications (>2 days) -----------------------

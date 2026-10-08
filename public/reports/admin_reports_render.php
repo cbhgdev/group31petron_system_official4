@@ -1479,7 +1479,7 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                                 <tr>
                                     <td style="white-space:normal!important;word-break:break-all!important;padding:8px 5px!important;"><code style="font-size:10.5px;font-weight:700;word-break:break-all;"><?= htmlspecialchars($r['batch_id'] ?? 'N/A') ?></code></td>
                                     <td style="white-space:normal!important;word-break:break-word!important;padding:8px 5px!important;"><strong><?= htmlspecialchars($r['product'] ?? '') ?></strong></td>
-                                    <td class="text-center fw-bold" style="white-space:normal!important;padding:8px 5px!important;"><?= number_format((float)($r['qty_received'] ?? 0)) ?></td>
+                                    <td class="text-center fw-bold" style="white-space:normal!important;padding:8px 5px!important;"><?= ((float)($r['qty_received'] ?? 0) == floor((float)($r['qty_received'] ?? 0))) ? number_format((float)($r['qty_received'] ?? 0)) : number_format((float)($r['qty_received'] ?? 0), 2) ?></td>
                                     <td class="text-end" style="white-space:nowrap!important;padding:8px 5px!important;">₱<?= number_format((float)($r['unit_cost'] ?? 0), 2) ?></td>
                                     <td class="text-end fw-bold text-success" style="white-space:nowrap!important;padding:8px 5px!important;">₱<?= number_format((float)($r['selling_price'] ?? 0), 2) ?></td>
                                     <td style="white-space:normal!important;word-break:break-word!important;padding:8px 5px!important;"><?= htmlspecialchars($r['approved_by'] ?? 'N/A') ?></td>
@@ -1488,11 +1488,14 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                                 </tr>
                             <?php endforeach; endif; ?>
                         </tbody>
-                        <?php if (!empty($rows)): ?>
+                        <?php if (!empty($rows)): 
+                            $tot_q = (float)array_sum(array_column($rows, 'qty_received'));
+                            $tot_q_str = (floor($tot_q) == $tot_q) ? number_format($tot_q) : number_format($tot_q, 2);
+                        ?>
                         <tfoot>
                             <tr>
                                 <td colspan="2" class="fw-bold text-end">SUMMARY TOTALS:</td>
-                                <td class="text-center fw-bold"><?= number_format(array_sum(array_column($rows, 'qty_received'))) ?></td>
+                                <td class="text-center fw-bold"><?= $tot_q_str ?></td>
                                 <td class="text-end fw-bold">₱<?= number_format(array_sum(array_column($rows, 'unit_cost')), 2) ?></td>
                                 <td class="text-end fw-bold text-success">₱<?= number_format(array_sum(array_column($rows, 'selling_price')), 2) ?></td>
                                 <td colspan="3"></td>
@@ -2129,18 +2132,17 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
 
                 <?php if ($tab === 'transaction_logs'): ?>
                     <thead><tr>
-                        <th style="width:12%;text-align:left;">Date / Time</th>
+                        <th style="width:13%;text-align:left;">Date / Time</th>
                         <th style="width:12%;text-align:left;">Reference</th>
                         <th style="width:10%;text-align:left;">Module</th>
                         <th style="width:13%;text-align:left;">Action</th>
-                        <th style="width:12%;text-align:left;">Performed By</th>
-                        <th style="width:17%;text-align:left;">Details</th>
-                        <th class="text-end" style="width:9%;text-align:right;">Amount</th>
+                        <th style="width:13%;text-align:left;">Performed By</th>
+                        <th style="width:24%;text-align:left;">Details</th>
                         <th style="width:15%;text-align:center;">Status</th>
                     </tr></thead>
                     <tbody>
                     <?php if (empty($rows)): ?>
-                        <tr><td colspan="8" class="text-center py-4 text-muted">No transaction logs found for this period.</td></tr>
+                        <tr><td colspan="7" class="text-center py-4 text-muted">No transaction logs found for this period.</td></tr>
                     <?php else: foreach ($rows as $r):
                         $mod = $r['module'] ?? 'Merchandise';
                         $mod_cls = match(strtolower($mod)) {
@@ -2149,6 +2151,10 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                             'fuel sales closing'=> 'bg-secondary',
                             'sales adjustments' => 'bg-warning text-dark',
                             'reports'           => 'bg-light text-dark border',
+                            'customers'         => 'bg-info text-dark',
+                            'inventory'         => 'bg-warning text-dark',
+                            'procurement'       => 'bg-secondary text-white',
+                            'user management'   => 'bg-dark text-white',
                             default             => 'bg-success',
                         };
                         $sts = strtolower($r['status'] ?? '');
@@ -2157,7 +2163,6 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                             $sts === 'cancelled' || $sts === 'voided'  => 'bg-danger',
                             default                                    => 'bg-warning text-dark',
                         };
-                        $amt = (float)($r['total_amount'] ?? 0);
                     ?>
                         <tr>
                             <td><small style="white-space:nowrap;"><?= ard_fmt_12h_datetime($r['datetime'] ?? 'N/A') ?></small></td>
@@ -2166,10 +2171,7 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                             <td><strong><?= htmlspecialchars($r['action'] ?? 'Created Transaction') ?></strong></td>
                             <td><?= htmlspecialchars($r['performed_by'] ?? 'Staff') ?></td>
                             <td><small class="text-muted"><?= htmlspecialchars($r['details'] ?? '—') ?></small></td>
-                            <td class="text-end fw-bold <?= $amt > 0 ? 'text-success' : 'text-muted' ?>">
-                                <?= $amt > 0 ? ('₱' . number_format($amt, 2)) : '—' ?>
-                            </td>
-                            <td><span class="badge <?= $sts_cls ?>" style="font-size:10px;"><?= htmlspecialchars(ucfirst($r['status'] ?? 'Completed')) ?></span></td>
+                            <td class="text-center" style="text-align:center;"><span class="badge <?= $sts_cls ?>" style="font-size:10px;"><?= htmlspecialchars(ucfirst($r['status'] ?? 'Completed')) ?></span></td>
                         </tr>
                     <?php endforeach; endif; ?>
                     </tbody>
@@ -2191,13 +2193,22 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                     <?php else: foreach ($rows as $r):
                         $mov = $r['movement_type'] ?? 'Movement';
                         $mov_cls = match(true) {
-                            str_contains(strtolower($mov), 'stock in') || str_contains(strtolower($mov), 'delivery') => 'bg-success',
-                            str_contains(strtolower($mov), 'stock out') || str_contains(strtolower($mov), 'damage') => 'bg-danger',
+                            str_contains(strtolower($mov), 'stock in') || str_contains(strtolower($mov), 'delivery') || str_contains(strtolower($mov), 'received') => 'bg-success text-white',
+                            str_contains(strtolower($mov), 'stock out') || str_contains(strtolower($mov), 'damage') => 'bg-danger text-white',
+                            str_contains(strtolower($mov), 'purchase order') || str_contains(strtolower($mov), 'stock request') => 'bg-primary text-white',
                             str_contains(strtolower($mov), 'adjust') => 'bg-warning text-dark',
                             str_contains(strtolower($mov), 'physical') => 'bg-info text-dark',
-                            default => 'bg-secondary',
+                            default => 'bg-secondary text-white',
                         };
                         $chg = (float)($r['quantity_change'] ?? 0);
+                        $sts = strtolower($r['status'] ?? '');
+                        $sts_cls = match(true) {
+                            str_contains($sts, 'approv') || in_array($sts, ['completed', 'official', 'fulfilled', 'validated', 'verified', 'resolved', 'accepted', 'released', 'stock-in complete', 'stock_in_complete', 'delivery successful', 'done']) => 'bg-success text-white',
+                            str_contains($sts, 'reject') || str_contains($sts, 'cancel') || str_contains($sts, 'void') => 'bg-danger text-white',
+                            str_contains($sts, 'pending stock-in') => 'bg-warning text-dark',
+                            str_contains($sts, 'pending') || str_contains($sts, 'draft') => 'bg-info text-dark',
+                            default => 'bg-secondary text-white',
+                        };
                     ?>
                         <tr>
                             <td style="white-space:normal!important;word-break:break-word;"><small style="white-space:nowrap;"><?= ard_fmt_12h_datetime($r['datetime'] ?? 'N/A') ?></small></td>
@@ -2209,7 +2220,7 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                             </td>
                             <td style="white-space:normal!important;word-break:break-word;"><?= htmlspecialchars($r['performed_by'] ?? 'Staff') ?></td>
                             <td style="white-space:normal!important;word-break:break-word;"><small class="text-muted"><?= htmlspecialchars($r['details'] ?? '—') ?></small></td>
-                            <td style="text-align:center;"><span class="badge bg-secondary" style="font-size:10px;"><?= htmlspecialchars(ucfirst($r['status'] ?? 'Completed')) ?></span></td>
+                            <td style="text-align:center;"><span class="badge <?= $sts_cls ?>" style="font-size:10px;"><?= htmlspecialchars(ucwords($r['status'] ?? 'Completed')) ?></span></td>
                         </tr>
                     <?php endforeach; endif; ?>
                     </tbody>
@@ -2231,22 +2242,26 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                     <?php else: foreach ($rows as $r):
                         $act = strtolower($r['action'] ?? '');
                         $act_cls = match(true) {
-                            str_contains($act, 'approv') => 'bg-success text-white',
-                            str_contains($act, 'reject') => 'bg-danger text-white',
+                            str_contains($act, 'approv') || str_contains($act, 'complet') || str_contains($act, 'releas') || str_contains($act, 'verifi') || str_contains($act, 'validat') => 'bg-success text-white',
+                            str_contains($act, 'reject') || str_contains($act, 'cancel') => 'bg-danger text-white',
+                            str_contains($act, 'adjust') => 'bg-warning text-dark',
                             str_contains($act, 'revis')  => 'bg-info text-dark',
                             default                      => 'bg-warning text-dark',
                         };
                         $act_icon = match(true) {
-                            str_contains($act, 'approv') => '<i class="fas fa-check-circle me-1"></i>',
-                            str_contains($act, 'reject') => '<i class="fas fa-times-circle me-1"></i>',
+                            str_contains($act, 'approv') || str_contains($act, 'complet') || str_contains($act, 'releas') || str_contains($act, 'verifi') || str_contains($act, 'validat') => '<i class="fas fa-check-circle me-1"></i>',
+                            str_contains($act, 'reject') || str_contains($act, 'cancel') => '<i class="fas fa-times-circle me-1"></i>',
+                            str_contains($act, 'adjust') => '<i class="fas fa-sliders-h me-1"></i>',
                             str_contains($act, 'revis')  => '<i class="fas fa-edit me-1"></i>',
                             default                      => '<i class="fas fa-hourglass-half me-1"></i>',
                         };
 
                         $stat_low = strtolower($r['status'] ?? '');
                         $stat_cls = match(true) {
-                            str_contains($stat_low, 'approv') || in_array($stat_low, ['official','completed','fulfilled','validated','verified','resolved','accepted']) => 'bg-success text-white',
+                            str_contains($stat_low, 'approv') || str_contains($stat_low, 'delivery successful') || in_array($stat_low, ['official','completed','fulfilled','validated','verified','resolved','accepted','released','stock-in complete','stock_in_complete','delivery successful','paid','done']) => 'bg-success text-white',
                             str_contains($stat_low, 'reject') || str_contains($stat_low, 'cancel') || str_contains($stat_low, 'return') => 'bg-danger text-white',
+                            str_contains($stat_low, 'adjust') => 'bg-warning text-dark',
+                            str_contains($stat_low, 'in progress') || str_contains($stat_low, 'inprogress') => 'bg-info text-dark',
                             default => 'bg-secondary text-white',
                         };
 
@@ -2337,9 +2352,17 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                         $act = strtolower($r['action'] ?? '');
                         $act_cls = match(true) {
                             str_contains($act, 'archive')   => 'bg-warning text-dark',
-                            str_contains($act, 'deactivat') => 'bg-danger',
-                            str_contains($act, 'reactivat') || str_contains($act, 'restore') => 'bg-success',
+                            str_contains($act, 'deactivat') || str_contains($act, 'disable') || str_contains($act, 'inactive') => 'bg-danger',
+                            str_contains($act, 'reactivat') || str_contains($act, 'restore') || str_contains($act, 'activat') || str_contains($act, 'active') || str_contains($act, 'enable') => 'bg-success',
                             default                         => 'bg-secondary',
+                        };
+
+                        $st_low = strtolower($r['status'] ?? '');
+                        $st_cls = match(true) {
+                            str_contains($st_low, 'deactivat') || str_contains($st_low, 'disable') || str_contains($st_low, 'inactive') => 'bg-danger',
+                            str_contains($st_low, 'archive') => 'bg-warning text-dark',
+                            str_contains($st_low, 'active') || str_contains($st_low, 'restore') || str_contains($st_low, 'reactivat') || str_contains($st_low, 'enable') => 'bg-success',
+                            default => 'bg-secondary',
                         };
                     ?>
                         <tr>
@@ -2349,7 +2372,7 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                             <td><span class="badge <?= $act_cls ?>" style="font-size:10px;"><?= htmlspecialchars($r['action'] ?? 'Archived') ?></span></td>
                             <td><?= htmlspecialchars($r['performed_by'] ?? 'Admin') ?></td>
                             <td><small class="text-muted"><?= htmlspecialchars($r['details'] ?? '—') ?></small></td>
-                            <td><span class="badge bg-secondary" style="font-size:10px;"><?= htmlspecialchars(ucfirst($r['status'] ?? 'Archived')) ?></span></td>
+                            <td class="text-center" style="text-align:center;"><span class="badge <?= $st_cls ?>" style="font-size:10px;"><?= htmlspecialchars(ucfirst($r['status'] ?? 'Archived')) ?></span></td>
                         </tr>
                     <?php endforeach; endif; ?>
                     </tbody>

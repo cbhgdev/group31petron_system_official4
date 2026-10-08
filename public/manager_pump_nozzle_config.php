@@ -74,11 +74,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 $fn_stmt->execute([$fuel_type_id]);
                 $fuel_name = $fn_stmt->fetchColumn() ?: 'Fuel';
 
-                // Construct a canonical pump_number tag
-                $pump_tag = strtoupper($fuel_name) . ' - ' . preg_replace('/[^0-9]/', '', $pump_name . $nozzle_num);
-                if (empty(preg_replace('/[^0-9]/', '', $pump_name . $nozzle_num))) {
-                    $pump_tag = strtoupper($fuel_name) . ' - ' . ($nozzle_id ?: 1);
-                }
+                // Construct a canonical dual-nozzle pump_number tag
+                $p_idx_only = (int)preg_replace('/[^0-9]/', '', $pump_name) ?: 1;
+                $n_idx_only = (int)preg_replace('/[^0-9]/', '', $nozzle_num) ?: 1;
+                $pump_tag = strtoupper($fuel_name) . " - {$p_idx_only}-{$n_idx_only}";
 
                 if ($nozzle_id > 0) {
                     // Update existing

@@ -909,7 +909,12 @@ function manager_add_customer(): void {
         manager_log_timeline($newId, 'Credit Approved', "Credit limit approved: ₱" . number_format($data['credit_limit'], 2));
     }
 
-    manager_audit('Create', "Created customer {$fullName} ({$customerId})", $newId);
+    manager_audit('Add Customer', "Created customer {$fullName} ({$customerId})", $newId);
+    if (function_exists('log_activity')) {
+        try {
+            log_activity($pdo, (int)($me['id'] ?? 0), 'Add Customer', "Added customer {$fullName} ({$customerId}) | Contact: " . ($data['contact_number'] ?: 'N/A') . " | Plate: " . ($data['vehicle_plate'] ?: 'N/A'));
+        } catch (Throwable $e) {}
+    }
     manager_send_json(['success' => true, 'message' => 'Customer has been saved successfully.', 'id' => $newId, 'customer_id' => $customerId]);
 }
 
@@ -994,7 +999,12 @@ function manager_update_customer(): void {
     }
 
     manager_log_timeline($id, 'Customer Updated', "Customer details updated by Manager.");
-    manager_audit('Update', "Updated customer {$fullName}", $id);
+    manager_audit('Update Customer', "Updated customer {$fullName}", $id);
+    if (function_exists('log_activity')) {
+        try {
+            log_activity($pdo, (int)($me['id'] ?? 0), 'Update Customer', "Updated customer details for {$fullName} (ID #{$id})");
+        } catch (Throwable $e) {}
+    }
     manager_send_json(['success' => true, 'message' => 'Customer has been updated successfully.']);
 }
 
@@ -1026,7 +1036,12 @@ function manager_archive_customer(): void {
     }
 
     manager_log_timeline($id, 'Archived', "Customer archived. Reason: {$reason}. Remarks: {$remarks}");
-    manager_audit('Archive', "Archived customer ID {$id}. Reason: {$reason}", $id);
+    manager_audit('Archive Customer', "Archived customer ID {$id}. Reason: {$reason}", $id);
+    if (function_exists('log_activity')) {
+        try {
+            log_activity($pdo, (int)($me['id'] ?? 0), 'Archive Customer', "Archived customer ID {$id}. Reason: {$reason}");
+        } catch (Throwable $e) {}
+    }
     manager_send_json(['success' => true, 'message' => 'Customer has been archived successfully.']);
 }
 
@@ -1055,7 +1070,12 @@ function manager_restore_customer(): void {
     }
 
     manager_log_timeline($id, 'Restored', "Customer account restored to Active status.");
-    manager_audit('Restore', "Restored customer ID {$id} to Active status.", $id);
+    manager_audit('Restore Customer', "Restored customer ID {$id} to Active status.", $id);
+    if (function_exists('log_activity')) {
+        try {
+            log_activity($pdo, (int)($me['id'] ?? 0), 'Restore Customer', "Restored customer ID {$id} to Active status");
+        } catch (Throwable $e) {}
+    }
     manager_send_json(['success' => true, 'message' => 'Customer account restored successfully.']);
 }
 
@@ -1254,7 +1274,12 @@ function manager_approve_customer_request(): void {
 
         $pdo->commit();
 
-        manager_audit('Approve', "Approved customer request CR-" . str_pad((string)$requestId, 5, '0', STR_PAD_LEFT) . " for {$fullName} as {$customerId}", $newId);
+        manager_audit('Approve Customer Request', "Approved customer request CR-" . str_pad((string)$requestId, 5, '0', STR_PAD_LEFT) . " for {$fullName} as {$customerId}", $newId);
+        if (function_exists('log_activity')) {
+            try {
+                log_activity($pdo, (int)($me['id'] ?? 0), 'Approve Customer Request', "Approved customer request CR-" . str_pad((string)$requestId, 5, '0', STR_PAD_LEFT) . " for {$fullName} ({$customerId})");
+            } catch (Throwable $e) {}
+        }
         manager_send_json(['success' => true, 'message' => 'Customer request approved and customer record created.', 'customer_id' => $customerId]);
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) {
@@ -1313,7 +1338,12 @@ function manager_reject_customer_request(): void {
         );
     }
 
-    manager_audit('Reject', "Rejected customer request CR-" . str_pad((string)$requestId, 5, '0', STR_PAD_LEFT) . ($remarks !== '' ? ". Reason: {$remarks}" : ""), $requestId);
+    manager_audit('Reject Customer Request', "Rejected customer request CR-" . str_pad((string)$requestId, 5, '0', STR_PAD_LEFT) . ($remarks !== '' ? ". Reason: {$remarks}" : ""), $requestId);
+    if (function_exists('log_activity')) {
+        try {
+            log_activity($pdo, (int)($me['id'] ?? 0), 'Reject Customer Request', "Rejected customer registration request CR-" . str_pad((string)$requestId, 5, '0', STR_PAD_LEFT) . ($remarks !== '' ? " (Reason: {$remarks})" : ""));
+        } catch (Throwable $e) {}
+    }
     manager_send_json(['success' => true, 'message' => 'Customer request rejected.']);
 }
 

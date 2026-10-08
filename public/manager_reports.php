@@ -333,78 +333,132 @@ $rpt_logo_url     = '';
     padding: 0 !important;
     border-radius: 0 !important;
     border: none !important;
-    margin-bottom: 24px !important;
+    margin-bottom: 20px !important;
     flex-wrap: wrap !important;
 }
 
 .rpt-filter-inputs {
     display: flex !important;
     align-items: center !important;
-    gap: 10px !important;
+    gap: 8px !important;
     flex-wrap: wrap !important;
+    flex: 1 1 auto !important;
+}
+
+.rpt-filter-btn-group {
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 6px !important;
+    flex-shrink: 0 !important;
 }
 
 .rpt-filter-bar label,
 .rpt-filter-inputs label {
-    font-size: 13.5px !important;
+    font-size: 12px !important;
     font-weight: 800 !important;
     color: #00264D !important;
     text-transform: uppercase !important;
     margin: 0 !important;
     letter-spacing: 0.3px !important;
+    white-space: nowrap !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 4px !important;
 }
 
 .rpt-filter-bar input[type="date"],
 .rpt-filter-bar input[type="text"],
 .rpt-filter-bar select {
-    padding: 7px 12px !important;
+    padding: 4px 9px !important;
+    height: 35px !important;
     border: 1.5px solid #cbd5e1 !important;
-    border-radius: 5px !important;
-    font-size: 13.5px !important;
+    border-radius: 6px !important;
+    font-size: 12.5px !important;
     font-weight: 600 !important;
     color: #0f172a !important;
     background: #ffffff !important;
+    box-sizing: border-box !important;
+    outline: none !important;
+    transition: border-color 0.15s ease !important;
+}
+
+.rpt-filter-bar input[type="date"]:focus,
+.rpt-filter-bar input[type="text"]:focus,
+.rpt-filter-bar select:focus {
+    border-color: #00264D !important;
 }
 
 .rpt-btn-apply {
-    padding: 8px 20px !important;
+    height: 35px !important;
+    padding: 0 16px !important;
     background: #00264D !important;
     color: #ffffff !important;
     border: none !important;
-    border-radius: 5px !important;
-    font-size: 13.5px !important;
+    border-radius: 6px !important;
+    font-size: 12.5px !important;
     font-weight: 800 !important;
     cursor: pointer !important;
     display: inline-flex !important;
     align-items: center !important;
     gap: 6px !important;
     letter-spacing: 0.3px !important;
+    white-space: nowrap !important;
+    box-sizing: border-box !important;
+    transition: background 0.15s ease !important;
 }
 
 .rpt-btn-apply:hover {
     background: #001a35 !important;
 }
 
+.rpt-btn-reset {
+    height: 35px !important;
+    padding: 0 14px !important;
+    border-radius: 6px !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
+    color: #475569 !important;
+    border: 1.5px solid #cbd5e1 !important;
+    background: #ffffff !important;
+    text-decoration: none !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    gap: 5px !important;
+    white-space: nowrap !important;
+    box-sizing: border-box !important;
+    transition: all 0.15s ease !important;
+}
+
+.rpt-btn-reset:hover {
+    background: #f1f5f9 !important;
+    color: #0f172a !important;
+    border-color: #94a3b8 !important;
+    text-decoration: none !important;
+}
+
 /* Export Group */
 .rpt-export-group {
     display: flex !important;
     align-items: center !important;
-    gap: 7px !important;
+    gap: 6px !important;
     margin-left: auto !important;
     white-space: nowrap !important;
+    flex-shrink: 0 !important;
 }
 
 .rpt-export-btn {
-    padding: 7px 14px !important;
-    font-size: 13px !important;
+    height: 35px !important;
+    padding: 0 13px !important;
+    font-size: 12px !important;
     font-weight: 700 !important;
-    border-radius: 5px !important;
+    border-radius: 6px !important;
     cursor: pointer !important;
     display: inline-flex !important;
     align-items: center !important;
-    gap: 6px !important;
+    gap: 5px !important;
     background: #ffffff !important;
     border: 1px solid #cbd5e1 !important;
+    box-sizing: border-box !important;
     transition: all 0.18s !important;
 }
 
@@ -914,9 +968,6 @@ table.rpt-table.rpt-table-fixed .badge {
                         <option value="Overstock" <?= $sel_status === 'Overstock' ? 'selected' : '' ?>>Overstock</option>
                     </select>
 
-                    <label class="ms-1"><i class="fas fa-barcode me-1"></i> Batch ID</label>
-                    <input type="text" name="filter_batch" value="<?= $sel_batch ?>" placeholder="Batch ID..." style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:110px;color:#334155;">
-
                     <label class="ms-1"><i class="fas fa-search me-1"></i> Product</label>
                     <input type="text" name="filter_product" value="<?= $sel_prod ?>" placeholder="Product/SKU..." style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:120px;color:#334155;">
 
@@ -969,9 +1020,6 @@ table.rpt-table.rpt-table-fixed .badge {
 
                     <label class="ms-1"><i class="fas fa-box me-1"></i> Product</label>
                     <input type="text" name="filter_product" value="<?= $sel_prod ?>" placeholder="Product..." style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:110px;color:#334155;">
-
-                    <label class="ms-1"><i class="fas fa-barcode me-1"></i> Batch ID</label>
-                    <input type="text" name="filter_batch" value="<?= $sel_batch ?>" placeholder="Batch ID..." style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:100px;color:#334155;">
 
                     <label class="ms-1"><i class="fas fa-user me-1"></i> User</label>
                     <input type="text" name="filter_user" value="<?= $sel_user ?>" placeholder="Performed By..." style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:110px;color:#334155;">
@@ -1267,7 +1315,7 @@ table.rpt-table.rpt-table-fixed .badge {
                     <label class="ms-1"><i class="fas fa-filter me-1"></i> Module</label>
                     <select name="filter_module" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:11.5px;color:#334155;">
                         <option value="">All Modules</option>
-                        <?php foreach (['Merchandise','Fuel Management','Job Orders','Fuel Sales Closing','Sales Adjustments','Reports'] as $m): ?>
+                        <?php foreach (['Merchandise','Fuel Management','Job Orders','Customers','Inventory','Procurement','User Management','Fuel Sales Closing','Sales Adjustments','Reports'] as $m): ?>
                             <option value="<?= $m ?>" <?= strtolower($sel_module) === strtolower($m) ? 'selected' : '' ?>><?= $m ?></option>
                         <?php endforeach; ?>
                     </select>
@@ -1366,13 +1414,14 @@ table.rpt-table.rpt-table-fixed .badge {
 
                 <?php endif; ?>
 
-                <button type="submit" class="rpt-btn-apply"><i class="fas fa-sync-alt"></i> Apply</button>
-                <?php if (!empty($active_filters)): ?>
-                    <a href="manager_reports.php?cat=<?= $active_cat ?>&tab=<?= $active_tab ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>"
-                       style="padding:7px 14px;border-radius:4px;font-size:12px;font-weight:600;color:#64748b;border:1px solid #cbd5e1;background:#fff;text-decoration:none;display:inline-flex;align-items:center;gap:5px;">
-                        <i class="fas fa-times"></i> Reset
-                    </a>
-                <?php endif; ?>
+                <div class="rpt-filter-btn-group">
+                    <button type="submit" class="rpt-btn-apply"><i class="fas fa-sync-alt"></i> Apply</button>
+                    <?php if (!empty($active_filters)): ?>
+                        <a href="manager_reports.php?cat=<?= $active_cat ?>&tab=<?= $active_tab ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="rpt-btn-reset">
+                            <i class="fas fa-times"></i> Reset
+                        </a>
+                    <?php endif; ?>
+                </div>
             </div>
 
             <!-- Export Buttons -->

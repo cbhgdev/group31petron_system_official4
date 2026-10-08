@@ -67,31 +67,64 @@ $header_time_ago = function($datetime) {
 };
 $header_notif_url = function($url, $context = []) use ($app_base_path, $public_base_url) {
     $url = trim((string)$url);
-
-    // Remap Fuel Adjustment notifications to Fuel Adjustments oversight instead of Transaction oversight
     $title_check   = strtolower(trim((string)($context['title'] ?? '')));
     $message_check = strtolower(trim((string)($context['message'] ?? '')));
     $evt_check     = strtolower(trim((string)($context['event_type'] ?? '')));
 
-    $is_fuel_adj = (
-        strpos($title_check, 'adjustment') !== false ||
+    // Remap Merchandise Stock Adjustments to manager_inventory_merchandise.php?tab=adjustments
+    $is_merch_adj = (
+        strpos($title_check, 'stock adjustment') !== false ||
+        strpos($title_check, 'merchandise adjustment') !== false ||
+        strpos($url, 'manager_inventory_merchandise.php') !== false ||
+        in_array($evt_check, ['inventory_adjustment', 'stock_adjustment', 'merchandise_adjustment'], true) ||
+        (strpos($title_check, 'adjustment') !== false && strpos($title_check, 'fuel') === false && strpos($message_check, 'fuel') === false && strpos($title_check, 'tank') === false && strpos($message_check, 'tank') === false)
+    );
+
+    // Remap Fuel Adjustment notifications to manager_fuel_adjustments.php
+    $is_fuel_adj = !$is_merch_adj && (
         strpos($title_check, 'tank dip') !== false ||
         strpos($message_check, 'fuel reading adjustment') !== false ||
         strpos($message_check, 'tank dip') !== false ||
         strpos($message_check, 'physical dip') !== false ||
         in_array($evt_check, ['fuel_adjustment', 'fuel_adjustments', 'tank_dip', 'dip_adjustment'], true) ||
+        (strpos($title_check, 'fuel') !== false && strpos($title_check, 'adjustment') !== false) ||
         strpos($url, 'fuel_adjustments') !== false
     );
 
-    if ($is_fuel_adj) {
+    if ($is_merch_adj) {
         $uRole = function_exists('role_key') ? role_key($_SESSION['user']['role'] ?? '') : '';
         if (in_array($uRole, ['admin', 'superadmin', 'developer'], true)) {
-            $url = 'admin_fuel_adjustments_oversight.php';
+            $url = 'admin_inventory_merchandise.php?tab=adjustments';
         } elseif (in_array($uRole, ['manager', 'supervisor'], true)) {
-            $url = 'manager_fuel_deliveries.php';
+            $url = 'manager_inventory_merchandise.php?tab=adjustments';
         } else {
-            $url = 'staff_inventory_fuel.php';
+            if (strpos($url, 'staff_inventory_merchandise.php') === false) {
+                $url = 'staff_inventory_merchandise.php?tab=overview';
+            }
         }
+    } elseif ($is_fuel_adj) {
+        $uRole = function_exists('role_key') ? role_key($_SESSION['user']['role'] ?? '') : '';
+        if (in_array($uRole, ['admin', 'superadmin', 'developer'], true)) {
+            $url = 'admin_inventory_fuel.php?tab=adjustments';
+        } elseif (in_array($uRole, ['manager', 'supervisor'], true)) {
+            $url = 'manager_fuel_adjustments.php';
+        } else {
+            if (strpos($url, 'staff_inventory_fuel.php') === false) {
+                $url = 'staff_inventory_fuel.php?tab=overview';
+            }
+        }
+    }
+
+    // Remap Purchase Order notifications to Purchase Management (manager_stock_request_review.php)
+    $is_po_issued = (
+        strpos($title_check, 'purchase order') !== false ||
+        strpos($message_check, 'purchase order') !== false ||
+        $evt_check === 'purchase_order' ||
+        strpos($url, 'manager_stock_request_review.php') !== false ||
+        strpos($url, 'manager_purchase_orders.php') !== false
+    );
+    if ($is_po_issued) {
+        $url = 'manager_stock_request_review.php';
     }
 
     if ($url === '' || $url === '#') return '#';
@@ -99,18 +132,8 @@ $header_notif_url = function($url, $context = []) use ($app_base_path, $public_b
     // Remap deprecated staff delivery URLs to Staff Inventory modules
     if (strpos($url, 'staff_fuel_deliveries.php') !== false) {
         $url = 'staff_inventory_fuel.php';
-    } elseif (strpos($url, 'staff_record_delivery.php') !== false) {
-        $is_fuel = (
-            strpos($url, 'tab=fuel') !== false ||
-            strpos($url, 'fpo') !== false ||
-            stripos($context['title'] ?? '', 'fuel') !== false ||
-            stripos($context['message'] ?? '', 'fuel') !== false ||
-            stripos($context['message'] ?? '', 'diesel') !== false ||
-            stripos($context['message'] ?? '', 'liters') !== false ||
-            stripos($context['message'] ?? '', 'xcs') !== false ||
-            stripos($context['message'] ?? '', 'tank') !== false
-        );
-        $url = $is_fuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+    } elseif (strpos($url, 'manager_inventory_stock_requests.php') !== false || strpos($url, 'manager_purchase_orders.php') !== false) {
+        $url = 'manager_stock_request_review.php';
     }
 
     if (preg_match('/^https?:\/\//i', $url)) return $url;
@@ -4296,12 +4319,11 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
             }
         } catch(err) {}
 
-        if (typeof window.loadStaffNotifications === 'function') {
-            window.loadStaffNotifications(false);
-        } else if (typeof window.saLoadNotifications === 'function') {
-            window.saLoadNotifications();
-        } else if (typeof window.petronLoadNotifications === 'function') {
-            window.petronLoadNotifications(false);
+        // Reload list directly without running generator
+        if (typeof window.petronLoadNotificationsOnly === 'function') {
+            window.petronLoadNotificationsOnly(false);
+        } else if (typeof window.loadNotifications === 'function') {
+            window.loadNotifications(false);
         }
     };
 
@@ -4359,6 +4381,13 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         try {
             fetch(apiUrl, { method: 'POST', body: fd, credentials: 'same-origin', keepalive: true }).catch(function(){});
         } catch(err) {}
+
+        if (targetUrl && targetUrl !== '#' && targetUrl !== 'javascript:void(0)') {
+            if (e && typeof e.preventDefault === 'function') e.preventDefault();
+            setTimeout(function() {
+                window.location.href = targetUrl;
+            }, 80);
+        }
     };
 
     window.staffMarkRead = function(id) { window.petronMarkSingleNotificationRead(null, id); };
@@ -4530,7 +4559,11 @@ require_once __DIR__ . '/rbac_menu.php';
       'manager_inventory_merchandise' => 'mgr_inv_merch',
       'manager_inventory_fuel'        => 'mgr_inv_fuel',
       'manager_stock_request_review'  => 'mgr_stock_review',
+      'mgr_stock_review'              => 'mgr_stock_review',
+      'staff_record_delivery'         => 'inv_record_delivery',
+      'inv_record_delivery'           => 'inv_record_delivery',
       'manager_stock_in'              => 'mgr_stock_in',
+      'mgr_stock_in'                  => 'mgr_stock_in',
       // Customers
       'manager_customers'             => 'mgr_customers',
       'mgr_customers'                 => 'mgr_customers',
@@ -5937,7 +5970,9 @@ require_once __DIR__ . '/rbac_menu.php';
 
     window.resolveRedirectUrl = function(url) {
         if (!url || url === '#' || url === '' || url === 'null') return '#';
-        if (url.includes('staff_fuel_deliveries.php')) {
+        if (url.includes('manager_stock_request_review.php') || url.includes('manager_purchase_orders.php') || url.includes('purchase_order')) {
+            url = 'manager_stock_request_review.php';
+        } else if (url.includes('staff_fuel_deliveries.php')) {
             url = 'staff_inventory_fuel.php';
         } else if (url.includes('staff_record_delivery.php')) {
             var isFuel = url.includes('tab=fuel') || url.includes('fpo');
@@ -5947,46 +5982,6 @@ require_once __DIR__ . '/rbac_menu.php';
         // Relative path from search.php (e.g. "staff_inventory.php") — resolve to /public/
         var base = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
         return base + '/public/' + url;
-    };
-
-    window.petronMarkSingleNotificationRead = function(e, id, targetUrl) {
-        if (e && targetUrl && targetUrl !== '#' && targetUrl !== 'javascript:void(0)') {
-            e.preventDefault();
-        }
-        if (id) {
-            // Decrement badge immediately (optimistic UI)
-            var badge = document.getElementById('notificationBadge');
-            if (badge && badge.style.display !== 'none') {
-                var cur = parseInt(badge.textContent.replace(/\D/g, ''), 10) || 0;
-                cur = Math.max(0, cur - 1);
-                if (cur > 0) {
-                    badge.textContent = cur > 99 ? '99+' : cur;
-                } else {
-                    badge.textContent = '';
-                    badge.style.display = 'none';
-                }
-            }
-            var item = document.querySelector('[onclick*="' + id + '"]');
-            if (item) {
-                item.classList.remove('unread');
-                item.style.backgroundColor = 'transparent';
-                var dot = item.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
-                if (dot) dot.remove();
-            }
-            try {
-                var fd = new FormData();
-                fd.append('notification_id', id);
-                var bp = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
-                var api = bp + '/backend/api/notifications_api.php?action=mark_read';
-                if (navigator.sendBeacon) navigator.sendBeacon(api, fd);
-                else fetch(api, { method: 'POST', body: fd, credentials: 'same-origin', keepalive: true }).catch(function(){});
-            } catch (err) {}
-        }
-        if (targetUrl && targetUrl !== '#' && targetUrl !== 'javascript:void(0)') {
-            setTimeout(function() {
-                window.location.href = targetUrl;
-            }, 100);
-        }
     };
 
 
@@ -6504,9 +6499,6 @@ require_once __DIR__ . '/rbac_menu.php';
                 if (!link || link === '#') return '#';
                 if (link.indexOf('staff_fuel_deliveries.php') !== -1) {
                     link = 'staff_inventory_fuel.php';
-                } else if (link.indexOf('staff_record_delivery.php') !== -1) {
-                    var isFuel = link.indexOf('tab=fuel') !== -1 || link.indexOf('fpo') !== -1;
-                    link = isFuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
                 }
                 if (link.indexOf('http://') === 0 || link.indexOf('https://') === 0 || link.indexOf('/') === 0) {
                     return link;
@@ -6997,6 +6989,7 @@ require_once __DIR__ . '/rbac_menu.php';
                 } catch(e) {}
                 await loadNotifications();
             };
+            window.petronLoadNotificationsOnly = loadNotifications;
 
             // Direct notifications (run generator on page load)
             generateAndRefresh();
@@ -7064,6 +7057,9 @@ require_once __DIR__ . '/rbac_menu.php';
                 transaction             : 'fas fa-shopping-cart',
                 merchandise             : 'fas fa-shopping-cart',
                 merchandise_transaction : 'fas fa-shopping-cart',
+                inventory_adjustment    : 'fas fa-sliders-h',
+                stock_adjustment        : 'fas fa-sliders-h',
+                stock_request           : 'fas fa-file-alt',
                 job_order               : 'fas fa-wrench',
                 combined                : 'fas fa-tools',
                 fuel_management         : 'fas fa-gas-pump',
@@ -7212,14 +7208,55 @@ require_once __DIR__ . '/rbac_menu.php';
                             if (targetUrl.indexOf('staff_requests.php') !== -1) {
                                 targetUrl = 'staff_transactions_hub.php?section=merchandise';
                             }
-                            if (targetUrl.indexOf('staff_fuel_deliveries.php') !== -1 || targetUrl.indexOf('staff_record_delivery.php') !== -1) {
-                                const isFuel = targetUrl.indexOf('staff_fuel_deliveries.php') !== -1 ||
-                                               targetUrl.indexOf('tab=fuel') !== -1 ||
-                                               targetUrl.indexOf('fpo') !== -1 ||
-                                               (n.title && n.title.toLowerCase().indexOf('fuel') !== -1) ||
-                                               (n.message && (n.message.toLowerCase().indexOf('fuel') !== -1 || n.message.toLowerCase().indexOf('diesel') !== -1 || n.message.toLowerCase().indexOf('liters') !== -1));
+                            if (targetUrl.indexOf('staff_fuel_deliveries.php') !== -1) {
+                                const isFuel = true;
                                 const base = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
-                                targetUrl = base + '/public/' + (isFuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php');
+                                targetUrl = base + '/public/staff_inventory_fuel.php';
+                            }
+                            const tLow = (n.title || '').toLowerCase();
+                            const mLow = (n.message || '').toLowerCase();
+                            const eLow = (n.event_type || '').toLowerCase();
+                            const base = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
+                            const curRole = (document.body.getAttribute('data-role') || (window.pageData && window.pageData.role) || '').toLowerCase().trim();
+
+                            const isMerchAdj = (
+                                tLow.indexOf('stock adjustment') !== -1 ||
+                                tLow.indexOf('merchandise adjustment') !== -1 ||
+                                eLow === 'inventory_adjustment' ||
+                                eLow === 'stock_adjustment' ||
+                                eLow === 'merchandise_adjustment' ||
+                                (tLow.indexOf('adjustment') !== -1 && tLow.indexOf('fuel') === -1 && mLow.indexOf('fuel') === -1 && tLow.indexOf('tank') === -1)
+                            );
+
+                            const isFuelAdj = !isMerchAdj && (
+                                tLow.indexOf('tank dip') !== -1 ||
+                                mLow.indexOf('fuel reading adjustment') !== -1 ||
+                                mLow.indexOf('tank dip') !== -1 ||
+                                mLow.indexOf('physical dip') !== -1 ||
+                                eLow === 'fuel_adjustment' ||
+                                eLow === 'fuel_adjustments' ||
+                                eLow === 'tank_dip' ||
+                                eLow === 'dip_adjustment' ||
+                                (tLow.indexOf('fuel') !== -1 && tLow.indexOf('adjustment') !== -1) ||
+                                targetUrl.indexOf('fuel_adjustments') !== -1
+                            );
+
+                            if (isMerchAdj) {
+                                if (curRole === 'staff' || curRole === 'cashier' || curRole === 'pump_attendant') {
+                                    targetUrl = base + '/public/staff_inventory_merchandise.php';
+                                } else if (curRole === 'admin' || curRole === 'superadmin' || curRole === 'developer') {
+                                    targetUrl = base + '/public/admin_inventory_merchandise.php?tab=adjustments';
+                                } else {
+                                    targetUrl = base + '/public/manager_inventory_merchandise.php?tab=adjustments';
+                                }
+                            } else if (isFuelAdj) {
+                                if (curRole === 'staff' || curRole === 'cashier' || curRole === 'pump_attendant') {
+                                    targetUrl = base + '/public/staff_inventory_fuel.php';
+                                } else if (curRole === 'admin' || curRole === 'superadmin' || curRole === 'developer') {
+                                    targetUrl = base + '/public/admin_inventory_fuel.php?tab=adjustments';
+                                } else {
+                                    targetUrl = base + '/public/manager_fuel_adjustments.php';
+                                }
                             }
                             const title  = escapeHtml(cleanMojibake(n.title || 'Notification'));
                             const msg    = escapeHtml(cleanMojibake(n.message || ''));
@@ -7434,6 +7471,7 @@ require_once __DIR__ . '/rbac_menu.php';
                 await loadNotifications(false);
             };
             window.petronLoadNotifications = window.loadStaffNotifications;
+            window.petronLoadNotificationsOnly = loadNotifications;
 
             // ── Direct notifications (run generator on page load) ──
             runGeneratorBackground();

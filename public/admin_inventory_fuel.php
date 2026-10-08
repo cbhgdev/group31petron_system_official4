@@ -668,7 +668,7 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
 #adminFuelAdjTable th:nth-child(3),
 #adminFuelAdjTable td:nth-child(3) { width: 9%; }     /* Fuel Type */
 #adminFuelAdjTable th:nth-child(4),
-#adminFuelAdjTable td:nth-child(4) { width: 11%; }    /* Adj Type */
+#adminFuelAdjTable td:nth-child(4) { width: 10%; }    /* Adj Type */
 #adminFuelAdjTable th:nth-child(5),
 #adminFuelAdjTable td:nth-child(5) { width: 8%; text-align:right; }  /* System Vol */
 #adminFuelAdjTable th:nth-child(6),
@@ -676,13 +676,13 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
 #adminFuelAdjTable th:nth-child(7),
 #adminFuelAdjTable td:nth-child(7) { width: 7%; text-align:right; }  /* Variance */
 #adminFuelAdjTable th:nth-child(8),
-#adminFuelAdjTable td:nth-child(8) { width: 17%; }    /* Reason */
+#adminFuelAdjTable td:nth-child(8) { width: 12%; }    /* Reason */
 #adminFuelAdjTable th:nth-child(9),
-#adminFuelAdjTable td:nth-child(9) { width: 12%; }    /* Requested By */
+#adminFuelAdjTable td:nth-child(9) { width: 10%; }    /* Requested By */
 #adminFuelAdjTable th:nth-child(10),
 #adminFuelAdjTable td:nth-child(10) { width: 7%; }    /* Status */
 #adminFuelAdjTable th:nth-child(11),
-#adminFuelAdjTable td:nth-child(11) { width: 7%; text-align:center; } /* Action */
+#adminFuelAdjTable td:nth-child(11) { width: 15%; text-align:center; } /* Action */
 
 /* Status badge — clear, readable wrap */
 #adminFuelAdjTable td:nth-child(10) span {
@@ -1410,10 +1410,12 @@ body, html { overflow-x:hidden !important; }
           <td style="color:#1e293b; word-break:break-word; overflow-wrap:anywhere; line-height:1.4;"><?= htmlspecialchars($adj['reason']) ?></td>
           <td style="color:#1e293b; word-break:break-word;"><?= htmlspecialchars($adj['adjusted_by']) ?></td>
           <td><?= $st_badge ?></td>
-          <td style="text-align:center;">
+          <td style="text-align:center; vertical-align:middle;">
             <?php if ($is_pending): ?>
-              <button type="button" onclick="approveFuelAdjustment(<?= $adj['id'] ?>)" style="background:#16a34a; color:#fff; border:none; border-radius:5px; padding:5px 12px; font-size:13px; font-weight:700; cursor:pointer; margin-right:4px;"><i class="fas fa-check"></i> Approve</button>
-              <button type="button" onclick="rejectFuelAdjustment(<?= $adj['id'] ?>)" style="background:#dc2626; color:#fff; border:none; border-radius:5px; padding:5px 12px; font-size:13px; font-weight:700; cursor:pointer;"><i class="fas fa-times"></i> Reject</button>
+              <div style="display:flex; align-items:center; justify-content:center; gap:6px; flex-wrap:nowrap;">
+                <button type="button" onclick="approveFuelAdjustment(<?= $adj['id'] ?>)" style="background:#16a34a; color:#fff; border:none; border-radius:6px; padding:6px 12px; font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap !important; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-check"></i> Approve</button>
+                <button type="button" onclick="rejectFuelAdjustment(<?= $adj['id'] ?>)" style="background:#dc2626; color:#fff; border:none; border-radius:6px; padding:6px 12px; font-size:12.5px; font-weight:700; cursor:pointer; white-space:nowrap !important; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-times"></i> Reject</button>
+              </div>
             <?php else: ?>
               <span style="color:#64748b; font-size:13px; font-weight:700;">Processed</span>
             <?php endif; ?>

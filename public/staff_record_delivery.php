@@ -3,16 +3,16 @@ $page_id = 'staff_record_delivery';
 require_once __DIR__ . '/../backend/lib.php';
 require_login();
 
-// The "Record Delivery" form has been removed from the staff workflow.
-// Redirect directly to Staff Fuel Inventory or Merchandise Inventory.
-$qs = $_SERVER['QUERY_STRING'] ?? '';
-$tab = $_GET['tab'] ?? '';
-if ($tab === 'fuel' || stripos($qs, 'fuel') !== false || stripos($qs, 'fpo') !== false) {
-    header('Location: staff_inventory_fuel.php');
-} else {
-    header('Location: staff_inventory_merchandise.php');
+$me         = current_user();
+$role       = role_key($me['role'] ?? '');
+$station_id = (int)user_station_id();
+
+if ($role === 'manager') {
+    header('Location: manager_stock_in.php');
+    exit;
 }
-exit;
+
+
 
 try {
     $pdo->exec("ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS delivery_time TIME NULL");
@@ -22,6 +22,44 @@ try {
     $pdo->exec("ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS unit_price DECIMAL(12,2) NULL");
     $pdo->exec("ALTER TABLE fuel_purchase_orders ADD COLUMN IF NOT EXISTS batch_id VARCHAR(100) NULL DEFAULT NULL");
     $pdo->exec("ALTER TABLE fuel_purchase_orders ADD COLUMN IF NOT EXISTS updated_at DATETIME NULL");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS stock_requests (id INT AUTO_INCREMENT PRIMARY KEY, station_id INT, staff_id INT, product_name VARCHAR(255), quantity DECIMAL(10,2), approved_price DECIMAL(10,2), unit VARCHAR(50), delivery_date DATE, request_no VARCHAR(50), status VARCHAR(100), created_at DATETIME, updated_at DATETIME)");
+    $pdo->exec("CREATE TABLE IF NOT EXISTS fuel_stock_requests (id INT AUTO_INCREMENT PRIMARY KEY, station_id INT, staff_id INT, fuel_type VARCHAR(255), volume DECIMAL(10,2), request_no VARCHAR(50), status VARCHAR(100), created_at DATETIME, updated_at DATETIME)");
+    $pdo->exec("ALTER TABLE stock_requests ADD COLUMN IF NOT EXISTS request_no VARCHAR(50) NULL DEFAULT NULL");
+    $pdo->exec("ALTER TABLE fuel_stock_requests ADD COLUMN IF NOT EXISTS request_no VARCHAR(50) NULL DEFAULT NULL");
+
+    // Auto-heal/sync deliveries_oversight status with completed stock-in and completed purchase orders
+    $pdo->exec("
+        UPDATE deliveries_oversight d1
+        JOIN deliveries_oversight d2 
+          ON (d1.delivery_ref = d2.delivery_ref OR (d1.source_ref = d2.source_ref AND d1.source_ref IS NOT NULL AND d1.source_ref != ''))
+         AND d1.station_id = d2.station_id
+         AND d1.delivery_type = d2.delivery_type
+        SET d1.status = 'Stock-In Complete',
+            d1.manager_id = COALESCE(d1.manager_id, d2.manager_id),
+            d1.manager_action_at = COALESCE(d1.manager_action_at, d2.manager_action_at),
+            d1.finalized_at = COALESCE(d1.finalized_at, d2.finalized_at),
+            d1.updated_at = NOW()
+        WHERE d1.status IN ('Pending Stock-In', 'Pending', 'Received', 'Ready for Stock-In')
+          AND d2.status IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed')
+    ");
+    $pdo->exec("
+        UPDATE deliveries_oversight d
+        JOIN purchase_orders po ON po.po_number = d.source_ref AND po.station_id = d.station_id
+        SET d.status = 'Stock-In Complete',
+            d.finalized_at = COALESCE(d.finalized_at, po.stock_in_at, NOW()),
+            d.updated_at = NOW()
+        WHERE d.status IN ('Pending Stock-In', 'Pending', 'Received', 'Ready for Stock-In')
+          AND (po.status = 'Completed' OR po.stock_in_done = 1)
+    ");
+    $pdo->exec("
+        UPDATE deliveries_oversight d
+        JOIN fuel_purchase_orders fpo ON (fpo.po_number = d.source_ref OR fpo.batch_id = d.source_ref) AND fpo.station_id = d.station_id
+        SET d.status = 'Stock-In Complete',
+            d.finalized_at = COALESCE(d.finalized_at, NOW()),
+            d.updated_at = NOW()
+        WHERE d.status IN ('Pending Stock-In', 'Pending', 'Received', 'Ready for Stock-In')
+          AND fpo.status = 'Completed'
+    ");
 } catch (Exception $ignored) {}
 
 $staff_profile = [
@@ -740,21 +778,21 @@ function rd_status_meta(string $status): array
 {
     $s = strtolower(trim($status));
     if (in_array($s, ['pending delivery', 'approved', 'approved po', 'admin finalized'], true)) {
-        return ['label' => 'Pending Delivery', 'class' => 'status-waiting'];
+        return ['label' => 'Pending Delivery', 'class' => 'status-waiting', 'icon' => 'fa-clock'];
     }
     if (in_array($s, ['received', 'delivered'], true)) {
-        return ['label' => 'Received', 'class' => 'status-info'];
+        return ['label' => 'Received', 'class' => 'status-info', 'icon' => 'fa-truck-loading'];
     }
     if (in_array($s, ['pending stock-in', 'ready for stock-in', 'validated', 'verified'], true)) {
-        return ['label' => 'Pending Stock-In', 'class' => 'status-warning'];
+        return ['label' => 'Pending Stock-In', 'class' => 'status-warning', 'icon' => 'fa-hourglass-half'];
     }
-    if (in_array($s, ['stock-in complete', 'stocked-in', 'confirmed', 'closed', 'completed'], true)) {
-        return ['label' => 'Stocked-In', 'class' => 'status-success'];
+    if (in_array($s, ['stock-in complete', 'stocked-in', 'confirmed', 'closed', 'completed', 'delivery successful'], true)) {
+        return ['label' => 'Delivery Successful', 'class' => 'status-success', 'icon' => 'fa-check-circle'];
     }
     if (in_array($s, ['cancelled', 'canceled', 'rejected'], true)) {
-        return ['label' => 'Cancelled', 'class' => 'status-danger'];
+        return ['label' => 'Cancelled', 'class' => 'status-danger', 'icon' => 'fa-times-circle'];
     }
-    return ['label' => ucwords($status ?: 'Pending Delivery'), 'class' => 'status-info'];
+    return ['label' => ucwords($status ?: 'Pending Delivery'), 'class' => 'status-info', 'icon' => 'fa-info-circle'];
 }
 
 function rd_format_qty(float $qty): string
@@ -769,6 +807,13 @@ function rd_js_attr(array $data): string
         ENT_QUOTES,
         'UTF-8'
     );
+}
+
+if (!function_exists('format_merch_unit')) {
+    function format_merch_unit($unit): string {
+        $unit = trim((string)$unit);
+        return !empty($unit) ? $unit : 'pcs';
+    }
 }
 
 $grouped_merch_pos = [];
@@ -790,6 +835,9 @@ try {
 }
 
 try {
+    $sc_where = ($station_id > 0) ? " (po.station_id = ? OR po.station_id IS NULL OR po.station_id = 0) " : " 1=1 ";
+    $sc_params = ($station_id > 0) ? [$station_id] : [];
+
     // 1. Merchandise POs — fetch base PO records (handles BOTH legacy & purchase_order_items formats)
     $stmt = $pdo->prepare("
         SELECT po.id, po.po_number, po.status,
@@ -810,12 +858,12 @@ try {
         LEFT JOIN suppliers s ON po.supplier_id = s.id
         LEFT JOIN users u_prep ON po.created_by = u_prep.id
         LEFT JOIN users u_app ON po.approved_by = u_app.id
-        WHERE po.station_id = ? 
-          AND po.status IN ('Admin Finalized', 'Approved', 'Pending Delivery', 'Pending Admin Validation', 'Forwarded to Admin', 'Approved PO', 'Official', 'Expected Delivery')
-          AND po.type = 'merch'
+        WHERE {$sc_where}
+          AND (LOWER(COALESCE(po.status, 'approved')) IN ('admin finalized', 'approved', 'pending delivery', 'pending admin validation', 'forwarded to admin', 'approved po', 'official', 'expected delivery', 'pos generated', 'pending', 'submitted', 'draft', 'pending manager review', 'purchase order generated', 'po generated', 'order generated', 'finalized', 'active') OR po.status IS NULL)
+          AND (po.type IS NULL OR po.type = '' OR LOWER(po.type) IN ('merch', 'merchandise', 'item', 'goods'))
         ORDER BY po.expected_delivery_date ASC, po.created_at ASC
     ");
-    $stmt->execute([$station_id]);
+    $stmt->execute($sc_params);
     $merch_raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // Group by po_number; collect all PO ids sharing the same number
@@ -930,7 +978,71 @@ try {
     }
     unset($po_group);
 
+    // Fallback: Check stock_requests table for approved/PO generated requests that might not have a separate PO entry
+    try {
+        $sr_where = ($station_id > 0) ? " (sr.station_id = ? OR sr.station_id IS NULL OR sr.station_id = 0) " : " 1=1 ";
+        $sr_params = ($station_id > 0) ? [$station_id] : [];
+        $sr_stmt = $pdo->prepare("
+            SELECT sr.id, sr.request_no, sr.product_name, sr.quantity, sr.approved_price, sr.unit,
+                   sr.delivery_date, sr.created_at, sr.status, sr.station_id,
+                   CONCAT(u.first_name, ' ', u.last_name) AS prepared_by_name
+            FROM stock_requests sr
+            LEFT JOIN users u ON sr.staff_id = u.id
+            WHERE {$sr_where}
+              AND LOWER(COALESCE(sr.status, '')) IN ('po generated', 'approved', 'purchase order generated', 'approved manager review', 'forwarded to admin', 'pending delivery')
+            ORDER BY sr.delivery_date ASC, sr.created_at ASC
+        ");
+        $sr_stmt->execute($sr_params);
+        $sr_rows = $sr_stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($sr_rows as $sr) {
+            $req_num = !empty($sr['request_no']) ? $sr['request_no'] : ('PR-' . str_pad($sr['id'], 5, '0', STR_PAD_LEFT));
+            $already_present = false;
+            foreach ($grouped_merch_pos as $gp) {
+                if (($gp['pr_number'] ?? '') === $req_num) {
+                    $already_present = true;
+                    break;
+                }
+            }
+            if (!$already_present) {
+                $po_key = 'PO-' . $req_num;
+                if (!isset($grouped_merch_pos[$po_key])) {
+                    $grouped_merch_pos[$po_key] = [
+                        'id'                     => $sr['id'],
+                        'po_number'              => $po_key,
+                        'pr_number'              => $req_num,
+                        'supplier_name'          => 'Petron Corporation',
+                        'expected_delivery_date' => $sr['delivery_date'] ?: date('Y-m-d'),
+                        'created_at'             => $sr['created_at'],
+                        'remarks'                => 'Auto-fetched Stock Request PO',
+                        'status'                 => $sr['status'],
+                        'unit_price'             => (float)($sr['approved_price'] ?? 0),
+                        'total_amount'           => (float)($sr['approved_price'] ?? 0) * (float)$sr['quantity'],
+                        'prepared_by_name'       => $sr['prepared_by_name'] ?: 'Manager',
+                        'approved_by_name'       => 'Admin',
+                        'po_ids'                 => [],
+                        'items'                  => []
+                    ];
+                }
+                $grouped_merch_pos[$po_key]['items'][] = [
+                    'item_id'      => 'sr_' . $sr['id'],
+                    'product_name' => $sr['product_name'],
+                    'ordered_qty'  => (float)$sr['quantity'],
+                    'unit'         => format_merch_unit($sr['unit'] ?? 'pcs'),
+                    'product_id'   => '',
+                    'sku'          => '—',
+                    'unit_price'   => (float)($sr['approved_price'] ?? 0),
+                    'total_price'  => (float)($sr['approved_price'] ?? 0) * (float)$sr['quantity'],
+                    'from_po_row'  => true
+                ];
+            }
+        }
+    } catch (Exception $e) {
+        error_log("Error fetching fallback stock requests: " . $e->getMessage());
+    }
+
     // 2. Fuel POs
+    $fpo_where = ($station_id > 0) ? " (fpo.station_id = ? OR fpo.station_id IS NULL OR fpo.station_id = 0) " : " 1=1 ";
+    $fpo_params = ($station_id > 0) ? [$station_id] : [];
     $stmt = $pdo->prepare("
         SELECT fpo.*, COALESCE(NULLIF(fpo.batch_id, ''), fpo.po_number) AS po_group_number,
                ft.name as fuel_type_name, s.name as supplier_name,
@@ -942,11 +1054,11 @@ try {
         LEFT JOIN suppliers s ON fpo.supplier_id = s.id
         LEFT JOIN users u_app ON fpo.approved_by = u_app.id
         LEFT JOIN fuel_inventory fi ON fi.fuel_type_id = fpo.fuel_type_id AND fi.station_id = fpo.station_id
-        WHERE fpo.station_id = ?
-          AND fpo.status IN ('Approved PO', 'Approved')
+        WHERE {$fpo_where}
+          AND (LOWER(COALESCE(fpo.status, 'approved')) IN ('approved po', 'approved', 'pending delivery', 'pending', 'pos generated', 'submitted', 'admin finalized', 'official', 'expected delivery', 'purchase order generated', 'po generated', 'order generated', 'finalized', 'active') OR fpo.status IS NULL)
         ORDER BY fpo.expected_delivery_date ASC, fpo.created_at ASC
     ");
-    $stmt->execute([$station_id]);
+    $stmt->execute($fpo_params);
     $fuel_raw = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     foreach ($fuel_raw as $row) {
@@ -985,17 +1097,19 @@ try {
    Compute Merchandise Summary Cards
    ══════════════════════════════════════════════════════════ */
 try {
+    $do_where = ($station_id > 0) ? " (d.station_id = ? OR d.station_id IS NULL OR d.station_id = 0) " : " 1=1 ";
+    $do_params = ($station_id > 0) ? [$station_id] : [];
     $stmt = $pdo->prepare("
         SELECT d.*,
                COALESCE(NULLIF(u.name, ''), NULLIF(CONCAT(u.first_name, ' ', u.last_name), ' '), u.username, 'Staff') AS recorded_by_name
         FROM deliveries_oversight d
         LEFT JOIN users u ON d.encoded_by = u.id
-        WHERE d.station_id = ?
+        WHERE {$do_where}
           AND d.delivery_type IN ('merchandise', 'fuel')
         ORDER BY COALESCE(d.created_at, d.delivery_date) DESC, d.id DESC
         LIMIT 300
     ");
-    $stmt->execute([$station_id]);
+    $stmt->execute($do_params);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
         $type = strtolower($row['delivery_type'] ?? '');
         if (!in_array($type, ['merchandise', 'fuel'], true)) continue;
@@ -1072,58 +1186,110 @@ ksort($delivery_suppliers['fuel']);
 
 $count_pending_merch_pos = count($grouped_merch_pos);
 
-// Deliveries Today
+$sc_where = ($station_id > 0) ? " (station_id = ? OR station_id IS NULL OR station_id = 0) AND " : " ";
+$sc_params = ($station_id > 0) ? [$station_id] : [];
+
+// 1. Deliveries Received Today
 $stmt = $pdo->prepare("
     SELECT COUNT(DISTINCT delivery_ref) 
     FROM deliveries_oversight 
-    WHERE station_id = ? AND delivery_type = 'merchandise' AND DATE(delivery_date) = CURDATE()
+    WHERE {$sc_where} delivery_type = 'merchandise' 
+      AND DATE(COALESCE(delivery_date, created_at)) = CURDATE()
+      AND status NOT IN ('Cancelled', 'Rejected')
 ");
-$stmt->execute([$station_id]);
+$stmt->execute($sc_params);
 $count_deliveries_today = (int)$stmt->fetchColumn();
 
-// Pending Stock-In
+// 2. Pending Stock-In (Merchandise)
 $stmt = $pdo->prepare("
-    SELECT COUNT(DISTINCT delivery_ref) 
-    FROM deliveries_oversight 
-    WHERE station_id = ? AND delivery_type = 'merchandise' AND status = 'Pending Stock-In'
+    SELECT COUNT(DISTINCT d.delivery_ref) 
+    FROM deliveries_oversight d
+    WHERE {$sc_where} d.delivery_type = 'merchandise' 
+      AND d.status IN ('Pending Stock-In', 'Ready for Stock-In', 'Validated', 'Verified', 'Received', 'Pending Manager Approval')
+      AND d.status NOT IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed', 'Cancelled', 'Rejected')
+      AND d.delivery_ref NOT IN (
+          SELECT d2.delivery_ref 
+          FROM deliveries_oversight d2 
+          WHERE {$sc_where} d2.delivery_type = 'merchandise' 
+            AND d2.status IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed')
+      )
+      AND (d.source_ref IS NULL OR d.source_ref = '' OR d.source_ref NOT IN (
+          SELECT d3.source_ref 
+          FROM deliveries_oversight d3 
+          WHERE {$sc_where} d3.delivery_type = 'merchandise' 
+            AND d3.status IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed')
+      ))
+      AND (d.source_ref IS NULL OR d.source_ref = '' OR d.source_ref NOT IN (
+          SELECT po.po_number 
+          FROM purchase_orders po 
+          WHERE (po.station_id = ? OR po.station_id IS NULL OR po.station_id = 0)
+            AND (po.status = 'Completed' OR po.stock_in_done = 1)
+      ))
 ");
-$stmt->execute([$station_id]);
+$stmt->execute(array_merge($sc_params, $sc_params, $sc_params, [$station_id]));
 $count_pending_stock_in = (int)$stmt->fetchColumn();
 
-// Completed Deliveries
+// 3. Completed Deliveries (Merchandise)
 $stmt = $pdo->prepare("
     SELECT COUNT(DISTINCT delivery_ref) 
     FROM deliveries_oversight 
-    WHERE station_id = ? AND delivery_type = 'merchandise' AND status IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed')
+    WHERE {$sc_where} delivery_type = 'merchandise' 
+      AND status IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed')
 ");
-$stmt->execute([$station_id]);
+$stmt->execute($sc_params);
 $count_completed_deliveries = (int)$stmt->fetchColumn();
 
-// Fuel summary cards
+// ── Fuel summary cards ──
 $count_pending_fuel_pos = count($grouped_fuel_pos);
 
+// 4. Fuel Deliveries Received Today
 $stmt = $pdo->prepare("
     SELECT COUNT(DISTINCT delivery_ref)
     FROM deliveries_oversight
-    WHERE station_id = ? AND delivery_type = 'fuel' AND DATE(delivery_date) = CURDATE()
+    WHERE {$sc_where} delivery_type = 'fuel' 
+      AND DATE(COALESCE(delivery_date, created_at)) = CURDATE()
+      AND status NOT IN ('Cancelled', 'Rejected')
 ");
-$stmt->execute([$station_id]);
+$stmt->execute($sc_params);
 $count_fuel_deliveries_today = (int)$stmt->fetchColumn();
 
+// 5. Fuel Pending Stock-In
 $stmt = $pdo->prepare("
-    SELECT COUNT(DISTINCT delivery_ref)
-    FROM deliveries_oversight
-    WHERE station_id = ? AND delivery_type = 'fuel' AND status = 'Pending Stock-In'
+    SELECT COUNT(DISTINCT d.delivery_ref)
+    FROM deliveries_oversight d
+    WHERE {$sc_where} d.delivery_type = 'fuel' 
+      AND d.status IN ('Pending Stock-In', 'Ready for Stock-In', 'Validated', 'Verified', 'Received', 'Pending Manager Approval')
+      AND d.status NOT IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed', 'Cancelled', 'Rejected')
+      AND d.delivery_ref NOT IN (
+          SELECT d2.delivery_ref 
+          FROM deliveries_oversight d2 
+          WHERE {$sc_where} d2.delivery_type = 'fuel' 
+            AND d2.status IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed')
+      )
+      AND (d.source_ref IS NULL OR d.source_ref = '' OR d.source_ref NOT IN (
+          SELECT d3.source_ref 
+          FROM deliveries_oversight d3 
+          WHERE {$sc_where} d3.delivery_type = 'fuel' 
+            AND d3.status IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed')
+      ))
+      AND (d.source_ref IS NULL OR d.source_ref = '' OR d.source_ref NOT IN (
+          SELECT fpo.po_number 
+          FROM fuel_purchase_orders fpo 
+          WHERE (fpo.station_id = ? OR fpo.station_id IS NULL OR fpo.station_id = 0)
+            AND fpo.status = 'Completed'
+      ))
 ");
-$stmt->execute([$station_id]);
+$stmt->execute(array_merge($sc_params, $sc_params, $sc_params, [$station_id]));
 $count_fuel_pending_stock_in = (int)$stmt->fetchColumn();
 
+// 6. Fuel Completed Deliveries
 $stmt = $pdo->prepare("
     SELECT COUNT(DISTINCT delivery_ref)
     FROM deliveries_oversight
-    WHERE station_id = ? AND delivery_type = 'fuel' AND status IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed')
+    WHERE {$sc_where} delivery_type = 'fuel' 
+      AND status IN ('Stock-In Complete', 'Stocked-In', 'Completed', 'Confirmed', 'Closed')
 ");
-$stmt->execute([$station_id]);
+$stmt->execute($sc_params);
 $count_fuel_completed_deliveries = (int)$stmt->fetchColumn();
 
 // ── Compile Unified Delivery History List (Merchandise + Fuel) ──
@@ -2052,7 +2218,7 @@ body[data-page="staff_record_delivery"] .main {
                 <option value="pending delivery">Pending Delivery</option>
                 <option value="received">Received</option>
                 <option value="pending stock-in">Pending Stock-In</option>
-                <option value="stocked-in">Stocked-In</option>
+                <option value="stocked-in">Delivery Successful</option>
                 <option value="cancelled">Cancelled</option>
             </select>
         </div>
@@ -2401,7 +2567,7 @@ body[data-page="staff_record_delivery"] .main {
                 <option value="pending delivery">Pending Delivery</option>
                 <option value="received">Received</option>
                 <option value="pending stock-in">Pending Stock-In</option>
-                <option value="stocked-in">Stocked-In</option>
+                <option value="stocked-in">Delivery Successful</option>
                 <option value="cancelled">Cancelled</option>
             </select>
         </div>
@@ -2681,7 +2847,7 @@ body[data-page="staff_record_delivery"] .main {
             <div class="summary-card-hist-val" style="color:#d97706;"><?= number_format($cnt_del_hist_merch) ?></div>
         </div>
         <div class="summary-card-hist">
-            <div class="summary-card-hist-label"><i class="fas fa-check-circle" style="color:#16a34a;"></i> Stock-In Complete</div>
+            <div class="summary-card-hist-label"><i class="fas fa-check-circle" style="color:#16a34a;"></i> Delivery Successful</div>
             <div class="summary-card-hist-val" style="color:#16a34a;"><?= number_format($cnt_del_hist_completed) ?></div>
         </div>
         <div class="summary-card-hist">
@@ -2729,7 +2895,7 @@ body[data-page="staff_record_delivery"] .main {
             <label style="display:block; font-size:11px; font-weight:700; color:#475569; text-transform:uppercase; margin-bottom:5px;">Status</label>
             <select id="histStatusFilter" onchange="filterDeliveryHistoryTable()" style="width:100%; box-sizing:border-box; padding:8px 10px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:600; color:#334155; outline:none;">
                 <option value="">All Statuses</option>
-                <option value="stock-in complete">Stock-In Complete</option>
+                <option value="delivery successful">Delivery Successful</option>
                 <option value="pending stock-in">Pending Stock-In</option>
                 <option value="received">Received</option>
                 <option value="cancelled">Cancelled</option>
@@ -3195,8 +3361,8 @@ function renderDelHistPagination() {
         const matchesCategory = !categoryValue || rowCategory === categoryValue;
         const matchesSupplier = !supplierValue || rowSupplier === supplierValue;
         let matchesStatus     = !statusValue || rowStatus === statusValue || rowStatus.includes(statusValue);
-        if (statusValue === 'stock-in complete') {
-            matchesStatus = matchesStatus || rowStatus.includes('complete') || rowStatus.includes('stocked');
+        if (statusValue === 'delivery successful' || statusValue === 'stock-in complete') {
+            matchesStatus = matchesStatus || rowStatus.includes('successful') || rowStatus.includes('complete') || rowStatus.includes('stocked');
         } else if (statusValue === 'pending stock-in') {
             matchesStatus = matchesStatus || rowStatus.includes('pending') || rowStatus === 'received';
         }

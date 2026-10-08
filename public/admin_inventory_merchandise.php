@@ -187,6 +187,196 @@ if (isset($_GET['action']) && $_GET['action'] === 'admin_direct_adjust') {
     }
 }
 
+// ── Approve Merchandise Adjustment (Admin) ──────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'approve_merchandise_adjustment') {
+    $adj_id = (int)($_POST['adjustment_id'] ?? 0);
+    if ($adj_id > 0) {
+        try {
+            $pdo->beginTransaction();
+            $stmt = $pdo->prepare("SELECT * FROM merchandise_adjustments WHERE id = ? AND station_id = ? AND status = 'Pending'");
+            $stmt->execute([$adj_id, $station_id]);
+            $adj = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$adj) throw new Exception("Adjustment request not found or already processed.");
+
+            $pid = (int)$adj['product_id'];
+            $change = (int)$adj['quantity_change'];
+
+            // Fetch live current stock from station_inventory / inventory_products / products
+            $live_stmt = $pdo->prepare("
+                SELECT stock_level FROM station_inventory 
+                WHERE product_id = ? AND station_id = ?
+                ORDER BY station_id DESC LIMIT 1
+            ");
+            $live_stmt->execute([$pid, $station_id]);
+            $live_stock_val = $live_stmt->fetchColumn();
+
+            if ($live_stock_val === false) {
+                $ip_stmt = $pdo->prepare("SELECT stock FROM inventory_products WHERE id = ?");
+                $ip_stmt->execute([$pid]);
+                $live_stock_val = $ip_stmt->fetchColumn();
+                if ($live_stock_val === false) {
+                    $p_stmt = $pdo->prepare("SELECT current_stock FROM products WHERE id = ?");
+                    $p_stmt->execute([$pid]);
+                    $live_stock_val = $p_stmt->fetchColumn();
+                }
+            }
+            $curr_stock = max(0, (float)($live_stock_val !== false ? $live_stock_val : $adj['current_stock']));
+            $new_stock = max(0, $curr_stock + $change);
+
+            // 1. Update merchandise_adjustments
+            $pdo->prepare("UPDATE merchandise_adjustments SET status = 'Approved', approved_by = ?, approved_at = NOW(), updated_at = NOW(), adjusted_stock = ? WHERE id = ?")
+                ->execute([$me['id'], $new_stock, $adj_id]);
+
+            // 2. Update station_inventory across station records
+            $upd_si = $pdo->prepare("UPDATE station_inventory SET stock_level = ?, last_updated = NOW() WHERE product_id = ? AND station_id = ?");
+            $upd_si->execute([$new_stock, $pid, $station_id]);
+            if ($upd_si->rowCount() === 0) {
+                $pdo->prepare("INSERT INTO station_inventory (station_id, product_id, stock_level, status, last_updated) VALUES (?, ?, ?, 'active', NOW())")
+                    ->execute([$station_id, $pid, $new_stock]);
+            }
+
+            // 3. Update inventory_products
+            $pdo->prepare("UPDATE inventory_products SET stock = ?, updated_at = NOW() WHERE id = ?")
+                ->execute([$new_stock, $pid]);
+
+            // 4. Update products table
+            try {
+                $pdo->prepare("UPDATE products SET current_stock = ?, updated_at = NOW() WHERE id = ?")
+                    ->execute([$new_stock, $pid]);
+            } catch (Exception $e_p) {}
+
+            // 5. Insert into inventory_logs
+            $pdo->prepare("
+                INSERT INTO inventory_logs (station_id, product_id, action, quantity_change, notes, user_id, created_at)
+                VALUES (?, ?, 'adjustment', ?, ?, ?, NOW())
+            ")->execute([
+                $station_id,
+                $pid,
+                $change,
+                "{$adj['adjustment_type']} Approved: Current Stock Updated to {$new_stock} ({$adj['reason']})",
+                $me['id']
+            ]);
+
+            // 6. Insert into inventory_movements if table exists
+            try {
+                $pdo->prepare("
+                    INSERT INTO inventory_movements (station_id, product_id, reference_no, movement_type, quantity_change, resulting_stock, remarks, created_by, created_at)
+                    VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?, NOW())
+                ")->execute([
+                    $station_id,
+                    $pid,
+                    'ADJ-' . str_pad($adj_id, 4, '0', STR_PAD_LEFT),
+                    $change,
+                    $new_stock,
+                    "Approved {$adj['adjustment_type']}: Current Stock Updated ({$adj['reason']})",
+                    $me['id']
+                ]);
+            } catch (Exception $e_mov) {}
+
+            log_activity($pdo, $me['id'], 'Approve Adjustment', "Approved adjustment #{$adj_id} for {$adj['product_name']} ({$change})");
+
+            // Send notification to staff who requested adjustment
+            try {
+                $req_staff_id = (int)($adj['requested_by'] ?? 0);
+                $target_notif_url = "staff_inventory_merchandise.php?tab=overview&product_id={$pid}&auto_open=1";
+                $actor_name = $me['name'] ?? $me['username'] ?? 'Admin';
+                if ($req_staff_id > 0) {
+                    notify_staff_action_result(
+                        $pdo,
+                        $req_staff_id,
+                        'Merchandise Adjustment',
+                        'Approved',
+                        $adj['product_name'] ?: ("ADJ-" . str_pad($adj_id, 4, '0', STR_PAD_LEFT)),
+                        $actor_name,
+                        'Admin',
+                        "Approved adjustment ({$adj['adjustment_type']}). Updated Stock Level: {$new_stock}.",
+                        'merchandise_adjustment',
+                        $adj_id,
+                        $target_notif_url
+                    );
+                } else {
+                    create_role_notification(
+                        $pdo,
+                        'staff',
+                        'success',
+                        'Merchandise Adjustment Approved',
+                        "Admin approved adjustment for {$adj['product_name']} ({$adj['adjustment_type']}). New stock: {$new_stock}.",
+                        null,
+                        $target_notif_url
+                    );
+                }
+            } catch (Exception $e_notif) {}
+
+            $pdo->commit();
+            $_SESSION['success'] = "Adjustment request for '{$adj['product_name']}' approved successfully! Current Stock Updated to {$new_stock}.";
+        } catch (Exception $e) {
+            if ($pdo->inTransaction()) $pdo->rollBack();
+            $_SESSION['error'] = 'Error: ' . $e->getMessage();
+        }
+    }
+    $redirect_tab = !empty($_POST['redirect_tab']) ? $_POST['redirect_tab'] : 'adjustments';
+    header("Location: admin_inventory_merchandise.php?tab={$redirect_tab}"); exit;
+}
+
+// ── Reject Merchandise Adjustment (Admin) ───────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reject_merchandise_adjustment') {
+    $adj_id = (int)($_POST['adjustment_id'] ?? 0);
+    $rej_reason = trim($_POST['rejection_reason'] ?? 'Rejected by Admin');
+    if ($adj_id > 0) {
+        try {
+            $stmt_rej = $pdo->prepare("SELECT * FROM merchandise_adjustments WHERE id = ? AND station_id = ?");
+            $stmt_rej->execute([$adj_id, $station_id]);
+            $adj_rej = $stmt_rej->fetch(PDO::FETCH_ASSOC);
+
+            $pdo->prepare("UPDATE merchandise_adjustments SET status = 'Rejected', approved_by = ?, rejection_reason = ?, approved_at = NOW(), updated_at = NOW() WHERE id = ? AND station_id = ?")
+                ->execute([$me['id'], $rej_reason, $adj_id, $station_id]);
+            log_activity($pdo, $me['id'], 'Reject Adjustment', "Rejected adjustment #{$adj_id}");
+
+            if ($adj_rej) {
+                try {
+                    $req_staff_id = (int)($adj_rej['requested_by'] ?? 0);
+                    $pid_rej = (int)($adj_rej['product_id'] ?? 0);
+                    $pname_rej = $adj_rej['product_name'] ?? "Adjustment #{$adj_id}";
+                    $target_notif_url = "staff_inventory_merchandise.php?tab=overview" . ($pid_rej > 0 ? "&product_id={$pid_rej}" : "");
+                    $actor_name = $me['name'] ?? $me['username'] ?? 'Admin';
+                    if ($req_staff_id > 0) {
+                        notify_staff_action_result(
+                            $pdo,
+                            $req_staff_id,
+                            'Merchandise Adjustment',
+                            'Rejected',
+                            $pname_rej,
+                            $actor_name,
+                            'Admin',
+                            "Reason: {$rej_reason}",
+                            'merchandise_adjustment',
+                            $adj_id,
+                            $target_notif_url
+                        );
+                    } else {
+                        create_role_notification(
+                            $pdo,
+                            'staff',
+                            'warning',
+                            'Merchandise Adjustment Rejected',
+                            "Adjustment for {$pname_rej} was rejected by Admin. Reason: {$rej_reason}",
+                            null,
+                            $target_notif_url
+                        );
+                    }
+                } catch (Exception $e_notif) {}
+            }
+
+            $_SESSION['success'] = "Adjustment request #{$adj_id} rejected.";
+        } catch (Exception $e) {
+            $_SESSION['error'] = 'Error: ' . $e->getMessage();
+        }
+    }
+    $redirect_tab = !empty($_POST['redirect_tab']) ? $_POST['redirect_tab'] : 'adjustments';
+    header("Location: admin_inventory_merchandise.php?tab={$redirect_tab}"); exit;
+}
+
 // ── Handle Product Information Update (POST) ────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_product') {
     $prod_id  = (int)($_POST['product_id'] ?? 0);
@@ -623,9 +813,25 @@ if (isset($_GET['ajax']) && ($_GET['action'] ?? '') === 'get_product_details') {
         $stmt->execute([$prod_id, $station_id]);
         $deliveries = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+        // Staff merchandise adjustments for this product
+        $adjustments = [];
+        try {
+            $stmt = $pdo->prepare("
+                SELECT ma.*, COALESCE(u.name, u.username, 'Staff') AS staff_name
+                FROM merchandise_adjustments ma
+                LEFT JOIN users u ON ma.requested_by = u.id
+                WHERE ma.product_id = ? AND ma.station_id = ?
+                ORDER BY CASE WHEN ma.status = 'Pending' THEN 1 ELSE 2 END, ma.requested_at DESC
+                LIMIT 15
+            ");
+            $stmt->execute([$prod_id, $station_id]);
+            $adjustments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $ignored) {}
+
         echo json_encode([
-            'success' => true,
-            'deliveries' => $deliveries
+            'success'     => true,
+            'deliveries'  => $deliveries,
+            'adjustments' => $adjustments
         ]);
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => $e->getMessage()]);
@@ -648,7 +854,7 @@ $date_to        = trim($_GET['date_to'] ?? '');
 
 // â”€â”€ Active Tab â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $active_tab = trim($_GET['tab'] ?? 'overview');
-if (!in_array($active_tab, ['overview', 'movement', 'alerts', 'stockin', 'stockout', 'transfer', 'damaged', 'expired'])) $active_tab = 'overview';
+if (!in_array($active_tab, ['overview', 'movement', 'alerts', 'adjustments', 'stockin', 'stockout', 'transfer', 'damaged', 'expired'])) $active_tab = 'overview';
 
 // â”€â”€ Fetch dynamic categories for dropdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $all_categories = [];
@@ -808,12 +1014,31 @@ try {
     $stock_movements_today = (int)$stmt->fetchColumn();
 } catch (Exception $e) {}
 
-$pending_adjustments_count = 0;
+// Map pending adjustments by product_id across all tabs for badges & direct action buttons
+$pending_adjs_by_product = [];
+$summary_adj_pending = 0;
+$merchandise_adjustments = [];
 try {
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM stock_requests WHERE station_id = ? AND status = 'Pending'");
+    $stmt = $pdo->prepare("
+        SELECT ma.*, COALESCE(u.name, u.username, 'Staff') AS staff_name
+        FROM merchandise_adjustments ma
+        LEFT JOIN users u ON ma.requested_by = u.id
+        WHERE ma.station_id = ?
+        ORDER BY CASE ma.status WHEN 'Pending' THEN 1 ELSE 2 END, ma.requested_at DESC
+    ");
     $stmt->execute([$station_id]);
-    $pending_adjustments_count = (int)$stmt->fetchColumn();
+    $merchandise_adjustments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($merchandise_adjustments as $padj) {
+        if (($padj['status'] ?? '') === 'Pending') {
+            $summary_adj_pending++;
+            $p_id = (int)$padj['product_id'];
+            $pending_adjs_by_product[$p_id][] = $padj;
+        }
+    }
 } catch (Exception $e) {}
+
+$pending_adjustments_count = $summary_adj_pending;
 
 $filtered_items = [];
 
@@ -2374,9 +2599,35 @@ input.filter-input:focus {
             <span style="background:#dc2626 !important;color:#fff !important;border-radius:10px;padding:1px 8px;font-size:12px;font-weight:700;line-height:1;"><?= ($kpi_low_stock + $kpi_out_of_stock + $kpi_expired_stock) ?></span>
         <?php endif; ?>
     </a>
+    <a href="admin_inventory_merchandise.php?tab=adjustments"
+       class="tab-btn <?= $active_tab === 'adjustments' ? 'active' : '' ?>">
+        <i class="fas fa-sliders-h"></i> Inventory Adjustments
+        <?php if ($summary_adj_pending > 0): ?>
+            <span style="background:#d97706 !important;color:#fff !important;border-radius:10px;padding:1px 8px;font-size:12px;font-weight:700;line-height:1;"><?= $summary_adj_pending ?></span>
+        <?php endif; ?>
+    </a>
 </div>
 
 <?php if ($active_tab === 'overview'): ?>
+
+<?php if ($summary_adj_pending > 0): ?>
+<div style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:10px; padding:14px 20px; margin-bottom:20px; display:flex; align-items:center; justify-content:space-between; gap:16px; box-shadow:0 2px 6px rgba(217,119,6,0.08);">
+    <div style="display:flex; align-items:center; gap:14px; flex:1; min-width:0;">
+        <div style="width:40px; height:40px; border-radius:50%; background:#fef3c7; display:flex; align-items:center; justify-content:center; color:#d97706; font-size:18px; flex-shrink:0;">
+            <i class="fas fa-clock"></i>
+        </div>
+        <div style="flex:1; min-width:0;">
+            <div style="font-size:14px; font-weight:800; color:#92400e; line-height:1.3;">Staff Inventory Adjustments Pending Approval (<?= $summary_adj_pending ?>)</div>
+            <div style="font-size:12px; color:#b45309; margin-top:3px; line-height:1.4;">Staff requested stock count / variance adjustments that require your review and approval.</div>
+        </div>
+    </div>
+    <div style="flex-shrink:0; margin-left:auto;">
+        <a href="admin_inventory_merchandise.php?tab=adjustments" style="background:#002F70; color:#fff; padding:9px 18px; border-radius:6px; font-size:13px; font-weight:700; text-decoration:none; display:inline-flex; align-items:center; gap:8px; white-space:nowrap; box-shadow:0 2px 4px rgba(0,47,112,0.25); transition:background 0.15s;" onmouseover="this.style.background='#001f4d'" onmouseout="this.style.background='#002F70'">
+            <i class="fas fa-sliders-h"></i> Review Adjustments (<?= $summary_adj_pending ?>)
+        </a>
+    </div>
+</div>
+<?php endif; ?>
 
 <!-- Summary Cards (Matches Master Data Requests Design & Size) -->
 <div class="txn-kpi-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));">
@@ -2411,7 +2662,7 @@ input.filter-input:focus {
         <div class="txn-kpi-val"><?= number_format($stock_movements_today) ?></div>
     </div>
     <!-- Card 7: Pending Stock Adjustments -->
-    <div class="txn-kpi-card yellow">
+    <div onclick="location.href='admin_inventory_merchandise.php?tab=adjustments'" class="txn-kpi-card yellow" style="cursor:pointer;" title="Click to view Staff Inventory Adjustments">
         <div class="txn-kpi-lbl"><i class="fas fa-clock" style="color:#d97706;margin-right:4px;"></i> Pending Adjustments</div>
         <div class="txn-kpi-val"><?= number_format($pending_adjustments_count) ?></div>
     </div>
@@ -2659,6 +2910,17 @@ window.openAdminAdjustModal = function(item) {
                                 <span style="color:#cbd5e1;">•</span>
                                 <span style="color:#475569;font-weight:700;"><?= $unit ?></span>
                             </div>
+                            <?php if (!empty($pending_adjs_by_product[(int)$item['id']])): 
+                                $padj_first = $pending_adjs_by_product[(int)$item['id']][0];
+                                $chg_val = (int)$padj_first['quantity_change'];
+                                $chg_fmt = $chg_val > 0 ? ('+' . $chg_val) : $chg_val;
+                            ?>
+                                <div style="margin-top:4px;">
+                                    <span style="display:inline-flex; align-items:center; gap:4px; background:#fef3c7; color:#92400e; border:1px solid #fde68a; border-radius:4px; font-size:10.5px; font-weight:800; padding:2px 6px; text-transform:uppercase; letter-spacing:0.3px;">
+                                        <i class="fas fa-clock" style="color:#d97706;"></i> ADJ PENDING: <?= htmlspecialchars($padj_first['adjustment_type']) ?> (<?= $chg_fmt ?>)
+                                    </span>
+                                </div>
+                            <?php endif; ?>
                         </td>
 
                         <!-- 3. EXPIRATION -->
@@ -2754,6 +3016,18 @@ window.openAdminAdjustModal = function(item) {
                                     <i class="fas fa-sliders-h"></i> Adjust
                                 </button>
                             </div>
+                            <?php if (!empty($pending_adjs_by_product[(int)$item['id']])): 
+                                $padj_row = $pending_adjs_by_product[(int)$item['id']][0];
+                            ?>
+                                <div style="display:grid; grid-template-columns:1fr 1fr; gap:3px; width:100%; margin-top:4px;">
+                                    <button type="button" onclick="event.stopPropagation(); openApproveAdjModal(<?= (int)$padj_row['id'] ?>, '<?= htmlspecialchars(addslashes($item['name'])) ?>', <?= (int)$stock ?>, <?= (int)$padj_row['quantity_change'] ?>)" style="background:#16a34a!important; color:#fff!important; border:none!important; font-size:11px; padding:4px 4px; border-radius:4px; cursor:pointer; font-weight:700; display:inline-flex; align-items:center; justify-content:center; gap:3px;" title="Approve Staff Adjustment">
+                                        <i class="fas fa-check"></i> Approve
+                                    </button>
+                                    <button type="button" onclick="event.stopPropagation(); openRejectAdjModal(<?= (int)$padj_row['id'] ?>, '<?= htmlspecialchars(addslashes($item['name'])) ?>')" style="background:#dc2626!important; color:#fff!important; border:none!important; font-size:11px; padding:4px 4px; border-radius:4px; cursor:pointer; font-weight:700; display:inline-flex; align-items:center; justify-content:center; gap:3px;" title="Reject Staff Adjustment">
+                                        <i class="fas fa-times"></i> Reject
+                                    </button>
+                                </div>
+                            <?php endif; ?>
                         </td>
                     </tr>
                     <?php endforeach; ?>
@@ -3081,6 +3355,121 @@ $total_alerts_count = count($alert_rows);
 </div>
 <?php endif; ?>
 
+<!-- ════ TAB: INVENTORY ADJUSTMENTS (STAFF REQUESTS REVIEW) ════ -->
+<?php if ($active_tab === 'adjustments'): ?>
+<div class="txn-kpi-grid">
+    <div class="txn-kpi-card yellow">
+        <div class="txn-kpi-lbl"><i class="fas fa-clock" style="color:#d97706;margin-right:4px;"></i> Pending Adjustments</div>
+        <div class="txn-kpi-val"><?= number_format($summary_adj_pending) ?></div>
+    </div>
+    <div class="txn-kpi-card green">
+        <div class="txn-kpi-lbl"><i class="fas fa-check-circle" style="color:#16a34a;margin-right:4px;"></i> Total Requests</div>
+        <div class="txn-kpi-val"><?= number_format(count($merchandise_adjustments)) ?></div>
+    </div>
+    <div class="txn-kpi-card blue">
+        <div class="txn-kpi-lbl"><i class="fas fa-boxes" style="color:#0284c7;margin-right:4px;"></i> Total Products</div>
+        <div class="txn-kpi-val"><?= number_format($kpi_total_products) ?></div>
+    </div>
+</div>
+
+<div class="tbl-card">
+    <div class="tbl-hd">
+        <div class="tbl-title" style="font-size:16px;font-weight:800;color:#002F70;"><i class="fas fa-sliders-h"></i> Staff Merchandise Stock Adjustments</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+            <input type="text" id="adminAdjSearchInput" placeholder="Search product, staff, reason..." oninput="filterAdminAdjTable()" class="filter-input" style="width:240px;">
+            <select id="adminAdjStatusFilter" onchange="filterAdminAdjTable()" class="filter-select" style="width:auto;min-width:140px;">
+                <option value="">All Statuses</option>
+                <option value="pending" <?= ($summary_adj_pending > 0) ? 'selected' : '' ?>>Pending Only</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+            </select>
+        </div>
+    </div>
+    <div class="table-wrap" style="overflow-x:hidden; width:100%;">
+        <table class="afto-tbl" id="adminAdjTable" style="width:100%; max-width:100%; table-layout:fixed; min-width: 0; border-collapse:collapse;">
+            <colgroup>
+                <col style="width:8%;">
+                <col style="width:11%;">
+                <col style="width:20%;">
+                <col style="width:11%;">
+                <col style="width:9%;">
+                <col style="width:8%;">
+                <col style="width:14%;">
+                <col style="width:10%;">
+                <col style="width:9%;">
+            </colgroup>
+            <thead>
+                <tr>
+                    <th style="color:#fff; text-align:center;">Adj ID</th>
+                    <th style="color:#fff;">Date &amp; Time</th>
+                    <th style="color:#fff;">Product Name</th>
+                    <th style="text-align:center;color:#fff;">Type</th>
+                    <th style="text-align:right;color:#fff;">Current Stock</th>
+                    <th style="text-align:right;color:#fff;">Qty Change</th>
+                    <th style="color:#fff;">Reason / Remarks</th>
+                    <th style="color:#fff;">Requested By</th>
+                    <th style="text-align:center;color:#fff;">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="adminAdjTableBody">
+                <?php if (empty($merchandise_adjustments)): ?>
+                    <tr class="no-paginate"><td colspan="9" class="empty-state" style="text-align:center; padding:36px; color:#64748b; font-size:14px; font-weight:600;"><i class="fas fa-sliders-h" style="font-size:24px;display:block;margin-bottom:8px;color:#94a3b8;"></i>No staff inventory adjustment requests found.</td></tr>
+                <?php else: ?>
+                    <?php foreach ($merchandise_adjustments as $adj):
+                        $st = strtolower($adj['status'] ?? 'pending');
+                        $badge_cls = $st === 'pending' ? 'badge-pending' : ($st === 'approved' ? 'badge-approved' : 'badge-rejected');
+                        $change_fmt = (int)$adj['quantity_change'] > 0 ? ('+' . number_format($adj['quantity_change'])) : number_format($adj['quantity_change']);
+                        $change_color = (int)$adj['quantity_change'] > 0 ? '#16a34a' : '#dc2626';
+                    ?>
+                    <tr class="admin-adj-row"
+                        data-status="<?= $st ?>"
+                        data-search="<?= strtolower(htmlspecialchars($adj['product_name'] . ' ' . ($adj['sku'] ?? '') . ' ' . $adj['adjustment_type'] . ' ' . ($adj['staff_name'] ?? '') . ' ' . ($adj['reason'] ?? ''))) ?>"
+                        style="border-bottom:1px solid #f1f5f9; <?= $st === 'pending' ? 'background:#fffdfa;' : '' ?>">
+                        <td style="text-align:center;"><code style="font-size:12px; font-weight:700; color:#002F70;">ADJ-<?= str_pad($adj['id'], 4, '0', STR_PAD_LEFT) ?></code></td>
+                        <td>
+                            <div style="font-size:12.5px; font-weight:700; color:#0f172a;"><?= date('M d, Y', strtotime($adj['requested_at'])) ?></div>
+                            <div style="font-size:11.5px; font-weight:600; color:#64748b;"><?= date('h:i A', strtotime($adj['requested_at'])) ?></div>
+                        </td>
+                        <td style="white-space:normal !important;word-break:break-word !important;overflow-wrap:break-word !important;">
+                            <strong style="font-size:13.5px; font-weight:800; color:#0f172a; line-height:1.35;"><?= htmlspecialchars($adj['product_name']) ?></strong>
+                            <?php if (!empty($adj['sku'])): ?><br><code style="font-size:11.5px; font-weight:600; color:#64748b;"><?= htmlspecialchars($adj['sku']) ?></code><?php endif; ?>
+                        </td>
+                        <td style="text-align:center;"><span style="font-weight:700; color:#002F70; font-size:12.5px;"><?= htmlspecialchars($adj['adjustment_type']) ?></span></td>
+                        <td style="text-align:right; font-weight:700; font-size:14px; color:#475569;"><?= number_format($adj['current_stock']) ?></td>
+                        <td style="text-align:right; font-weight:900; color:<?= $change_color ?>; font-size:15px;"><?= $change_fmt ?></td>
+                        <td style="white-space:normal !important;word-break:break-word !important;overflow-wrap:break-word !important; font-size:13px; color:#334155; line-height:1.35;"><?= htmlspecialchars($adj['reason'] ?: '—') ?></td>
+                        <td><strong style="font-size:13px; font-weight:700; color:#0f172a;"><?= htmlspecialchars($adj['staff_name'] ?? 'Staff') ?></strong></td>
+                        <td style="text-align:center;">
+                            <?php if ($st === 'pending'): ?>
+                                <div style="display:flex; flex-direction:column; gap:4px; align-items:center;">
+                                    <button type="button" onclick="openApproveAdjModal(<?= $adj['id'] ?>, '<?= htmlspecialchars(addslashes($adj['product_name'])) ?>', <?= (int)$adj['current_stock'] ?>, <?= (int)$adj['quantity_change'] ?>)" style="background:#16a34a!important; color:#fff!important; border:none!important; font-size:11.5px; padding:5px 8px; border-radius:4px; cursor:pointer; font-weight:700; width:100%; display:inline-flex; align-items:center; justify-content:center; gap:4px;">
+                                        <i class="fas fa-check"></i> Approve
+                                    </button>
+                                    <button type="button" onclick="openRejectAdjModal(<?= $adj['id'] ?>, '<?= htmlspecialchars(addslashes($adj['product_name'])) ?>')" style="background:#dc2626!important; color:#fff!important; border:none!important; font-size:11.5px; padding:5px 8px; border-radius:4px; cursor:pointer; font-weight:700; width:100%; display:inline-flex; align-items:center; justify-content:center; gap:4px;">
+                                        <i class="fas fa-times"></i> Reject
+                                    </button>
+                                </div>
+                            <?php elseif ($st === 'approved'): ?>
+                                <span style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#16a34a;font-weight:700;"><i class="fas fa-check-circle"></i> Approved</span>
+                            <?php else: ?>
+                                <span style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:#dc2626;font-weight:700;"><i class="fas fa-times-circle"></i> Rejected</span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+                <tr id="adminAdjNoMatchRow" style="display:none;" class="no-paginate">
+                    <td colspan="9" class="empty-state" style="text-align:center;padding:36px 20px;color:#64748b;font-size:14px;font-weight:600;">
+                        <i class="fas fa-search" style="font-size:28px;display:block;margin-bottom:10px;color:#94a3b8;"></i>
+                        <span id="adminAdjNoMatchMsg">No adjustments found matching your filter.</span>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+<?php endif; ?>
+
 <!-- ════ VIEW PRODUCT MODAL (WITH SUB-TABS) ════ -->
 <div class="modal-overlay" id="adminViewProdModal" style="z-index:10000;">
     <div style="background:#fff;border-radius:14px;width:96%;max-width:980px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 24px 40px rgba(0,0,0,.18);overflow:hidden;position:relative;z-index:10001;box-sizing:border-box;">
@@ -3380,8 +3769,124 @@ $total_alerts_count = count($alert_rows);
     </div>
 </div>
 
+<!-- ════ APPROVE MERCHANDISE ADJUSTMENT MODAL (ADMIN) ════ -->
+<div id="approveAdjModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:10001; align-items:center; justify-content:center; padding:20px; box-sizing:border-box;">
+    <div style="background:#fff; border-radius:12px; width:95%; max-width:440px; overflow:hidden; box-shadow:0 10px 40px rgba(0,0,0,0.25);">
+        <div style="background:linear-gradient(135deg,#16a34a,#15803d); padding:16px 20px; display:flex; align-items:center; justify-content:space-between;">
+            <div style="font-size:15px; font-weight:700; color:#fff; display:flex; align-items:center; gap:8px;">
+                <i class="fas fa-check-circle"></i> Approve Inventory Adjustment
+            </div>
+        </div>
+        <form method="post" action="admin_inventory_merchandise.php" style="padding:20px;">
+            <input type="hidden" name="action" value="approve_merchandise_adjustment">
+            <input type="hidden" name="adjustment_id" id="approveAdjId">
+            <input type="hidden" name="redirect_tab" value="<?= htmlspecialchars($active_tab) ?>">
+            <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:12px 14px; margin-bottom:14px;">
+                <div style="font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Product</div>
+                <div id="approveAdjProductName" style="font-size:14px; font-weight:700; color:#002F70;">—</div>
+                <div id="approveAdjDetail" style="font-size:12px; margin-top:6px; color:#334155;"></div>
+            </div>
+            <div style="font-size:13px; color:#334155; margin-bottom:16px; line-height:1.6;">
+                Are you sure you want to <strong style="color:#16a34a;">approve</strong> this inventory adjustment?
+                The stock level will be updated immediately across all inventory records.
+            </div>
+            <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <button type="button" onclick="closeApproveAdjModal()" style="padding:8px 20px; border:1.5px solid #00264D !important; background:#ffffff !important; background-color:#ffffff !important; color:#00264D !important; -webkit-text-fill-color:#00264D !important; border-radius:6px; font-size:13px; font-weight:700; cursor:pointer; opacity:1 !important; visibility:visible !important;">
+                    Cancel
+                </button>
+                <button type="submit" style="padding:8px 20px; background:#002F70 !important; color:#fff !important; border:none; border-radius:6px; font-size:13px; font-weight:700; cursor:pointer; display:flex; align-items:center; gap:6px;">
+                    <i class="fas fa-check"></i> Confirm Approve
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ════ REJECT MERCHANDISE ADJUSTMENT MODAL (ADMIN) ════ -->
+<div class="modal-overlay" id="rejectAdjModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:10000; align-items:center; justify-content:center;">
+    <div class="modal-box" style="max-width:480px; width:95%; background:#fff; border-radius:8px; overflow:hidden;">
+        <div class="modal-head" style="padding:16px 20px; background:#dc3545; color:#fff; display:flex; align-items:center; justify-content:space-between;">
+            <div class="modal-title" style="font-size:1.1rem; font-weight:700; color:#fff!important;"><i class="fas fa-times-circle"></i> Reject Inventory Adjustment</div>
+        </div>
+        <form method="post" action="admin_inventory_merchandise.php" style="padding:20px;">
+            <input type="hidden" name="action" value="reject_merchandise_adjustment">
+            <input type="hidden" name="adjustment_id" id="rejectAdjId">
+            <input type="hidden" name="redirect_tab" value="<?= htmlspecialchars($active_tab) ?>">
+            <div style="background:#f8fafc; padding:12px; border-radius:6px; border:1px solid #cbd5e1; margin-bottom:14px;">
+                <div style="font-size:11px; color:#64748b; font-weight:700;">PRODUCT</div>
+                <div id="rejectAdjProductName" style="font-size:14px; font-weight:700; color:#002F70; margin-top:2px;">—</div>
+            </div>
+            <div class="form-group" style="margin-bottom:16px;">
+                <label style="display:block; font-size:12px; font-weight:600; margin-bottom:4px;">Rejection Reason <span style="color:red;">*</span></label>
+                <textarea name="rejection_reason" rows="3" required placeholder="Describe reason for rejecting..." style="width:100%; padding:8px 12px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px;"></textarea>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:10px;">
+                <button type="button" onclick="closeRejectAdjModal()" style="padding:8px 20px; border:1.5px solid #00264D !important; background:#ffffff !important; background-color:#ffffff !important; color:#00264D !important; -webkit-text-fill-color:#00264D !important; border-radius:6px; font-size:13px; font-weight:700; cursor:pointer; opacity:1 !important; visibility:visible !important;">Cancel</button>
+                <button type="submit" class="ato-btn" style="background:#dc3545 !important; color:#fff !important;"><i class="fas fa-times"></i> Reject Request</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
 var _adminCurrentProd = null;
+
+function openApproveAdjModal(id, name, currentStock, qtyChange) {
+    var m = document.getElementById('approveAdjModal');
+    if (!m) return;
+    if (m.parentNode !== document.body) {
+        document.body.appendChild(m);
+    }
+    document.getElementById('approveAdjId').value = id;
+    document.getElementById('approveAdjProductName').innerText = name || '—';
+    var newStock = Math.max(0, currentStock + qtyChange);
+    var sign = qtyChange >= 0 ? '+' : '';
+    document.getElementById('approveAdjDetail').innerHTML =
+        '<span style="color:#64748b;">Qty Change:</span> <strong style="color:' + (qtyChange >= 0 ? '#16a34a' : '#dc2626') + ';">' + sign + qtyChange + '</strong>' +
+        ' &nbsp;|&nbsp; <span style="color:#64748b;">New Stock:</span> <strong style="color:#002F70;">' + newStock + '</strong>';
+    m.style.display = 'flex';
+}
+function closeApproveAdjModal() {
+    var m = document.getElementById('approveAdjModal');
+    if (m) m.style.display = 'none';
+}
+function openRejectAdjModal(id, name) {
+    var m = document.getElementById('rejectAdjModal');
+    if (!m) return;
+    if (m.parentNode !== document.body) {
+        document.body.appendChild(m);
+    }
+    document.getElementById('rejectAdjId').value = id;
+    document.getElementById('rejectAdjProductName').innerText = name || '—';
+    m.style.display = 'flex';
+}
+function closeRejectAdjModal() {
+    var m = document.getElementById('rejectAdjModal');
+    if (m) m.style.display = 'none';
+}
+
+function filterAdminAdjTable() {
+    var search = (document.getElementById('adminAdjSearchInput') ? document.getElementById('adminAdjSearchInput').value : '').toLowerCase().trim();
+    var status = (document.getElementById('adminAdjStatusFilter') ? document.getElementById('adminAdjStatusFilter').value : '').toLowerCase().trim();
+    var rows = document.querySelectorAll('#adminAdjTableBody tr.admin-adj-row');
+    var visibleCount = 0;
+    rows.forEach(function(row) {
+        var rowSearch = (row.getAttribute('data-search') || '').toLowerCase();
+        var rowStatus = (row.getAttribute('data-status') || '').toLowerCase();
+        var matchSearch = !search || rowSearch.indexOf(search) !== -1;
+        var matchStatus = !status || rowStatus === status;
+        if (matchSearch && matchStatus) {
+            row.style.display = '';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+    var noMatch = document.getElementById('adminAdjNoMatchRow');
+    if (noMatch) {
+        noMatch.style.display = visibleCount === 0 ? '' : 'none';
+    }
+}
 
 function openAdminEditModal(item) {
     if (!item) return;
@@ -3890,6 +4395,36 @@ function adminViewProduct(item) {
         });
         fHtml += '</tbody></table>';
         document.getElementById('vpmFifoTable').innerHTML = fHtml;
+
+        // Render staff adjustment notice if pending
+        if (data.adjustments && data.adjustments.length > 0) {
+            var pendingAdjs = data.adjustments.filter(function(a){ return a.status === 'Pending'; });
+            if (pendingAdjs.length > 0) {
+                var adjNoticeHtml = '';
+                pendingAdjs.forEach(function(pa) {
+                    var chgSign = Number(pa.quantity_change) > 0 ? '+' : '';
+                    adjNoticeHtml += '<div style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:8px; padding:12px 16px; margin-bottom:14px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">' +
+                        '<div style="display:flex; align-items:center; gap:10px;">' +
+                            '<div style="width:36px; height:36px; border-radius:50%; background:#fef3c7; display:flex; align-items:center; justify-content:center; color:#d97706; font-size:16px; flex-shrink:0;">' +
+                                '<i class="fas fa-sliders-h"></i>' +
+                            '</div>' +
+                            '<div>' +
+                                '<div style="font-size:13px; font-weight:800; color:#92400e;">Staff Adjustment Request (' + esc(pa.adjustment_type) + ' ' + chgSign + pa.quantity_change + ')</div>' +
+                                '<div style="font-size:12px; color:#b45309;">Requested by <strong>' + esc(pa.staff_name || 'Staff') + '</strong> &bull; Reason: <em>' + esc(pa.reason || '—') + '</em></div>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div style="display:flex; gap:6px;">' +
+                            '<button type="button" onclick="closeAdminViewProdModal(); openApproveAdjModal(' + pa.id + ', \'' + esc(item.name).replace(/'/g, "\\'") + '\', ' + (parseFloat(item.stock_level) || 0) + ', ' + parseInt(pa.quantity_change) + ')" style="background:#16a34a!important; color:#fff!important; border:none!important; font-size:12px; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:700; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-check"></i> Approve</button>' +
+                            '<button type="button" onclick="closeAdminViewProdModal(); openRejectAdjModal(' + pa.id + ', \'' + esc(item.name).replace(/'/g, "\\'") + '\')" style="background:#dc2626!important; color:#fff!important; border:none!important; font-size:12px; padding:6px 12px; border-radius:4px; cursor:pointer; font-weight:700; display:inline-flex; align-items:center; gap:4px;"><i class="fas fa-times"></i> Reject</button>' +
+                        '</div>' +
+                    '</div>';
+                });
+                var existingNotice = document.getElementById('vpmAlertNotice') ? document.getElementById('vpmAlertNotice').innerHTML : '';
+                if (document.getElementById('vpmAlertNotice')) {
+                    document.getElementById('vpmAlertNotice').innerHTML = adjNoticeHtml + existingNotice;
+                }
+            }
+        }
     })
     .catch(function() {
         document.getElementById('vpmFifoTable').innerHTML = '<div style="text-align:center;padding:16px;color:#dc3545;">Connection error loading batch data.</div>';

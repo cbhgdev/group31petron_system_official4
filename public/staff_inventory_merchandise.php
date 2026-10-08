@@ -2152,8 +2152,14 @@ document.addEventListener('DOMContentLoaded', function() {
     setupTablePagination('merchTable', 'merchRowsLimit', 'merchPagination', 50);
     applyFilters();
 
-    // Auto-open stock request modal if triggered from Quick Actions / URL
+    // Auto-switch tab if passed in URL (e.g. ?tab=overview or ?tab=stockin or ?tab=alerts)
     var urlParams = new URLSearchParams(window.location.search);
+    var targetTab = urlParams.get('tab');
+    if (targetTab && typeof window.switchInvTab === 'function') {
+        window.switchInvTab(targetTab);
+    }
+
+    // Auto-open stock request modal if triggered from Quick Actions / URL
     if (urlParams.get('stock_request') === '1' || urlParams.get('open_sr') === '1' || urlParams.get('action') === 'request' || window.location.hash === '#stock_request') {
         setTimeout(function() {
             if (typeof openSrModal === 'function') openSrModal();

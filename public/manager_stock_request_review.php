@@ -14,7 +14,7 @@ $station_id = (int)user_station_id();
 $role       = role_key($me['role'] ?? '');
 
 // Access control
-if (!in_array($role, ['manager', 'admin', 'superadmin', 'developer'], true)) {
+if (!in_array($role, ['manager', 'admin', 'superadmin', 'developer', 'staff', 'cashier'], true)) {
     $_SESSION['error'] = 'Access denied. Manager access required.';
     header('Location: dashboard.php');
     exit;
@@ -41,6 +41,7 @@ function manager_procurement_prepare_schema(PDO $pdo): void
         "ALTER TABLE fuel_purchase_orders ADD COLUMN IF NOT EXISTS approved_at DATETIME NULL",
         "ALTER TABLE fuel_purchase_orders ADD COLUMN IF NOT EXISTS updated_at DATETIME NULL",
         "ALTER TABLE fuel_purchase_orders MODIFY COLUMN status VARCHAR(100) NOT NULL DEFAULT 'Approved PO'",
+        "UPDATE notifications SET redirect_url = 'manager_stock_request_review.php' WHERE (title LIKE '%Purchase Order%' OR message LIKE '%Purchase Order%' OR event_type = 'purchase_order' OR reference_type = 'purchase_order') AND (redirect_url LIKE '%staff_record_delivery%' OR redirect_url LIKE '%staff_inventory%' OR redirect_url LIKE '%admin_stock_confirmation%' OR redirect_url = '' OR redirect_url IS NULL)",
     ];
 
     foreach ($statements as $sql) {
@@ -258,6 +259,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_direct_po_catalog') {
 
 //  Handle POST Actions 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!in_array($role, ['manager', 'admin', 'superadmin', 'developer'], true)) {
+        $_SESSION['error'] = 'Access denied. Manager privileges required to perform procurement actions.';
+        header('Location: manager_stock_request_review.php');
+        exit;
+    }
     $action = $_POST['action'] ?? '';
 
     // 1. Generate approved Merchandise Purchase Order
@@ -428,9 +434,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $mgr_name,
                     $mgr_role,
                     "Purchase Order {$po_number} generated for {$item_summary}. Ready for delivery tracking.",
-                    'stock_request',
+                    'purchase_order',
                     $first_request_id,
-                    'staff_record_delivery.php'
+                    'manager_stock_request_review.php'
+                );
+            }
+
+            // Notify Admin & Superadmin members about newly issued PO
+            $stmt_adm = $pdo->prepare("SELECT id FROM users WHERE (station_id = ? OR station_id IS NULL OR station_id = 0) AND role IN ('admin', 'superadmin') AND status = 'Active'");
+            $stmt_adm->execute([$station_id]);
+            $adm_ids = $stmt_adm->fetchAll(PDO::FETCH_COLUMN);
+            if (!empty($adm_ids)) {
+                manager_notify_users(
+                    $pdo,
+                    $adm_ids,
+                    'New Purchase Order Issued',
+                    "Purchase Order {$po_number} generated from PR {$pr_number}.",
+                    'manager_stock_request_review.php'
                 );
             }
 
@@ -580,9 +600,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $mgr_name,
                     $mgr_role,
                     "Fuel Purchase Order {$po_number} generated for " . number_format($st_liters, 2) . " Liters. Ready for delivery tracking.",
-                    'stock_request',
+                    'purchase_order',
                     (int)($items_to_insert[0]['request_id'] ?? 0),
-                    'staff_record_delivery.php'
+                    'manager_stock_request_review.php'
+                );
+            }
+
+            // Notify Admin & Superadmin members about newly issued Fuel PO
+            $stmt_adm = $pdo->prepare("SELECT id FROM users WHERE (station_id = ? OR station_id IS NULL OR station_id = 0) AND role IN ('admin', 'superadmin') AND status = 'Active'");
+            $stmt_adm->execute([$station_id]);
+            $adm_ids = $stmt_adm->fetchAll(PDO::FETCH_COLUMN);
+            if (!empty($adm_ids)) {
+                manager_notify_users(
+                    $pdo,
+                    $adm_ids,
+                    'New Fuel Purchase Order Issued',
+                    "Fuel Purchase Order {$po_number} generated from PR {$pr_number}.",
+                    'manager_stock_request_review.php'
                 );
             }
 
@@ -802,8 +836,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
             }
 
-            // Notify staff members at station about the newly issued PO for receiving
-            $stmt_staff = $pdo->prepare("SELECT id FROM users WHERE station_id = ? AND role IN ('staff', 'cashier') AND status = 'Active'");
+            // Notify staff & admin members about the newly issued PO
+            $stmt_staff = $pdo->prepare("SELECT id FROM users WHERE (station_id = ? OR station_id IS NULL OR station_id = 0 OR role IN ('admin', 'superadmin')) AND role IN ('staff', 'cashier', 'admin', 'superadmin') AND status = 'Active'");
             $stmt_staff->execute([$station_id]);
             $staff_ids = $stmt_staff->fetchAll(PDO::FETCH_COLUMN);
             if (!empty($staff_ids)) {
@@ -812,7 +846,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $staff_ids,
                     'New Purchase Order Issued',
                     "Purchase Order {$po_number} has been directly issued by Manager. Total items: {$total_qty}.",
-                    'staff_record_delivery.php'
+                    'manager_stock_request_review.php'
                 );
             }
 
@@ -918,8 +952,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $line_index++;
             }
 
-            // Notify staff members at station about the newly issued Fuel PO for receiving
-            $stmt_staff = $pdo->prepare("SELECT id FROM users WHERE station_id = ? AND role IN ('staff', 'cashier', 'pump_attendant') AND status = 'Active'");
+            // Notify staff & admin members about the newly issued Fuel PO
+            $stmt_staff = $pdo->prepare("SELECT id FROM users WHERE (station_id = ? OR station_id IS NULL OR station_id = 0 OR role IN ('admin', 'superadmin')) AND role IN ('staff', 'cashier', 'pump_attendant', 'admin', 'superadmin') AND status = 'Active'");
             $stmt_staff->execute([$station_id]);
             $staff_ids = $stmt_staff->fetchAll(PDO::FETCH_COLUMN);
             if (!empty($staff_ids)) {
@@ -928,7 +962,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $staff_ids,
                     'New Fuel Purchase Order Issued',
                     "Fuel Purchase Order {$po_number} has been directly issued by Manager.",
-                    'staff_record_delivery.php'
+                    'manager_stock_request_review.php'
                 );
             }
 
@@ -1923,9 +1957,11 @@ body.sidebar-collapsed .modal-overlay {
                 <i class="fas fa-clipboard-list" style="color: #002F6C;"></i> Purchase Management
             </h1>
         </div>
+        <?php if (in_array($role, ['manager', 'admin', 'superadmin', 'developer'], true)): ?>
         <button type="button" onclick="openDirectPoModal()" class="btn-forward" style="background: #002F6C !important; color: #ffffff !important; border-radius: 8px !important; font-size: 13.5px !important; font-weight: 700 !important; padding: 11px 22px !important; box-shadow: 0 4px 10px rgba(0, 47, 108, 0.25) !important; cursor: pointer !important; display: inline-flex !important; align-items: center !important; gap: 8px !important; text-decoration: none;">
             <i class="fas fa-plus-circle" style="font-size: 15px;"></i> Create Purchase Order
         </button>
+        <?php endif; ?>
     </div>
 
     <!-- Alert Notifications -->
@@ -2200,6 +2236,7 @@ body.sidebar-collapsed .modal-overlay {
                                         </div>
                                     </div>
                                     
+                                    <?php if (in_array($role, ['manager', 'admin', 'superadmin', 'developer'], true)): ?>
                                     <div class="pr-panel-actions">
                                         <button type="button" class="btn-return-req" onclick="openReturnPrModal('<?= htmlspecialchars($group['pr_number'], ENT_QUOTES) ?>', 'merch', '<?= $item_ids_str ?>')">
                                             <i class="fas fa-undo"></i> Return Request
@@ -2208,6 +2245,7 @@ body.sidebar-collapsed .modal-overlay {
                                             <i class="fas fa-file-invoice"></i> Generate Purchase Order
                                         </button>
                                     </div>
+                                    <?php endif; ?>
                                 </form>
                             </div>
                         </td>
@@ -2475,6 +2513,7 @@ body.sidebar-collapsed .modal-overlay {
                                         </div>
 
                                         <!-- Actions -->
+                                        <?php if (in_array($role, ['manager', 'admin', 'superadmin', 'developer'], true)): ?>
                                         <div class="pr-panel-actions" style="padding-bottom: 16px; margin-bottom: 8px;">
                                             <button type="button" class="btn-return-req" onclick="openReturnPrModal('<?= htmlspecialchars($group['pr_number'], ENT_QUOTES) ?>', 'fuel', '<?= $item_ids_str ?>')">
                                                 <i class="fas fa-undo"></i> Return Request
@@ -2483,6 +2522,7 @@ body.sidebar-collapsed .modal-overlay {
                                                 <i class="fas fa-file-invoice"></i> Generate Purchase Order
                                             </button>
                                         </div>
+                                        <?php endif; ?>
                                     </form>
                                 </div>
                             </div>

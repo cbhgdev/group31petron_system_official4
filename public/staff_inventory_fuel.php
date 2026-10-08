@@ -2399,8 +2399,14 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     setInterval(autoRefreshFuelInventory, 10000);
 
-    // Auto-open fuel stock request modal if triggered from URL
+    // Auto-switch tab if passed in URL (e.g. ?tab=overview or ?tab=deliveries)
     var urlParams = new URLSearchParams(window.location.search);
+    var targetTab = urlParams.get('tab');
+    if (targetTab && typeof window.switchFuelTab === 'function') {
+        window.switchFuelTab(targetTab);
+    }
+
+    // Auto-open fuel stock request modal if triggered from URL
     if (urlParams.get('stock_request') === '1' || urlParams.get('open_sr') === '1' || urlParams.get('action') === 'request' || window.location.hash === '#stock_request') {
         setTimeout(function() {
             if (typeof openFuelSrModal === 'function') openFuelSrModal();

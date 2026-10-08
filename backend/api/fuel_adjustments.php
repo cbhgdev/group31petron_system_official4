@@ -216,16 +216,42 @@ try {
             if (empty($fuel_type)) respond(false, 'Fuel type is required.');
             if (empty($reason))    respond(false, 'Reason for adjustment is required.');
 
-            // Fetch current UGT volume from fuel_inventory
-            $stmt = $pdo->prepare("
-                SELECT id, fuel_type_id, current_level, capacity, ugt_no
-                FROM fuel_inventory
-                WHERE station_id = ?
-                  AND LOWER(TRIM(fuel_type)) = LOWER(TRIM(?))
-                LIMIT 1
-            ");
-            $stmt->execute([$station_id, $fuel_type]);
-            $inv = $stmt->fetch(PDO::FETCH_ASSOC);
+            // Smart match tank record in fuel_inventory
+            $inv = null;
+            if ($ugt_no) {
+                $clean_ugt = (int)preg_replace('/[^0-9]/', '', $ugt_no);
+                $stmt = $pdo->prepare("
+                    SELECT id, fuel_type, fuel_type_id, current_level, capacity, ugt_no
+                    FROM fuel_inventory
+                    WHERE station_id = ?
+                      AND (LOWER(TRIM(ugt_no)) = LOWER(TRIM(?)) OR ugt_no = ? OR id = ?)
+                    LIMIT 1
+                ");
+                $stmt->execute([$station_id, $ugt_no, $clean_ugt, $clean_ugt]);
+                $inv = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+            if (!$inv && $fuel_type) {
+                $stmt = $pdo->prepare("
+                    SELECT id, fuel_type, fuel_type_id, current_level, capacity, ugt_no
+                    FROM fuel_inventory
+                    WHERE station_id = ?
+                      AND LOWER(TRIM(fuel_type)) = LOWER(TRIM(?))
+                    LIMIT 1
+                ");
+                $stmt->execute([$station_id, $fuel_type]);
+                $inv = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+            if (!$inv && $fuel_type) {
+                $stmt = $pdo->prepare("
+                    SELECT id, fuel_type, fuel_type_id, current_level, capacity, ugt_no
+                    FROM fuel_inventory
+                    WHERE station_id = ?
+                      AND LOWER(TRIM(fuel_type)) LIKE LOWER(CONCAT('%', ?, '%'))
+                    LIMIT 1
+                ");
+                $stmt->execute([$station_id, explode(' ', $fuel_type)[0]]);
+                $inv = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
 
             if (!$inv) {
                 respond(false, 'Fuel inventory record not found for ' . htmlspecialchars($fuel_type));
@@ -290,6 +316,28 @@ try {
                     $me['id'],
                     "Submitted {$adjustment_type} request for {$fuel_type} ({$direction} {$adj_liters}L). Variance: {$variance}L. Reason: {$reason}"
                 ]);
+            // Create notification for Station Admin & Superadmin users
+            try {
+                $adm_stmt = $pdo->prepare("
+                    SELECT id FROM users
+                    WHERE (station_id = ? OR role IN ('superadmin', 'developer'))
+                      AND LOWER(TRIM(role)) IN ('admin', 'superadmin', 'developer')
+                      AND status = 'Active'
+                ");
+                $adm_stmt->execute([$station_id]);
+                $admins = $adm_stmt->fetchAll(PDO::FETCH_COLUMN);
+
+                if (!empty($admins)) {
+                    $notif_ins = $pdo->prepare("
+                        INSERT INTO notifications
+                        (user_id, type, title, message, event_type, severity, redirect_url, status, created_at)
+                        VALUES (?, 'warning', 'Fuel Adjustments Awaiting Approval', ?, 'fuel_adjustment', 'medium', 'admin_inventory_fuel.php?tab=adjustments', 'unread', NOW())
+                    ");
+                    $notif_msg = "1 physical tank dip / fuel reading adjustment(s) require Admin review and approval.";
+                    foreach ($admins as $adm_id) {
+                        $notif_ins->execute([$adm_id, $notif_msg]);
+                    }
+                }
             } catch (Exception $e) {}
 
             $pdo->commit();

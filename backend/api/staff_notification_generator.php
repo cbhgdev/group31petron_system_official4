@@ -202,7 +202,7 @@ try {
         $pct  = $r['capacity'] > 0 ? round(($r['current_level'] / $r['capacity']) * 100) : 0;
         $sev  = $pct <= 5 ? 'critical' : ($pct <= 10 ? 'high' : 'medium');
         $type = $pct <= 5 ? 'error' : 'warning';
-        $key  = 'fuel_low_' . $r['id'] . '_' . date('Ymd');
+        $key  = 'fuel_low_' . $r['id'];
         $generated += push_notif(
             $pdo, $user_id, $type, 'fuel_management',
             $sev,
@@ -220,6 +220,17 @@ try {
 // ════════════════════════════════════════════════════════════
 try {
     if ($sw) {
+        // Auto-purge low stock alerts for items whose stock level has been replenished
+        $pdo->prepare("
+            DELETE n FROM notifications n
+            INNER JOIN station_inventory si ON (n.source_key = CONCAT('low_stock_', si.product_id) OR n.source_key LIKE CONCAT('low_stock_', si.product_id, '_%'))
+            INNER JOIN inventory_products ip ON ip.id = si.product_id
+            WHERE n.user_id = ?
+              AND si.station_id = ?
+              AND si.stock_level > COALESCE(NULLIF(si.reorder_level, 0), NULLIF(ip.min_stock, 0), 10)
+              AND LOWER(COALESCE(ip.category, '')) NOT IN ('fuel', 'fuels')
+        ")->execute([$user_id, $sw]);
+
         $stmt = $pdo->prepare(
             "SELECT ip.id, ip.product_name, ip.sku, si.stock_level,
                     COALESCE(si.reorder_level, ip.min_stock, 10) AS reorder_level
@@ -250,7 +261,7 @@ try {
         $sev   = $stock <= 0 ? 'critical' : ($stock <= 5 ? 'high' : 'medium');
         $type  = $stock <= 0 ? 'error' : 'warning';
         $label = $stock <= 0 ? 'Out of stock' : "Low stock ({$stock} remaining)";
-        $key   = 'low_stock_' . $r['id'] . '_' . date('Ymd');
+        $key   = 'low_stock_' . $r['id'];
         $generated += push_notif(
             $pdo, $user_id, $type, 'inventory',
             $sev,
@@ -422,6 +433,9 @@ try {
            AND created_at < DATE_SUB(NOW(), INTERVAL 14 DAY)"
     );
     $stmt->execute([$user_id]);
+    // Clean up legacy date-stamped keys
+    $pdo->prepare("DELETE FROM notifications WHERE user_id = ? AND source_key LIKE 'fuel_low_%_%'")->execute([$user_id]);
+    $pdo->prepare("DELETE FROM notifications WHERE user_id = ? AND source_key LIKE 'low_stock_%_%'")->execute([$user_id]);
 } catch (Exception $e) {}
 
 // ── Fix any stale notifications with wrong redirect URLs ─────

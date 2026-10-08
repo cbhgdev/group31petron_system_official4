@@ -2676,6 +2676,35 @@ function ensure_notifications_table(PDO $pdo): void {
     }
   }
 
+  // Remap existing DB notification rows for Admins so Fuel Adjustments go to admin_inventory_fuel.php?tab=adjustments
+  // and Merchandise Stock Adjustments go to admin_inventory_merchandise.php?tab=adjustments
+  try {
+    $pdo->exec("
+      UPDATE notifications n
+      JOIN users u ON n.user_id = u.id
+      SET n.redirect_url = 'admin_inventory_fuel.php?tab=adjustments'
+      WHERE LOWER(TRIM(u.role)) IN ('admin', 'superadmin', 'developer')
+        AND (
+          LOWER(n.event_type) IN ('fuel_adjustment', 'fuel_adjustments', 'tank_dip', 'dip_adjustment')
+          OR LOWER(n.title) LIKE '%fuel adjustment%'
+          OR LOWER(n.title) LIKE '%tank dip%'
+          OR LOWER(n.message) LIKE '%fuel reading adjustment%'
+          OR LOWER(n.message) LIKE '%tank dip%'
+        )
+    ");
+    $pdo->exec("
+      UPDATE notifications n
+      JOIN users u ON n.user_id = u.id
+      SET n.redirect_url = 'admin_inventory_merchandise.php?tab=adjustments'
+      WHERE LOWER(TRIM(u.role)) IN ('admin', 'superadmin', 'developer')
+        AND (
+          LOWER(n.event_type) IN ('inventory_adjustment', 'stock_adjustment', 'merchandise_adjustment')
+          OR LOWER(n.title) LIKE '%merchandise adjustment%'
+          OR (LOWER(n.title) LIKE '%stock adjustment%' AND LOWER(n.title) NOT LIKE '%fuel%' AND LOWER(n.message) NOT LIKE '%fuel%')
+        )
+    ");
+  } catch (Exception $e) {}
+
   $ready = true;
 }
 
@@ -4018,12 +4047,22 @@ function notify(
                 "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS shift_period VARCHAR(20) NULL AFTER reference_id",
                 "UPDATE notifications SET redirect_url = 'staff_inventory_fuel.php' WHERE (redirect_url LIKE '%staff_fuel_deliveries.php%' OR redirect_url LIKE '%staff_record_delivery.php%tab=fuel%') OR (redirect_url LIKE '%staff_record_delivery.php%' AND (title LIKE '%Fuel%' OR event_type IN ('fuel','fuel_stock_in','fuel_delivery') OR message LIKE '%Fuel%'))",
                 "UPDATE notifications SET redirect_url = 'staff_inventory_merchandise.php' WHERE redirect_url LIKE '%staff_record_delivery.php%' OR (event_type IN ('stock_in','merchandise_stock_in','delivery') AND (redirect_url LIKE '%staff_fuel_deliveries.php%' OR redirect_url LIKE '%staff_record_delivery.php%'))",
+                "UPDATE notifications SET redirect_url = 'manager_stock_request_review.php' WHERE (title LIKE '%Purchase Order%' OR message LIKE '%Purchase Order%' OR event_type = 'purchase_order' OR reference_type = 'purchase_order')",
             ] as $ddl) {
                 try { $pdo->exec($ddl); } catch (Throwable $e) {}
             }
             if (session_status() === PHP_SESSION_ACTIVE) {
                 $_SESSION['notifications_schema_migrated'] = true;
             }
+        }
+
+        if (
+            stripos($title, 'Purchase Order') !== false ||
+            stripos($message, 'Purchase Order') !== false ||
+            $event_type === 'purchase_order' ||
+            $ref_type === 'purchase_order'
+        ) {
+            $redirect_url = 'manager_stock_request_review.php';
         }
 
         $stmt = $pdo->prepare("
@@ -4134,7 +4173,14 @@ function notify_staff_action_result(
     }
 
     // Determine target URL for staff
-    if (empty($redirect_url) && !empty($ref_type)) {
+    if (
+        stripos($title, 'Purchase Order') !== false ||
+        stripos($message, 'Purchase Order') !== false ||
+        stripos($details, 'Purchase Order') !== false ||
+        $ref_type === 'purchase_order'
+    ) {
+        $redirect_url = 'manager_stock_request_review.php';
+    } elseif (empty($redirect_url) && !empty($ref_type)) {
         $redirect_url = notification_redirect_url($ref_type, $ref_id, 'staff');
     }
 
@@ -4372,9 +4418,12 @@ function notification_redirect_url(string $ref_type, int $ref_id, string $role):
             'admin'    => "manager_validated_transactions.php{$id}",
         ],
         'purchase_order' => [
-            'staff'    => "staff_inventory_merchandise.php",
-            'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
-            'admin'    => "admin_stock_confirmation.php{$id}",
+            'staff'      => "manager_stock_request_review.php",
+            'cashier'    => "manager_stock_request_review.php",
+            'manager'    => "manager_stock_request_review.php",
+            'admin'      => "manager_stock_request_review.php",
+            'superadmin' => "manager_stock_request_review.php",
+            'developer'  => "manager_stock_request_review.php",
         ],
         'user_account' => [
             'superadmin' => "superadmin_admin_management.php{$id}",
@@ -4623,219 +4672,11 @@ if (!function_exists('fetch_pumps_for_fuel_product')) {
 
 if (!function_exists('auto_load_pending_deliveries_from_approved_pos')) {
     /**
-     * Auto-loads approved Purchase Orders into deliveries_oversight as pending deliveries
-     * so that Manager Deliveries and Stock-In always accurately reflect approved POs
-     * without requiring manual re-entry.
+     * Auto-loading bypassed: POs must be explicitly recorded via Record Delivery 
+     * by Staff or Admin before appearing in Stock-In or updating inventory.
      */
     function auto_load_pending_deliveries_from_approved_pos(PDO $pdo, int $station_id): int {
-        if ($station_id <= 0) return 0;
-        $inserted_count = 0;
-
-        // Ensure columns exist on deliveries_oversight
-        foreach ([
-            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS source_ref VARCHAR(100) DEFAULT NULL",
-            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS batch_id VARCHAR(100) DEFAULT NULL",
-            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS sales_invoice_no VARCHAR(100) DEFAULT NULL",
-            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS delivery_time TIME DEFAULT NULL",
-            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS unit_cost DECIMAL(12,4) DEFAULT 0",
-            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS unit_price DECIMAL(12,4) DEFAULT 0",
-            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS expected_quantity DECIMAL(12,3) DEFAULT 0",
-            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS actual_quantity DECIMAL(12,3) DEFAULT 0",
-            "ALTER TABLE deliveries_oversight ADD COLUMN IF NOT EXISTS damaged_quantity DECIMAL(12,3) DEFAULT 0",
-        ] as $schema_sql) {
-            try { $pdo->exec($schema_sql); } catch (Exception $e) {}
-        }
-
-        // 1. Merchandise POs that are Approved/Finalized and not yet completed in merchandise_stock_in
-        try {
-            $stmt_po = $pdo->prepare("
-                SELECT po.*, COALESCE(s.name, po.supplier_name, 'Petron Corporation') AS resolved_supplier
-                FROM purchase_orders po
-                LEFT JOIN suppliers s ON po.supplier_id = s.id
-                WHERE po.station_id = ?
-                  AND (po.type = 'merch' OR po.type = 'merchandise' OR po.type IS NULL OR po.type = '')
-                  AND po.status IN ('Approved', 'Approved PO', 'Admin Finalized', 'Pending Delivery', 'Official', 'Pending Stock-In', 'Pending Validation', 'Pending')
-                  AND (po.stock_in_done = 0 OR po.stock_in_done IS NULL)
-                  AND po.id NOT IN (
-                      SELECT DISTINCT po_id FROM merchandise_stock_in
-                      WHERE station_id = ? AND po_id IS NOT NULL
-                  )
-            ");
-            $stmt_po->execute([$station_id, $station_id]);
-            $approved_pos = $stmt_po->fetchAll(PDO::FETCH_ASSOC);
-
-            foreach ($approved_pos as $po) {
-                $po_num = trim((string)$po['po_number']);
-                $batch_id = trim((string)($po['batch_id'] ?: $po['po_number']));
-                if (!$po_num) continue;
-
-                // Check if already represented in deliveries_oversight
-                $stmt_chk = $pdo->prepare("
-                    SELECT COUNT(*) FROM deliveries_oversight
-                    WHERE station_id = ?
-                      AND delivery_type = 'merchandise'
-                      AND (source_ref = ? OR (batch_id = ? AND batch_id != '') OR delivery_ref LIKE ?)
-                      AND status != 'Cancelled'
-                ");
-                $stmt_chk->execute([$station_id, $po_num, $batch_id, '%' . $po_num . '%']);
-                if ((int)$stmt_chk->fetchColumn() > 0) {
-                    continue; // Already has delivery records
-                }
-
-                // Fetch items for this PO
-                $items = [];
-                try {
-                    $stmt_items = $pdo->prepare("
-                        SELECT poi.*, ip.sku AS ip_sku, ip.category AS ip_category,
-                               COALESCE(si.unit, ip.size, 'pcs') AS ip_unit
-                        FROM purchase_order_items poi
-                        LEFT JOIN inventory_products ip ON poi.product_id = ip.id
-                        LEFT JOIN station_inventory si ON poi.product_id = si.product_id AND si.station_id = ?
-                        WHERE poi.po_id = ?
-                    ");
-                    $stmt_items->execute([$station_id, $po['id']]);
-                    $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
-                } catch (Exception $e) {}
-
-                $del_date = !empty($po['expected_delivery_date']) ? $po['expected_delivery_date'] : (!empty($po['expected_delivery']) ? $po['expected_delivery'] : date('Y-m-d'));
-                $del_time = '09:00:00';
-                $supplier = $po['resolved_supplier'] ?: 'Petron Corporation';
-
-                if (!empty($items)) {
-                    foreach ($items as $item) {
-                        $qty = (float)($item['quantity'] ?? $item['quantity_ordered'] ?? 0);
-                        if ($qty <= 0) continue;
-                        $unit_cost = (float)($item['unit_price'] ?? 0);
-                        $prod_name = $item['item_name'] ?: 'Merchandise Product';
-                        $unit = $item['ip_unit'] ?: 'pcs';
-                        $del_ref = 'MDR-' . date('Ymd', strtotime($po['created_at'] ?: 'now')) . '-' . str_pad($po['id'], 4, '0', STR_PAD_LEFT);
-
-                        $pdo->prepare("
-                            INSERT INTO deliveries_oversight (
-                                delivery_type, delivery_ref, supplier, product, quantity, unit, unit_price, unit_cost,
-                                expected_quantity, actual_quantity, damaged_quantity,
-                                delivery_date, delivery_time, dr_number, sales_invoice_no,
-                                encoded_by, station_id, status, remarks, source_ref, batch_id, created_at, updated_at
-                            ) VALUES (
-                                'merchandise', ?, ?, ?, ?, ?, ?, ?,
-                                ?, ?, 0,
-                                ?, ?, ?, ?,
-                                ?, ?, 'Pending Stock-In', ?, ?, ?, NOW(), NOW()
-                            )
-                        ")->execute([
-                            $del_ref, $supplier, $prod_name, $qty, $unit, $unit_cost, $unit_cost,
-                            $qty, $qty,
-                            $del_date, $del_time, $po_num, 'INV-' . $po_num,
-                            $po['created_by'] ?: null, $station_id,
-                            'Auto-loaded from Approved Purchase Order ' . $po_num,
-                            $po_num, $batch_id
-                        ]);
-                        $inserted_count++;
-                    }
-                } else {
-                    $qty = (float)($po['quantity'] ?? 1);
-                    $unit_cost = (float)($po['unit_price'] ?? 0);
-                    $prod_name = $po['product_name'] ?: 'Merchandise Delivery';
-                    $del_ref = 'MDR-' . date('Ymd', strtotime($po['created_at'] ?: 'now')) . '-' . str_pad($po['id'], 4, '0', STR_PAD_LEFT);
-
-                    $pdo->prepare("
-                        INSERT INTO deliveries_oversight (
-                            delivery_type, delivery_ref, supplier, product, quantity, unit, unit_price, unit_cost,
-                            expected_quantity, actual_quantity, damaged_quantity,
-                            delivery_date, delivery_time, dr_number, sales_invoice_no,
-                            encoded_by, station_id, status, remarks, source_ref, batch_id, created_at, updated_at
-                        ) VALUES (
-                            'merchandise', ?, ?, ?, ?, 'pcs', ?, ?,
-                            ?, ?, 0,
-                            ?, ?, ?, ?,
-                            ?, ?, 'Pending Stock-In', ?, ?, ?, NOW(), NOW()
-                        )
-                    ")->execute([
-                        $del_ref, $supplier, $prod_name, $qty, $unit_cost, $unit_cost,
-                        $qty, $qty,
-                        $del_date, $del_time, $po_num, 'INV-' . $po_num,
-                        $po['created_by'] ?: null, $station_id,
-                        'Auto-loaded from Approved Purchase Order ' . $po_num,
-                        $po_num, $batch_id
-                    ]);
-                    $inserted_count++;
-                }
-            }
-        } catch (Exception $e) {
-            error_log('auto_load merch error: ' . $e->getMessage());
-        }
-
-        // 2. Fuel POs that are Approved/Finalized and not yet completed
-        try {
-            $stmt_fpo = $pdo->prepare("
-                SELECT fpo.*, ft.name AS fuel_type_name, COALESCE(s.name, 'Petron Corporation') AS resolved_supplier
-                FROM fuel_purchase_orders fpo
-                LEFT JOIN fuel_types ft ON fpo.fuel_type_id = ft.id
-                LEFT JOIN suppliers s ON fpo.supplier_id = s.id
-                WHERE fpo.station_id = ?
-                  AND fpo.status IN ('Approved', 'Approved PO', 'Admin Finalized', 'Pending Delivery', 'Official', 'Pending Stock-In', 'Pending Validation', 'Pending')
-                  AND (fpo.actual_volume IS NULL OR fpo.actual_volume <= 0)
-                  AND (fpo.batch_id IS NULL OR fpo.batch_id NOT IN (
-                      SELECT DISTINCT batch_ref FROM fuel_stock_in
-                      WHERE station_id = ? AND batch_ref IS NOT NULL
-                  ))
-            ");
-            $stmt_fpo->execute([$station_id, $station_id]);
-            $approved_fpos = $stmt_fpo->fetchAll(PDO::FETCH_ASSOC);
-
-            foreach ($approved_fpos as $fpo) {
-                $po_num = trim((string)$fpo['po_number']);
-                $batch_id = trim((string)($fpo['batch_id'] ?: $fpo['po_number']));
-                if (!$po_num) continue;
-
-                // Check if already in deliveries_oversight
-                $stmt_chk = $pdo->prepare("
-                    SELECT COUNT(*) FROM deliveries_oversight
-                    WHERE station_id = ?
-                      AND delivery_type = 'fuel'
-                      AND (source_ref = ? OR (batch_id = ? AND batch_id != '') OR delivery_ref LIKE ?)
-                      AND status != 'Cancelled'
-                ");
-                $stmt_chk->execute([$station_id, $po_num, $batch_id, '%' . $po_num . '%']);
-                if ((int)$stmt_chk->fetchColumn() > 0) {
-                    continue;
-                }
-
-                $del_date = !empty($fpo['expected_delivery_date']) ? $fpo['expected_delivery_date'] : date('Y-m-d');
-                $del_time = '09:00:00';
-                $supplier = $fpo['resolved_supplier'] ?: 'Petron Corporation';
-                $liters = (float)($fpo['volume'] ?? 0);
-                $unit_cost = (float)($fpo['unit_price'] ?? 0);
-                $prod_name = $fpo['fuel_type_name'] ?: 'Fuel';
-                $del_ref = 'FDR-' . date('Ymd', strtotime($fpo['created_at'] ?: 'now')) . '-' . str_pad($fpo['id'], 4, '0', STR_PAD_LEFT);
-
-                $pdo->prepare("
-                    INSERT INTO deliveries_oversight (
-                        delivery_type, delivery_ref, supplier, product, quantity, unit, unit_price, unit_cost,
-                        expected_quantity, actual_quantity, damaged_quantity,
-                        delivery_date, delivery_time, dr_number, sales_invoice_no,
-                        encoded_by, station_id, status, remarks, source_ref, batch_id, created_at, updated_at
-                    ) VALUES (
-                        'fuel', ?, ?, ?, ?, 'L', ?, ?,
-                        ?, ?, 0,
-                        ?, ?, ?, ?,
-                        ?, ?, 'Pending Stock-In', ?, ?, ?, NOW(), NOW()
-                    )
-                ")->execute([
-                    $del_ref, $supplier, $prod_name, $liters, $unit_cost, $unit_cost,
-                    $liters, $liters,
-                    $del_date, $del_time, $po_num, 'INV-' . $po_num,
-                    $fpo['created_by'] ?: null, $station_id,
-                    'Auto-loaded from Approved Fuel Purchase Order ' . $po_num,
-                    $po_num, $batch_id
-                ]);
-                $inserted_count++;
-            }
-        } catch (Exception $e) {
-            error_log('auto_load fuel error: ' . $e->getMessage());
-        }
-
-        return $inserted_count;
+        return 0;
     }
 }
 

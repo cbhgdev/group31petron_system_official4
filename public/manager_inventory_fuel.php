@@ -1956,7 +1956,7 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
 </div>
 <!-- â•â• FUEL STOCK ADJUSTMENT REQUEST MODAL (STEP 5: MANAGER REQUEST) â•â• -->
 <div class="modal-overlay" id="adjustReadingModal" style="z-index:10005; display:none; align-items:center; justify-content:center; padding:20px; box-sizing:border-box;">
-    <div style="background:#fff; border-radius:14px; width:96%; max-width:580px; max-height:65vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 40px rgba(0,0,0,.25); position:relative; z-index:10006; margin:auto; margin-bottom: 50px;">
+    <div style="background:#fff; border-radius:14px; width:96%; max-width:580px; max-height:88vh; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 24px 40px rgba(0,0,0,.25); position:relative; z-index:10006; margin:auto;">
 
 
         <!-- Header (Fixed) -->
@@ -2498,28 +2498,41 @@ function calcFuelVariance() {
 }
 
 function saveFuelAdjustment() {
-    var actualDip  = document.getElementById('afrNewReading').value.trim();
-    var sel        = document.getElementById('afrFuelTypeSelect');
-    var target     = (window._allFuelRows && sel) ? window._allFuelRows[sel.value] : null;
-    var fuelType   = target ? target.fuel_type : (document.getElementById('afrFuelTypeSelect').selectedOptions[0]?.text || '');
-    var ugtNo      = document.getElementById('afrUgtNo').value.trim();
-    var adjType    = document.getElementById('afrAdjType').value;
-    var reason     = document.getElementById('afrReason').value.trim();
-    var remarks    = document.getElementById('afrRemarks').value.trim();
-    var errEl      = document.getElementById('afrError');
+    var actualDipInput = document.getElementById('afrNewReading');
+    var reasonInput    = document.getElementById('afrReason');
+    var actualDip      = actualDipInput.value.trim();
+    var sel            = document.getElementById('afrFuelTypeSelect');
+    var target         = (window._allFuelRows && sel) ? window._allFuelRows[sel.value] : null;
+    var fuelType       = target ? target.fuel_type : (document.getElementById('afrFuelTypeSelect').selectedOptions[0]?.text || '');
+    var ugtNo          = document.getElementById('afrUgtNo').value.trim();
+    var adjType        = document.getElementById('afrAdjType').value;
+    var reason         = reasonInput.value.trim();
+    var remarks        = document.getElementById('afrRemarks').value.trim();
+    var errEl          = document.getElementById('afrError');
 
-
-
+    // Reset styles and errors
+    if (actualDipInput) actualDipInput.style.border = '1px solid #94a3b8';
+    if (reasonInput)    reasonInput.style.border    = '1px solid #cbd5e1';
     errEl.style.display = 'none';
 
     if (!actualDip || isNaN(actualDip)) {
         errEl.textContent = 'Actual Tank Dip Volume is required and must be a valid number.';
         errEl.style.display = 'block';
+        if (actualDipInput) {
+            actualDipInput.style.border = '2px solid #dc2626';
+            actualDipInput.focus();
+        }
+        errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         return;
     }
     if (!reason) {
         errEl.textContent = 'Reason for adjustment is required.';
         errEl.style.display = 'block';
+        if (reasonInput) {
+            reasonInput.style.border = '2px solid #dc2626';
+            reasonInput.focus();
+        }
+        errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         return;
     }
 
@@ -2542,6 +2555,7 @@ function saveFuelAdjustment() {
         if (!data.success) {
             errEl.textContent = data.message || data.error || 'Failed to submit adjustment request.';
             errEl.style.display = 'block';
+            errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             return;
         }
         // Success — close both modals
@@ -2563,6 +2577,7 @@ function saveFuelAdjustment() {
         if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request'; }
         errEl.textContent = 'Network error. Please try again.';
         errEl.style.display = 'block';
+        errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     });
 }
 

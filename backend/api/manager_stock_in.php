@@ -1103,31 +1103,77 @@ function mark_deliveries_complete(PDO $pdo, array $ids, int $station_id, int $us
         return;
     }
     $role_label = ucfirst($role);
-    $placeholders = implode(',', array_fill(0, count($ids), '?'));
-    $params = array_merge([
-        'Stock-In Complete',
-        $batch_id,
-        $user_id,
-        "Stock-In approved by {$role_label}. Batch: {$batch_id}",
-        $user_id,
-        $user_id,
-        "Stock-In approved by {$role_label}. Batch: {$batch_id}"
-    ], $ids, [$station_id]);
-    $pdo->prepare("
-        UPDATE deliveries_oversight
-        SET status = ?,
-            batch_id = ?,
-            manager_id = ?,
-            manager_action_at = NOW(),
-            manager_notes = ?,
-            finalized_at = NOW(),
-            finalized_by = ?,
-            admin_id = COALESCE(admin_id, ?),
-            admin_action_at = COALESCE(admin_action_at, NOW()),
-            admin_notes = COALESCE(admin_notes, ?),
-            updated_at = NOW()
-        WHERE id IN ({$placeholders}) AND station_id = ?
-    ")->execute($params);
+
+    // Fetch delivery_refs and source_refs for these IDs to ensure complete synchronization
+    $in_ph = implode(',', array_fill(0, count($ids), '?'));
+    $stmt = $pdo->prepare("SELECT DISTINCT delivery_ref, source_ref FROM deliveries_oversight WHERE id IN ({$in_ph})");
+    $stmt->execute($ids);
+    $refs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    $del_refs = [];
+    $src_refs = [];
+    foreach ($refs as $r) {
+        if (!empty($r['delivery_ref'])) $del_refs[] = $r['delivery_ref'];
+        if (!empty($r['source_ref']))   $src_refs[] = $r['source_ref'];
+    }
+
+    $where_clauses = ["id IN ({$in_ph})"];
+    $where_params = $ids;
+    if (!empty($del_refs)) {
+        $del_ph = implode(',', array_fill(0, count($del_refs), '?'));
+        $where_clauses[] = "delivery_ref IN ({$del_ph})";
+        $where_params = array_merge($where_params, $del_refs);
+    }
+    if (!empty($src_refs)) {
+        $src_ph = implode(',', array_fill(0, count($src_refs), '?'));
+        $where_clauses[] = "source_ref IN ({$src_ph})";
+        $where_params = array_merge($where_params, $src_refs);
+    }
+
+    $is_admin_role = in_array(strtolower($role), ['admin', 'superadmin', 'developer'], true);
+    if ($is_admin_role) {
+        $update_params = [
+            'Stock-In Complete',
+            $batch_id,
+            $user_id,
+            "Stock-In approved by Admin. Batch: {$batch_id}",
+            $user_id
+        ];
+        $sql = "
+            UPDATE deliveries_oversight
+            SET status = ?,
+                batch_id = ?,
+                admin_id = ?,
+                admin_action_at = NOW(),
+                admin_notes = ?,
+                finalized_at = NOW(),
+                finalized_by = ?,
+                updated_at = NOW()
+            WHERE (" . implode(' OR ', $where_clauses) . ") AND station_id = ?
+        ";
+    } else {
+        $update_params = [
+            'Stock-In Complete',
+            $batch_id,
+            $user_id,
+            "Stock-In approved by Manager. Batch: {$batch_id}",
+            $user_id
+        ];
+        $sql = "
+            UPDATE deliveries_oversight
+            SET status = ?,
+                batch_id = ?,
+                manager_id = ?,
+                manager_action_at = NOW(),
+                manager_notes = ?,
+                finalized_at = NOW(),
+                finalized_by = ?,
+                updated_at = NOW()
+            WHERE (" . implode(' OR ', $where_clauses) . ") AND station_id = ?
+        ";
+    }
+    $all_params = array_merge($update_params, $where_params, [$station_id]);
+    $pdo->prepare($sql)->execute($all_params);
 }
 
 function update_merchandise_po_status(PDO $pdo, int $station_id, string $po_key, string $status, int $user_id): void

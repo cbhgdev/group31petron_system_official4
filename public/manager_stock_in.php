@@ -89,7 +89,7 @@ function si_fetch_pending_rows(PDO $pdo, int $station_id, string $type, array $f
 {
     $delivery_type = $type === 'fuel' ? 'fuel' : 'merchandise';
     $params = array_merge([$station_id, $delivery_type], $statuses);
-    $where = "do2.station_id = ? AND do2.delivery_type = ? AND do2.status IN (" . si_status_sql($statuses) . ")";
+    $where = "do2.station_id = ? AND do2.delivery_type = ? AND do2.status IN (" . si_status_sql($statuses) . ") AND (do2.remarks IS NULL OR do2.remarks NOT LIKE 'Auto-loaded from Approved%')";
 
     if ($filters['search'] !== '') {
         $where .= " AND (do2.source_ref LIKE ? OR do2.delivery_ref LIKE ? OR do2.dr_number LIKE ? OR do2.product LIKE ? OR do2.supplier LIKE ?)";

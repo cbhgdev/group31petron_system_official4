@@ -170,7 +170,8 @@ try {
     $stmt = $pdo->prepare(
         "SELECT fuel_type AS raw_fuel, SUM(COALESCE(liters_sold,0)) AS liters, SUM(COALESCE(total_amount,0)) AS amount
          FROM fuel_transactions ft
-         WHERE ft.station_id=:station_id AND DATE(COALESCE(ft.transaction_date, ft.created_at)) BETWEEN :dstart AND :dend
+         WHERE (:station_id <= 0 OR ft.station_id = :station_id OR ft.station_id IS NULL)
+           AND DATE(COALESCE(ft.transaction_date, ft.created_at)) BETWEEN :dstart AND :dend
            AND LOWER(COALESCE(ft.status,'')) NOT IN ('voided','rejected','cancelled','canceled')
            {$shift_where_ft}
          GROUP BY fuel_type ORDER BY fuel_type"
@@ -192,7 +193,8 @@ try {
                 COALESCE(ft.ewallet_provider, '') as ewallet_provider,
                 SUM(COALESCE(ft.total_amount,0)) as total_amount
          FROM fuel_transactions ft
-         WHERE ft.station_id=:station_id AND DATE(COALESCE(ft.transaction_date, ft.created_at)) BETWEEN :dstart AND :dend
+         WHERE (:station_id <= 0 OR ft.station_id = :station_id OR ft.station_id IS NULL)
+           AND DATE(COALESCE(ft.transaction_date, ft.created_at)) BETWEEN :dstart AND :dend
            AND LOWER(COALESCE(ft.status,'')) NOT IN ('voided','rejected','cancelled','canceled')
            {$shift_where_ft}
          GROUP BY COALESCE(NULLIF(TRIM(ft.payment_method),''), 'Cash'), COALESCE(ft.ewallet_provider, '')"
@@ -218,7 +220,7 @@ try {
 } catch (Exception $e) {}
 
 // ── Merchandise Transactions ───────────────────────────────────────────────────
-// Only count Official and Adjusted — exclude Voided, Rejected, Cancelled
+// Exclude Voided, Rejected, Cancelled transactions
 $merch_sales_total = 0;
 $merch_tx_count   = 0;
 $merch_items_sold  = 0;
@@ -227,8 +229,9 @@ try {
         "SELECT mt.payment_method, COALESCE(mt.ewallet_provider, '') as ewallet_provider, mt.total_amount, mt.fleet_card_number, mt.credit_account_number,
                 mt.credit_company_name, mt.fleet_company_name
          FROM merchandise_transactions mt
-         WHERE mt.station_id=:station_id AND DATE(mt.transaction_date) BETWEEN :dstart AND :dend
-           AND LOWER(COALESCE(mt.validation_status,'')) IN ('official','adjusted','validated','approved','completed')
+         WHERE (:station_id <= 0 OR mt.station_id = :station_id OR mt.station_id IS NULL)
+           AND DATE(COALESCE(mt.transaction_date, mt.created_at)) BETWEEN :dstart AND :dend
+           AND LOWER(COALESCE(mt.validation_status,'')) NOT IN ('voided','rejected','cancelled','canceled')
            {$shift_where_mt}"
     );
     $stmt->execute($shift_params_mt);
@@ -260,8 +263,9 @@ try {
         "SELECT SUM(mti.quantity) AS items
          FROM merchandise_transaction_items mti
          JOIN merchandise_transactions mt ON (mt.id = mti.transaction_id OR mt.transaction_id = mti.transaction_id)
-         WHERE mt.station_id=:station_id AND DATE(mt.transaction_date) BETWEEN :dstart AND :dend
-           AND LOWER(COALESCE(mt.validation_status,'')) IN ('official','adjusted','validated','approved','completed')
+         WHERE (:station_id <= 0 OR mt.station_id = :station_id OR mt.station_id IS NULL)
+           AND DATE(COALESCE(mt.transaction_date, mt.created_at)) BETWEEN :dstart AND :dend
+           AND LOWER(COALESCE(mt.validation_status,'')) NOT IN ('voided','rejected','cancelled','canceled')
            {$shift_where_mt}"
     );
     $stmtI->execute($shift_params_mt);
@@ -272,8 +276,9 @@ try {
         $stmt_fb = $pdo->prepare(
             "SELECT SUM(COALESCE(mt.quantity, 1)) AS items
              FROM merchandise_transactions mt
-             WHERE mt.station_id=:station_id AND DATE(mt.transaction_date) BETWEEN :dstart AND :dend
-               AND LOWER(COALESCE(mt.validation_status,'')) IN ('official','adjusted','validated','approved','completed')
+             WHERE (:station_id <= 0 OR mt.station_id = :station_id OR mt.station_id IS NULL)
+               AND DATE(COALESCE(mt.transaction_date, mt.created_at)) BETWEEN :dstart AND :dend
+               AND LOWER(COALESCE(mt.validation_status,'')) NOT IN ('voided','rejected','cancelled','canceled')
                {$shift_where_mt}"
         );
         $stmt_fb->execute($shift_params_mt);
@@ -281,36 +286,177 @@ try {
     }
 } catch (Exception $e) {}
 
-// ── Job Order Sales ────────────────────────────────────────────────────────────
-// job_orders has no shift_period column — filter by date only
+// ── Job Order Sales & Summary ───────────────────────────────────────────────────
 $labor_fee_revenue   = 0;
 $service_fee_revenue = 0; // = labor + parts (the jo total)
 $parts_sales         = 0;
 $jo_status_counts    = ['Pending'=>0,'In Progress'=>0,'Completed'=>0,'Released'=>0,'Cancelled'=>0];
 $jo_payment_summary  = [];
+$jo_rows             = [];
+
+// 1. Dynamic date clause for job_orders
+$jo_date_conditions = ["DATE(jo.created_at) BETWEEN :dstart AND :dend"];
 try {
-    $joParams = ['station_id'=>$station_id,'dstart'=>$date_start,'dend'=>$date_end];
-    $joWhere  = "WHERE jo.station_id=:station_id AND DATE(jo.created_at) BETWEEN :dstart AND :dend
-                   AND LOWER(COALESCE(jo.status,'')) NOT IN ('voided','cancelled','canceled','rejected')";
-    $stmt = $pdo->prepare(
-        "SELECT jo.status, jo.actual_labor_cost, jo.actual_parts_cost, jo.total_cost,
-                jo.amount_paid, jo.payment_method, COALESCE(jo.ewallet_provider, '') as ewallet_provider, jo.is_credit
-         FROM job_orders jo {$joWhere}"
-    );
-    $stmt->execute($joParams);
-    $jo_rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-    foreach ($jo_rows as $r) {
-        $labor  = (float)($r['actual_labor_cost'] ?? 0);
-        $parts  = (float)($r['actual_parts_cost'] ?? 0);
+    $descStmt = $pdo->query("SHOW COLUMNS FROM job_orders");
+    if ($descStmt) {
+        $all_jo_cols = $descStmt->fetchAll(PDO::FETCH_COLUMN) ?: [];
+        foreach (['completed_at', 'released_at', 'updated_at', 'order_date', 'job_order_date', 'date'] as $col) {
+            if (in_array($col, $all_jo_cols, true)) {
+                $jo_date_conditions[] = "(jo.{$col} IS NOT NULL AND DATE(jo.{$col}) BETWEEN :dstart AND :dend)";
+            }
+        }
+    }
+} catch (Exception $e) {}
+$jo_date_where = "(" . implode(" OR ", $jo_date_conditions) . ")";
+
+// Station clauses & parameter arrays
+$jo_st_clause1 = ($station_id > 0) ? " AND (jo.station_id = :sid1 OR jo.station_id IS NULL OR jo.station_id = 0) " : "";
+$jo1_params   = ['dstart' => $date_start, 'dend' => $date_end];
+if ($station_id > 0) $jo1_params['sid1'] = $station_id;
+
+// Query 1: Fetch from job_orders table
+try {
+    $jo_sql = "SELECT jo.id as id,
+                      COALESCE(jo.status, 'Pending') as status,
+                      COALESCE(jo.actual_labor_cost, jo.estimated_labor_cost, 0) as actual_labor_cost,
+                      COALESCE(jo.actual_parts_cost, jo.estimated_parts_cost, 0) as actual_parts_cost,
+                      COALESCE(jo.total_cost, (COALESCE(jo.actual_labor_cost,0) + COALESCE(jo.actual_parts_cost,0)), 0) as total_cost,
+                      COALESCE(jo.amount_paid, jo.total_cost, 0) as amount_paid,
+                      COALESCE(NULLIF(jo.payment_method,''), NULLIF(jo.payment_status,''), 'Cash') as payment_method,
+                      COALESCE(jo.ewallet_provider, '') as ewallet_provider,
+                      COALESCE(jo.is_credit, 0) as is_credit,
+                      'job_orders' as source_table
+               FROM job_orders jo
+               WHERE 1=1 {$jo_st_clause1}
+                 AND {$jo_date_where}";
+    $stmt1 = $pdo->prepare($jo_sql);
+    $stmt1->execute($jo1_params);
+    $jo_rows = array_merge($jo_rows, $stmt1->fetchAll(PDO::FETCH_ASSOC) ?: []);
+} catch (Exception $e) {}
+
+// Query 2: Fetch standalone Job Order / Service transactions from merchandise_transactions table
+try {
+    $mt_st_clause2 = ($station_id > 0) ? " AND (mt.station_id = :sid2 OR mt.station_id IS NULL OR mt.station_id = 0) " : "";
+    $shift_where_jo = '';
+    $mtParams = ['dstart2' => $date_start, 'dend2' => $date_end];
+    if ($station_id > 0) $mtParams['sid2'] = $station_id;
+
+    if ($filter_shift !== '') {
+        $shift_where_jo = " AND LOWER(COALESCE(mt.shift_period,'')) LIKE :shift_key ";
+        $mtParams['shift_key'] = '%' . strtolower($filter_shift) . '%';
+    }
+    $mt_sql = "SELECT mt.id as id,
+                      COALESCE(NULLIF(mt.workflow_status,''), NULLIF(mt.validation_status,''), 'Completed') as status,
+                      COALESCE(mt.subtotal_amount, 0) as actual_labor_cost,
+                      GREATEST(COALESCE(mt.total_amount,0) - COALESCE(mt.subtotal_amount,0), 0) as actual_parts_cost,
+                      COALESCE(mt.total_amount, 0) as total_cost,
+                      COALESCE(mt.total_amount, 0) as amount_paid,
+                      COALESCE(NULLIF(mt.payment_method,''), 'Cash') as payment_method,
+                      COALESCE(mt.ewallet_provider, '') as ewallet_provider,
+                      CASE WHEN LOWER(COALESCE(mt.payment_method,'')) LIKE '%credit%' OR mt.credit_account_number IS NOT NULL THEN 1 ELSE 0 END as is_credit,
+                      'merchandise_transactions' as source_table
+               FROM merchandise_transactions mt
+               WHERE 1=1 {$mt_st_clause2}
+                 AND DATE(COALESCE(mt.transaction_date, mt.created_at)) BETWEEN :dstart2 AND :dend2
+                 {$shift_where_jo}
+                 AND (
+                     LOWER(COALESCE(mt.transaction_type,'')) IN ('job_order','service','combined')
+                     OR (mt.job_order_service IS NOT NULL AND TRIM(mt.job_order_service) != '')
+                     OR (mt.job_order_id IS NOT NULL AND TRIM(mt.job_order_id) != '')
+                 )
+                 AND (mt.job_order_db_id IS NULL OR mt.job_order_db_id = 0 OR mt.job_order_db_id NOT IN (SELECT id FROM job_orders))";
+    $stmt2 = $pdo->prepare($mt_sql);
+    $stmt2->execute($mtParams);
+    $jo_rows = array_merge($jo_rows, $stmt2->fetchAll(PDO::FETCH_ASSOC) ?: []);
+} catch (Exception $e) {}
+
+// Fallback: If no records match date range, fetch recent job_orders for this station so status counts are available
+if (empty($jo_rows)) {
+    try {
+        $fb_st_clause3 = ($station_id > 0) ? " WHERE (jo.station_id = :sid3 OR jo.station_id IS NULL OR jo.station_id = 0) " : "";
+        $fb_params    = [];
+        if ($station_id > 0) $fb_params['sid3'] = $station_id;
+
+        $fb_sql = "SELECT jo.id as id,
+                          COALESCE(jo.status, 'Pending') as status,
+                          COALESCE(jo.actual_labor_cost, jo.estimated_labor_cost, 0) as actual_labor_cost,
+                          COALESCE(jo.actual_parts_cost, jo.estimated_parts_cost, 0) as actual_parts_cost,
+                          COALESCE(jo.total_cost, (COALESCE(jo.actual_labor_cost,0) + COALESCE(jo.actual_parts_cost,0)), 0) as total_cost,
+                          COALESCE(jo.amount_paid, jo.total_cost, 0) as amount_paid,
+                          COALESCE(NULLIF(jo.payment_method,''), NULLIF(jo.payment_status,''), 'Cash') as payment_method,
+                          COALESCE(jo.ewallet_provider, '') as ewallet_provider,
+                          COALESCE(jo.is_credit, 0) as is_credit,
+                          'job_orders' as source_table
+                   FROM job_orders jo
+                   {$fb_st_clause3}
+                   ORDER BY jo.id DESC LIMIT 100";
+        $stmtFb = $pdo->prepare($fb_sql);
+        $stmtFb->execute($fb_params);
+        $jo_rows = array_merge($jo_rows, $stmtFb->fetchAll(PDO::FETCH_ASSOC) ?: []);
+    } catch (Exception $e) {}
+}
+
+// Deduplicate job orders by source table and ID
+$unique_jo = [];
+foreach ($jo_rows as $r) {
+    $key = ($r['source_table'] ?? 'jo') . '_' . ($r['id'] ?? rand());
+    if (!isset($unique_jo[$key])) {
+        $unique_jo[$key] = $r;
+    }
+}
+$jo_rows = array_values($unique_jo);
+
+// Process status counts and revenue summaries
+foreach ($jo_rows as $r) {
+    $st_raw = strtolower(trim($r['status'] ?? ''));
+
+    // Comprehensive & Fuzzy status normalization
+    if (in_array($st_raw, ['pending', 'reviewed', 'open', 'new', 'draft', 'unassigned'], true)) {
+        $st_key = 'Pending';
+    } elseif (in_array($st_raw, ['in_progress', 'inprogress', 'in progress', 'awaiting parts', 'awaiting_parts', 'ongoing', 'active', 'started', 'working'], true)) {
+        $st_key = 'In Progress';
+    } elseif (in_array($st_raw, ['completed', 'verified', 'finalized', 'done', 'approved', 'finished'], true)) {
+        $st_key = 'Completed';
+    } elseif (in_array($st_raw, ['released', 'delivered', 'turned_over', 'turned over'], true)) {
+        $st_key = 'Released';
+    } elseif (in_array($st_raw, ['cancelled', 'canceled', 'rejected', 'voided', 'archived'], true)) {
+        $st_key = 'Cancelled';
+    } else {
+        // Fuzzy substring checks fallback
+        if (str_contains($st_raw, 'complet') || str_contains($st_raw, 'done') || str_contains($st_raw, 'finish') || str_contains($st_raw, 'verifi') || str_contains($st_raw, 'approv')) {
+            $st_key = 'Completed';
+        } elseif (str_contains($st_raw, 'releas') || str_contains($st_raw, 'deliver') || str_contains($st_raw, 'turn')) {
+            $st_key = 'Released';
+        } elseif (str_contains($st_raw, 'progress') || str_contains($st_raw, 'ongoing') || str_contains($st_raw, 'work') || str_contains($st_raw, 'start')) {
+            $st_key = 'In Progress';
+        } elseif (str_contains($st_raw, 'cancel') || str_contains($st_raw, 'void') || str_contains($st_raw, 'reject')) {
+            $st_key = 'Cancelled';
+        } else {
+            $st_key = 'Pending';
+        }
+    }
+
+    if (array_key_exists($st_key, $jo_status_counts)) {
+        $jo_status_counts[$st_key]++;
+    }
+
+    // Only calculate revenue for non-cancelled job orders
+    if ($st_key !== 'Cancelled') {
+        $labor = (float)($r['actual_labor_cost'] ?? 0);
+        $parts = (float)($r['actual_parts_cost'] ?? 0);
+        $tot   = (float)($r['total_cost'] ?? ($labor + $parts));
+        
         $labor_fee_revenue   += $labor;
         $parts_sales         += $parts;
-        $service_fee_revenue += $labor + $parts; // total JO revenue = labor + parts
-        $pm = trim($r['payment_method'] ?? '');
+        $service_fee_revenue += ($tot > 0 ? $tot : ($labor + $parts));
+
+        $pm   = trim($r['payment_method'] ?? '');
         $prov = trim($r['ewallet_provider'] ?? '');
-        if ($pm && (float)($r['amount_paid'] ?? 0) > 0) {
-            $paid = (float)$r['amount_paid'];
+        $paid = (float)($r['amount_paid'] ?? 0);
+
+        if ($pm && $paid > 0) {
             $norm = function_exists('normalize_payment_type') ? normalize_payment_type($pm, $prov) : ['payment_type'=>$pm, 'provider'=>$prov];
-            $c_pm = $norm['payment_type'];
+            $c_pm   = $norm['payment_type'];
             $c_prov = $norm['provider'];
             $jo_payment_summary[$c_pm] = ($jo_payment_summary[$c_pm] ?? 0) + $paid;
             $payment_summary[$c_pm]    = ($payment_summary[$c_pm] ?? 0) + $paid;
@@ -322,18 +468,8 @@ try {
                 $credit_sales += $paid;
             }
         }
-
-        // Normalize status
-        $st_raw = strtolower(trim($r['status'] ?? ''));
-        $st_map = ['in_progress'=>'In Progress','inprogress'=>'In Progress','in progress'=>'In Progress',
-                   'pending'=>'Pending','completed'=>'Completed','released'=>'Released',
-                   'cancelled'=>'Cancelled','canceled'=>'Cancelled'];
-        $st_key = $st_map[$st_raw] ?? ucfirst($st_raw);
-        if (array_key_exists($st_key, $jo_status_counts)) {
-            $jo_status_counts[$st_key]++;
-        }
     }
-} catch (Exception $e) {}
+}
 
 // ── Outstanding Receivables ────────────────────────────────────────────────────
 $outstanding_receivables = 0;
@@ -341,8 +477,8 @@ try {
     $stmt = $pdo->prepare(
         "SELECT SUM(COALESCE(balance_due, total_amount - COALESCE(amount_paid,0), 0)) AS outstanding
          FROM merchandise_transactions
-         WHERE station_id=:station_id
-           AND LOWER(COALESCE(validation_status,'')) IN ('official','adjusted','validated','approved','completed')
+         WHERE (:station_id <= 0 OR station_id = :station_id OR station_id IS NULL)
+           AND LOWER(COALESCE(validation_status,'')) NOT IN ('voided','rejected','cancelled','canceled')
            AND LOWER(COALESCE(payment_status,'')) NOT IN ('paid','fully_paid')
            AND (credit_account_number IS NOT NULL OR fleet_card_number IS NOT NULL
                 OR LOWER(COALESCE(payment_method,'')) LIKE '%credit%'
@@ -357,7 +493,7 @@ try {
         "SELECT SUM(COALESCE(car.outstanding_balance,0))
          FROM customer_accounts_receivable car
          JOIN customers c ON car.customer_id = c.id
-         WHERE c.station_id = :sid
+         WHERE (:sid <= 0 OR c.station_id = :sid OR c.station_id IS NULL)
            AND LOWER(COALESCE(car.status,'')) NOT IN ('paid','settled')"
     );
     $stCar->execute(['sid'=>$station_id]);
@@ -368,7 +504,7 @@ try {
     $stJoAr = $pdo->prepare(
         "SELECT SUM(COALESCE(balance_due, total_cost - COALESCE(amount_paid,0), 0))
          FROM job_orders
-         WHERE station_id = :sid
+         WHERE (:sid <= 0 OR station_id = :sid OR station_id IS NULL)
            AND (is_credit = 1 OR LOWER(COALESCE(payment_status,'')) IN ('unpaid','partial','credit'))
            AND LOWER(COALESCE(status,'')) NOT IN ('voided','cancelled','canceled','rejected')"
     );
@@ -379,8 +515,8 @@ try {
 // Fallback to customer table balance if individual records have 0 balance
 if ($outstanding_receivables <= 0) {
     try {
-        $stCust = $pdo->prepare("SELECT SUM(COALESCE(outstanding_balance, current_balance, 0)) FROM customers WHERE station_id = ?");
-        $stCust->execute([$station_id]);
+        $stCust = $pdo->prepare("SELECT SUM(COALESCE(outstanding_balance, current_balance, 0)) FROM customers WHERE (? <= 0 OR station_id = ? OR station_id IS NULL)");
+        $stCust->execute([$station_id, $station_id]);
         $outstanding_receivables = (float)($stCust->fetchColumn() ?: 0);
     } catch (Exception $e) {}
 }
@@ -391,7 +527,7 @@ $cash_sales       = ($payment_summary['Cash'] ?? 0);  // includes fuel + merch +
 $cash_collections = 0; // AR collections from shift closing
 
 try {
-    $fscWhere = "WHERE fsc.station_id=:station_id AND fsc.report_date BETWEEN :dstart AND :dend";
+    $fscWhere = "WHERE (:station_id <= 0 OR fsc.station_id = :station_id OR fsc.station_id IS NULL) AND fsc.report_date BETWEEN :dstart AND :dend";
     $fscParams = ['station_id'=>$station_id, 'dstart'=>$date_start, 'dend'=>$date_end];
     if ($filter_shift !== '') {
         $fscWhere .= " AND LOWER(COALESCE(fsc.shift_period,'')) LIKE :shift_key";

@@ -65,6 +65,11 @@ try {
     foreach ($redirect_fixes as $old_url => $new_url) {
         $fix_stmt->execute([$new_url, $user_id, $old_url]);
     }
+    // Clean up phantom daily date-keyed notifications
+    $pdo->prepare("DELETE FROM notifications WHERE user_id=? AND (source_key LIKE 'fuel_txns_recent_%' OR title = 'Fuel Transactions Oversight')")->execute([$user_id]);
+    $pdo->prepare("DELETE FROM notifications WHERE user_id=? AND source_key LIKE 'no_shifts_%' AND source_key != ?")->execute([$user_id, "no_shifts_{$station_id}"]);
+    $pdo->prepare("DELETE FROM notifications WHERE user_id=? AND source_key LIKE 'mgr_actions_%' AND source_key != ?")->execute([$user_id, "mgr_actions_{$station_id}"]);
+    $pdo->prepare("DELETE FROM notifications WHERE user_id=? AND source_key LIKE 'suspicious_audit_%' AND source_key != ?")->execute([$user_id, "suspicious_audit_{$station_id}"]);
 } catch (Exception $e) {}
 
 /**
@@ -153,25 +158,7 @@ if ($fuel_adj_pending > 0) {
 }
 
 // ════════════════════════════════════════════════════════════
-// 2. FUEL TRANSACTIONS OVERSIGHT
-// ════════════════════════════════════════════════════════════
-$fuel_txns_recent = adm_count($pdo,
-    "SELECT COUNT(*) FROM fuel_transactions WHERE {$stn_sql}DATE(COALESCE(transaction_date, created_at)) >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)",
-    $stn_p);
-if ($fuel_txns_recent > 0) {
-    $generated += upsert_notif($pdo, $user_id, [
-        'type'        => 'info',
-        'title'       => 'Fuel Transactions Oversight',
-        'message'     => "{$fuel_txns_recent} fuel transaction record(s) logged in the last 7 days are available for oversight audit.",
-        'event_type'  => 'fuel_transaction',
-        'severity'    => 'low',
-        'source_key'  => "fuel_txns_recent_{$station_id}_" . date('Y-m-d'),
-        'redirect_url'=> 'admin_fuel_transactions_oversight.php',
-    ]);
-}
-
-// ════════════════════════════════════════════════════════════
-// 3. DELIVERIES AWAITING ADMIN OVERSIGHT
+// 2. DELIVERIES AWAITING ADMIN OVERSIGHT
 // ════════════════════════════════════════════════════════════
 $pending_admin_del = adm_count($pdo,
     "SELECT COUNT(*) FROM deliveries_oversight WHERE {$stn_sql}status='Pending Admin Oversight'",
@@ -369,14 +356,14 @@ if (!$has_staff_activity) {
         'message'     => "No staff shifts logged for today. Check attendance and scheduling.",
         'event_type'  => 'general',
         'severity'    => 'low',
-        'source_key'  => "no_shifts_".date('Y-m-d')."_{$station_id}",
+        'source_key'  => "no_shifts_{$station_id}",
         'redirect_url'=> 'users.php',
     ]);
 } else {
-    // If staff are active today, remove any stale "No Active Shifts Today" notifications for today
+    // If staff are active today, remove any stale "No Active Shifts Today" notifications
     try {
-        $del = $pdo->prepare("DELETE FROM notifications WHERE user_id=? AND (source_key = ? OR (title = 'No Active Shifts Today' AND DATE(created_at) = CURDATE()))");
-        $del->execute([$user_id, "no_shifts_".date('Y-m-d')."_{$station_id}"]);
+        $del = $pdo->prepare("DELETE FROM notifications WHERE user_id=? AND (source_key = ? OR source_key LIKE 'no_shifts_%' OR (title = 'No Active Shifts Today' AND DATE(created_at) = CURDATE()))");
+        $del->execute([$user_id, "no_shifts_{$station_id}"]);
     } catch (Exception $e) {}
 }
 
@@ -400,7 +387,7 @@ try {
             'message'     => "{$mgr_cnt} manager action(s) in the last 24 hours (approvals, rejections, adjustments). Review audit trail.",
             'event_type'  => 'report',
             'severity'    => 'low',
-            'source_key'  => "mgr_actions_".date('Y-m-d')."_{$station_id}",
+            'source_key'  => "mgr_actions_{$station_id}",
             'redirect_url'=> 'admin_audit_trail.php',
         ]);
     }
@@ -425,7 +412,7 @@ try {
             'message'     => "{$sus_cnt} unusual action(s) logged in the last 48 hours (deletions, overrides, force approvals). Review immediately.",
             'event_type'  => 'report',
             'severity'    => 'critical',
-            'source_key'  => "suspicious_audit_".date('Y-m-d')."_{$station_id}",
+            'source_key'  => "suspicious_audit_{$station_id}",
             'redirect_url'=> 'admin_audit_trail.php',
         ]);
     }
@@ -435,6 +422,17 @@ try {
 // 10. LOW INVENTORY
 // ════════════════════════════════════════════════════════════
 try {
+    // Auto-purge low inventory notifications if stock levels have been restored
+    $pdo->prepare("
+        DELETE n FROM notifications n
+        INNER JOIN station_inventory si ON (n.source_key = CONCAT('low_inv_', si.station_id) OR n.source_key LIKE CONCAT('low_inv_', si.station_id, '%'))
+        INNER JOIN inventory_products ip ON ip.id = si.product_id
+        WHERE n.user_id = ?
+          AND si.station_id = ?
+          AND si.stock_level > COALESCE(NULLIF(si.reorder_level, 0), NULLIF(ip.min_stock, 0), 10)
+          AND LOWER(COALESCE(ip.category, '')) NOT IN ('fuel', 'fuels')
+    ")->execute([$user_id, $station_id]);
+
     $low_inv = $pdo->prepare(
         "SELECT COUNT(*) FROM station_inventory si
          INNER JOIN inventory_products ip ON ip.id = si.product_id

@@ -209,6 +209,38 @@ class FuelAdjustmentOperations {
                      'fuel_management'
                  );
                  
+                 // Send notification to requesting staff or staff role
+                 try {
+                     $req_staff_id = (int)($adjustment['user_id'] ?? 0);
+                     $target_notif_url = "staff_inventory_fuel.php?tab=overview";
+                     $actor_name = $this->user['name'] ?? $this->user['username'] ?? 'Manager';
+                     if ($req_staff_id > 0) {
+                         notify_staff_action_result(
+                             $this->pdo,
+                             $req_staff_id,
+                             'Fuel Adjustment',
+                             'Approved',
+                             "Fuel Adjustment #{$adjustment_id}",
+                             $actor_name,
+                             'Manager',
+                             "Approved fuel adjustment ({$adjustment['adjustment_type']}: {$adjustment['liters']}L). Stock: {$quantity_before}L → {$quantity_after}L",
+                             'fuel_adjustment',
+                             $adjustment_id,
+                             $target_notif_url
+                         );
+                     } else {
+                         create_role_notification(
+                             $this->pdo,
+                             'staff',
+                             'success',
+                             'Fuel Adjustment Approved',
+                             "Manager approved fuel adjustment #{$adjustment_id} ({$adjustment['adjustment_type']}: {$adjustment['liters']}L).",
+                             null,
+                             $target_notif_url
+                         );
+                     }
+                 } catch (Exception $e_notif) {}
+                 
                  $this->pdo->commit();
                  
                  return [
@@ -290,6 +322,38 @@ class FuelAdjustmentOperations {
                  "Rejected fuel adjustment ID {$adjustment_id}: {$rejection_reason}",
                  'fuel_management'
              );
+             
+             // Send notification to requesting staff or staff role
+             try {
+                 $req_staff_id = (int)($adjustment['user_id'] ?? 0);
+                 $target_notif_url = "staff_inventory_fuel.php?tab=overview";
+                 $actor_name = $this->user['name'] ?? $this->user['username'] ?? 'Manager';
+                 if ($req_staff_id > 0) {
+                     notify_staff_action_result(
+                         $this->pdo,
+                         $req_staff_id,
+                         'Fuel Adjustment',
+                         'Rejected',
+                         "Fuel Adjustment #{$adjustment_id}",
+                         $actor_name,
+                         'Manager',
+                         "Reason: {$rejection_reason}",
+                         'fuel_adjustment',
+                         $adjustment_id,
+                         $target_notif_url
+                     );
+                 } else {
+                     create_role_notification(
+                         $this->pdo,
+                         'staff',
+                         'warning',
+                         'Fuel Adjustment Rejected',
+                         "Fuel adjustment #{$adjustment_id} was rejected by Manager. Reason: {$rejection_reason}",
+                         null,
+                         $target_notif_url
+                     );
+                 }
+             } catch (Exception $e_notif) {}
              
              return [
                  'success' => true,

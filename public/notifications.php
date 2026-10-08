@@ -160,7 +160,18 @@ try {
         $cur_ref = $nr['reference_type'] ?? '';
         $cur_url = trim((string)($nr['redirect_url'] ?? ''));
 
-        if (in_array($role, ['staff', 'cashier', 'pump_attendant'])) {
+        $is_po = (
+            stripos($nr['title'] ?? '', 'purchase order') !== false ||
+            stripos($nr['message'] ?? '', 'purchase order') !== false ||
+            ($nr['event_type'] ?? '') === 'purchase_order' ||
+            $cur_ref === 'purchase_order' ||
+            strpos($cur_url, 'manager_stock_request_review.php') !== false ||
+            strpos($cur_url, 'manager_purchase_orders.php') !== false
+        );
+
+        if ($is_po) {
+            $nr['redirect_url'] = 'manager_stock_request_review.php';
+        } elseif (in_array($role, ['staff', 'cashier', 'pump_attendant'])) {
             if (empty($cur_url) && !empty($cur_ref)) {
                 $cur_url = notification_redirect_url($cur_ref, (int)($nr['reference_id'] ?? 0), $role);
             }
@@ -950,17 +961,30 @@ function handleFeedItemClick(el, notifId, redirectUrl, nData) {
         }
 
         // Decrement header bell badge — target the correct element by ID
+        let remainingUnread = 0;
         document.querySelectorAll('#notificationBadge, .header-notif-badge, .notif-badge-count, #headerNotifBadge').forEach(b => {
             let cnt = parseInt(b.textContent.replace(/\D/g, ''), 10) || 0;
             cnt = Math.max(0, cnt - 1);
+            remainingUnread = cnt;
             if (cnt > 0) {
                 b.textContent = cnt > 99 ? '99+' : cnt;
-                b.style.display = 'flex';
+                b.style.display = 'inline-flex';
+                b.style.setProperty('background', '#dc2626', 'important');
             } else {
                 b.textContent = '';
                 b.style.display = 'none';
             }
         });
+        const ddBadge = document.getElementById('notifDropdownBadge');
+        if (ddBadge) {
+            if (remainingUnread > 0) {
+                ddBadge.textContent = remainingUnread + ' New';
+                ddBadge.style.background = '#dc2626';
+            } else {
+                ddBadge.textContent = '0 New';
+                ddBadge.style.background = '#002F6C';
+            }
+        }
 
         // Persist mark-as-read to DB using keepalive fetch (survives page navigation)
         // + sendBeacon fallback for maximum reliability

@@ -60,6 +60,12 @@ if (!in_array($role, ['staff', 'cashier', 'pump_attendant', 'admin', 'manager', 
     exit;
 }
 
+// Redirect manager away from Meter Reading (fuel section)
+if ($role === 'manager' && in_array($_section_early, ['fuel', 'fuel_history'])) {
+    header('Location: manager_fuel_transaction_validation.php');
+    exit;
+}
+
 // ── Schema safety: columns already permanently provisioned ───────────────────
 
 // Fetch Loyalty Program settings
@@ -4561,7 +4567,24 @@ setTimeout(function() {
                     $p_id = (int)($pump['id'] ?? 0);
                     $raw_pnum = trim($pump['pump_number'] ?? '');
                     $raw_pname = trim($pump['pump_name'] ?? '');
-                    $disp_name = $raw_pnum !== '' ? $raw_pnum : ($raw_pname !== '' ? $raw_pname : ($ft_name . ' - ' . ($p_idx + 1)));
+
+                    // Format dual-nozzle display name (e.g. 1-1, 1-2, 2-1, 2-2)
+                    if ($raw_pnum !== '' && preg_match('/^(.*?)\s*-\s*(\d+)-(\d+)$/', $raw_pnum)) {
+                        $disp_name = $raw_pnum;
+                    } elseif ($raw_pnum !== '' && preg_match('/^(.*?)\s*-\s*(\d+)$/', $raw_pnum, $snm)) {
+                        $s_pi = (int)$snm[2];
+                        $s_pidx = (int)ceil($s_pi / 2);
+                        $s_nidx = (int)((($s_pi - 1) % 2) + 1);
+                        $disp_name = trim($snm[1]) . " - {$s_pidx}-{$s_nidx}";
+                    } elseif ($raw_pnum !== '' && !preg_match('/test\s+petron\s+blaze\s+10$/i', $raw_pnum)) {
+                        $disp_name = $raw_pnum;
+                    } else {
+                        $pi = $p_idx + 1;
+                        $p_num_idx = (int)ceil($pi / 2);
+                        $n_num_idx = (int)((($pi - 1) % 2) + 1);
+                        $clean_base = preg_replace('/\s*-\s*\d+.*$/', '', $ft_name);
+                        $disp_name = strtoupper(trim($clean_base)) . " - {$p_num_idx}-{$n_num_idx}";
+                    }
 
                     // De-duplicate in case multiple records match the same pump_id
                     $dedup_key = ($p_id > 0) ? ('p_' . $p_id) : ('ft_' . ($ft['id'] ?? $idx) . '_p_' . $p_idx);
@@ -5953,6 +5976,13 @@ setTimeout(function() {
             const endIdx = Math.min(startIdx + window.todayEntriesPageSize, totalRows);
             const pageRows = rows.slice(startIdx, endIdx);
 
+            // Dual-nozzle code calculator: (1 -> 1-1, 2 -> 1-2, 3 -> 2-1, 4 -> 2-2, 5 -> 3-1, 6 -> 3-2)
+            function getDualNozzleCode(seq) {
+                const pIdx = Math.ceil(seq / 2);
+                const nIdx = ((seq - 1) % 2) + 1;
+                return `${pIdx}-${nIdx}`;
+            }
+
             // Assign sequential labels using GROUP-level counter
             function _getFuelGroup(ft) {
                 const f = (ft || '').toUpperCase().trim();
@@ -5961,41 +5991,54 @@ setTimeout(function() {
                 if (f.includes('KEROSENE')) return 'KEROSENE';
                 if (f.includes('XCS') && f.includes('PLUS'))  return 'XCS PLUS';
                 if (f.includes('XTRA') && f.includes('UNL'))  return 'XTRA UNL';
+                if (f.includes('BLAZE')) return 'BLAZE';
                 return f;
             }
             function getFormattedFuelName(fuelType, seqNumber) {
                 const f = (fuelType || '').toUpperCase().trim();
+                const code = getDualNozzleCode(seqNumber);
                 if (f.includes('TURBO') && f.includes('DIESEL')) {
-                    return `TURBO DIESEL - ${seqNumber}`;
+                    return `TURBO DIESEL - ${code}`;
                 }
                 if (f.includes('DIESEL')) {
                     if (seqNumber <= 4) {
-                        return `DIESEL 1 - ${seqNumber}`;
+                        return `DIESEL 1 - ${code}`;
                     } else {
-                        return `DIESEL 2 - ${seqNumber}`;
+                        const d2Seq = seqNumber - 4;
+                        return `DIESEL 2 - ${getDualNozzleCode(d2Seq)}`;
                     }
                 }
                 if (f.includes('KEROSENE')) {
-                    return `KEROSENE - ${seqNumber}`;
+                    return `KEROSENE - ${code}`;
                 }
                 if (f.includes('XCS') && f.includes('PLUS')) {
-                    return `XCS PLUS - ${seqNumber}`;
+                    return `XCS PLUS - ${code}`;
                 }
                 if (f.includes('XTRA') && f.includes('UNL')) {
                     if (seqNumber <= 2) {
-                        return `XTRA UNL 1 - ${seqNumber}`;
+                        return `XTRA UNL 1 - ${code}`;
                     } else {
-                        return `XTRA UNL 2 - ${seqNumber}`;
+                        const u2Seq = seqNumber - 2;
+                        return `XTRA UNL 2 - ${getDualNozzleCode(u2Seq)}`;
                     }
                 }
-                return `${f} - ${seqNumber}`;
+                if (f.includes('BLAZE')) {
+                    return `TEST PETRON BLAZE 100 - ${code}`;
+                }
+                const cleanF = f.replace(/\s*-\s*\d+.*$/, '').replace(/10$/, '100').trim();
+                return `${cleanF} - ${code}`;
             }
             const _grpCounters = {};
             rows.forEach(r => {
-                const grp   = _getFuelGroup(r.fuel_type);
-                if (!_grpCounters[grp]) _grpCounters[grp] = 0;
-                _grpCounters[grp]++;
-                r._seq_label = getFormattedFuelName(r.fuel_type, _grpCounters[grp]);
+                const rawPNum = (r.pump_number || '').trim();
+                if (rawPNum && /\d+-\d+$/.test(rawPNum)) {
+                    r._seq_label = rawPNum.toUpperCase();
+                } else {
+                    const grp = _getFuelGroup(r.fuel_type);
+                    if (!_grpCounters[grp]) _grpCounters[grp] = 0;
+                    _grpCounters[grp]++;
+                    r._seq_label = getFormattedFuelName(r.fuel_type, _grpCounters[grp]);
+                }
             });
 
             const statusMap = {
@@ -7633,19 +7676,19 @@ setTimeout(function() {
                             #jomHistoryTable { width:100% !important; max-width:100% !important; border-collapse:collapse !important; table-layout:fixed !important; }
                             #jomHistoryTable thead, #jomHistoryTable thead tr { background:#002F70 !important; }
                             #jomHistoryTable th { padding:12px 10px; font-size:13px; font-weight:800; background:#002F70 !important; background-color:#002F70 !important; background-image:none !important; color:#ffffff !important; letter-spacing:.4px; text-transform:uppercase; border-bottom:2px solid #001f4d; box-sizing:border-box; }
-                            #jomHistoryTable td { padding:11px 10px; font-size:13.5px; vertical-align:middle; border-bottom:1px solid #f1f5f9; box-sizing:border-box; word-wrap:break-word; }
+                            #jomHistoryTable td { padding:11px 10px; font-size:13.5px; vertical-align:middle; border-bottom:1px solid #f1f5f9; box-sizing:border-box; word-wrap:break-word; word-break:break-word; }
                             #jomHistoryTable tr.jom-row:hover td { background:#f8faff; cursor:pointer; }
                             </style>
                             <table id="jomHistoryTable" class="report-table no-min-width print-table" style="width:100% !important; max-width:100% !important; border-collapse:collapse !important; table-layout:fixed !important;">
                                 <colgroup>
                                     <col style="width:10%;"><!-- TXN ID -->
-                                    <col style="width:14%;"><!-- CUSTOMER -->
-                                    <col style="width:14%;"><!-- JOB ORDER -->
-                                    <col style="width:17%;"><!-- MERCHANDISE -->
-                                    <col style="width:9%;"><!-- TOTAL -->
-                                    <col style="width:9%;"><!-- PAYMENT STATUS -->
-                                    <col style="width:10%;"><!-- STATUS -->
-                                    <col style="width:17%;"><!-- ACTIONS -->
+                                    <col style="width:12%;"><!-- CUSTOMER -->
+                                    <col style="width:20%;"><!-- JOB ORDER -->
+                                    <col style="width:18%;"><!-- MERCHANDISE -->
+                                    <col style="width:8%;"><!-- TOTAL -->
+                                    <col style="width:8%;"><!-- PAYMENT STATUS -->
+                                    <col style="width:9%;"><!-- STATUS -->
+                                    <col style="width:15%;"><!-- ACTIONS -->
                                 </colgroup>
                                 <thead style="background:#002F70;">
                                     <tr style="background:#002F70;">
@@ -7717,12 +7760,16 @@ setTimeout(function() {
                                         <?php endif; ?>
                                     </td>
                                     <!-- 3. JOB ORDER -->
-                                    <td style="overflow:hidden;box-sizing:border-box;">
-                                        <div style="display:inline-flex;align-items:center;gap:5px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;padding:3px 8px;font-size:13px;font-weight:800;color:#1d4ed8;margin-bottom:3px;white-space:nowrap;">
-                                            <i class="fas fa-wrench" style="font-size:11px;"></i> <?= $jom_svc_sum ?>
+                                    <td style="box-sizing:border-box;vertical-align:middle;padding:10px 10px;">
+                                        <div style="display:inline-flex;align-items:flex-start;gap:6px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:4px 9px;font-size:12.5px;font-weight:800;color:#1d4ed8;margin-bottom:3px;max-width:100%;box-sizing:border-box;word-break:break-word;white-space:normal;line-height:1.35;">
+                                            <i class="fas fa-wrench" style="font-size:11px;margin-top:2px;flex-shrink:0;"></i>
+                                            <span style="word-break:break-word;overflow-wrap:break-word;"><?= $jom_svc_sum ?></span>
                                         </div>
                                         <?php if ($jom_mechanic !== ''): ?>
-                                        <div style="font-size:12px;font-weight:600;color:#475569;margin-top:2px;"><i class="fas fa-user-cog" style="font-size:11px;color:#64748b;"></i> <?= $jom_mechanic ?></div>
+                                        <div style="font-size:12px;font-weight:600;color:#475569;margin-top:3px;line-height:1.25;display:flex;align-items:center;gap:5px;word-break:break-word;">
+                                            <i class="fas fa-user-cog" style="font-size:11px;color:#64748b;flex-shrink:0;"></i>
+                                            <span style="word-break:break-word;"><?= $jom_mechanic ?></span>
+                                        </div>
                                         <?php endif; ?>
                                     </td>
                                     <!-- 4. MERCHANDISE -->

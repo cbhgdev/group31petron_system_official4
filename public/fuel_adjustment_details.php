@@ -21,20 +21,18 @@ if ($adjustment_id > 0) {
 }
 
 function getStatusColor($status) {
-    switch($status) {
-        case 'Approved': return '#dcfce7';
-        case 'Pending': return '#fef3c7';
-        case 'Rejected': return '#fee2e2';
-        default: return '#f1f5f9';
-    }
+    $s = strtolower(trim((string)$status));
+    if (in_array($s, ['approved', 'completed', 'success', 'verified', 'finalized', 'official', 'done'])) return '#dcfce7';
+    if (in_array($s, ['pending', 'pending admin approval', 'pending admin approv', 'under review', 'for review', 'in review', 'submitted', 'draft'])) return '#fef3c7';
+    if (in_array($s, ['rejected', 'cancelled', 'canceled', 'voided', 'declined'])) return '#fee2e2';
+    return '#f1f5f9';
 }
 function getStatusTextColor($status) {
-    switch($status) {
-        case 'Approved': return '#15803d';
-        case 'Pending': return '#92400e';
-        case 'Rejected': return '#dc2626';
-        default: return '#64748b';
-    }
+    $s = strtolower(trim((string)$status));
+    if (in_array($s, ['approved', 'completed', 'success', 'verified', 'finalized', 'official', 'done'])) return '#15803d';
+    if (in_array($s, ['pending', 'pending admin approval', 'pending admin approv', 'under review', 'for review', 'in review', 'submitted', 'draft'])) return '#92400e';
+    if (in_array($s, ['rejected', 'cancelled', 'canceled', 'voided', 'declined'])) return '#dc2626';
+    return '#64748b';
 }
 function getAdjustmentTypeColor($type) {
     switch($type) {

@@ -21,7 +21,8 @@ require_once __DIR__ . '/db_connect.php';
 // ── Fuel display name helper function ────────────────────────
 function clean_fuel_display_name($fuel_type) {
     $name = trim((string)$fuel_type);
-    // Remove pump/nozzle numbers pattern like "DIESEL 1 - 1" → "DIESEL"
+    // Remove pump/nozzle numbers pattern like "DIESEL 1 - 1" or "XCS PLUS - 1-1" → "DIESEL" / "XCS PLUS"
+    $name = preg_replace('/\s*-\s*\d+\s*-\s*\d+$/', '', $name); // Remove " - 1-1", " - 2-2" at end
     $name = preg_replace('/\s+\d+\s*-\s*\d+$/', '', $name); // Remove " 1 - 1", " 2 - 3" at end
     $name = preg_replace('/\s*-\s*\d+$/', '', $name); // Remove " - 1", " - 2" at end
     $name = trim($name);

@@ -14,6 +14,10 @@ if (!in_array($role, ['manager', 'admin', 'superadmin'])) {
     $_SESSION['error'] = 'Access denied. Manager privileges required.';
     header('Location: dashboard.php');
     exit;
+// Direct all GET navigation to Purchase Management (manager_stock_request_review.php?tab=pr)
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    header('Location: manager_stock_request_review.php?tab=pr');
+    exit;
 }
 
 // Ensure required columns exist

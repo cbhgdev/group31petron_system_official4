@@ -5,6 +5,7 @@
 // ============================================================
 if (session_status() === PHP_SESSION_NONE) session_start();
 $page_id = 'fuel_pump_master';
+$page_title = 'Fuel Calibration Review';
 require_once __DIR__ . '/../backend/lib.php';
 require_once __DIR__ . '/../public/db_connect.php';
 require_login();
@@ -187,40 +188,33 @@ if (!function_exists('normalizeFuelType')) {
     }
 }
 
+// ── Quick check for pending reviews count ────────────────────────────
+$pending_reviews_count = 0;
+try {
+    $pend_stmt = $pdo->prepare("
+        SELECT COUNT(*) FROM fuel_transactions
+        WHERE station_id = ? AND (LOWER(status) LIKE '%pending%' OR LOWER(status) IN ('closing_completed','submitted','adjusted','readings_submitted'))
+    ");
+    $pend_stmt->execute([$station_id]);
+    $pending_reviews_count = (int)$pend_stmt->fetchColumn();
+} catch (Exception $e) {}
+
 // ── GET Filters ──────────────────────────────────────────────────────────
 $search_query       = trim($_GET['search'] ?? $_GET['q'] ?? $_GET['search_query'] ?? '');
-$status_filter      = trim($_GET['status'] ?? 'pending');
+// If status is explicitly passed in URL, honor it.
+// If not passed:
+// - If there are pending reviews, default to 'pending' (action queue).
+// - If there are NO pending reviews, default to 'all' so logs & records are fetched and displayed immediately!
+$status_filter      = isset($_GET['status']) ? trim($_GET['status']) : ($pending_reviews_count > 0 ? 'pending' : 'all');
 $shift_filter       = trim($_GET['shift']     ?? 'all');
 $fuel_type_filter   = trim($_GET['fuel_type'] ?? 'all');
 $staff_filter       = trim($_GET['staff']     ?? '');
 $export             = trim($_GET['export']    ?? '');
 
-// Default date: if explicit date provided, use it.
-// If search query is provided without explicit date, search across all dates.
-// If browsing pending by default, show all pending dates; otherwise use most recent date.
-$has_explicit_date = isset($_GET['date']) && $_GET['date'] !== '';
-$date_filter = '';
-if ($has_explicit_date) {
-    $date_filter = trim($_GET['date']);
-} elseif ($search_query !== '') {
-    $date_filter = '';
-    if (!isset($_GET['status'])) {
-        $status_filter = 'all';
-    }
-} else {
-    if ($status_filter === 'pending') {
-        $date_filter = ''; // Show all pending items across dates so none are hidden
-    } else {
-        try {
-            $latest_stmt = $pdo->prepare("SELECT DATE(transaction_date) FROM fuel_transactions WHERE station_id = ? ORDER BY transaction_date DESC, id DESC LIMIT 1");
-            $latest_stmt->execute([$station_id]);
-            $latest_date = $latest_stmt->fetchColumn();
-            $date_filter = $latest_date ?: date('Y-m-d');
-        } catch (Exception $e) {
-            $date_filter = date('Y-m-d');
-        }
-    }
-}
+// Default date: only filter by date if explicitly selected by the user in the date input.
+// If no explicit date is set, leave date_filter empty so records across all dates are displayed and cleanly paginated.
+$has_explicit_date = isset($_GET['date']) && trim($_GET['date']) !== '';
+$date_filter = $has_explicit_date ? trim($_GET['date']) : '';
 
 
 // ── POST Actions (Verify / Adjust / Reject) ───────────────────────────
@@ -451,9 +445,9 @@ $params = [$station_id];
 
 // Search filter
 if ($search_query !== '') {
-    $where[] = "(LOWER(ft.transaction_id) LIKE ? OR LOWER(ft.fuel_type) LIKE ? OR LOWER(fp.pump_number) LIKE ? OR LOWER(staff.username) LIKE ? OR LOWER(staff.first_name) LIKE ? OR LOWER(staff.last_name) LIKE ? OR LOWER(CONCAT(COALESCE(staff.first_name, ''), ' ', COALESCE(staff.last_name, ''))) LIKE ? OR LOWER(staff.name) LIKE ? OR LOWER(ft.notes) LIKE ? OR LOWER(ft.reject_reason) LIKE ?)";
+    $where[] = "(LOWER(ft.transaction_id) LIKE ? OR LOWER(ft.fuel_type) LIKE ? OR LOWER(fp.pump_number) LIKE ? OR LOWER(staff.username) LIKE ? OR LOWER(staff.first_name) LIKE ? OR LOWER(staff.last_name) LIKE ? OR LOWER(CONCAT(COALESCE(staff.first_name, ''), ' ', COALESCE(staff.last_name, ''))) LIKE ? OR LOWER(COALESCE(ft.notes, '')) LIKE ? OR LOWER(COALESCE(ft.reject_reason, '')) LIKE ?)";
     $like_val = '%' . strtolower($search_query) . '%';
-    $params = array_merge($params, [$like_val, $like_val, $like_val, $like_val, $like_val, $like_val, $like_val, $like_val, $like_val, $like_val]);
+    $params = array_merge($params, [$like_val, $like_val, $like_val, $like_val, $like_val, $like_val, $like_val, $like_val, $like_val]);
 }
 
 // Status filter: Pending by default so completed ones disappear automatically!
@@ -481,22 +475,21 @@ if ($shift_filter !== 'all') {
     $params[] = strtolower($shift_filter);
 }
 
-// Fuel Type Filter — handle Diesel without colliding with Turbo Diesel
-if ($fuel_type_filter !== 'all') {
-    $clean_ft = strtolower($fuel_type_filter);
-    if ($clean_ft === 'diesel') {
-        $where[] = "(LOWER(ft.fuel_type) LIKE '%diesel%' AND LOWER(ft.fuel_type) NOT LIKE '%turbo%')";
-    } else {
-        $where[] = "LOWER(ft.fuel_type) LIKE ?";
-        $params[] = '%' . $clean_ft . '%';
-    }
+// Fuel Type Filter — canonical Petron match
+if ($fuel_type_filter !== 'all' && $fuel_type_filter !== '') {
+    $col_expr = "COALESCE(NULLIF(TRIM(ft.fuel_type), ''), fp.pump_number, '')";
+    list($ft_cond, $ft_params) = function_exists('petron_fuel_type_sql_condition')
+        ? petron_fuel_type_sql_condition($col_expr, $fuel_type_filter)
+        : ["LOWER($col_expr) LIKE ?", ['%' . strtolower($fuel_type_filter) . '%']];
+    $where[] = $ft_cond;
+    $params = array_merge($params, $ft_params);
 }
 
 // Staff Filter
 if ($staff_filter !== '') {
-    $where[] = "(LOWER(staff.username) LIKE ? OR LOWER(staff.first_name) LIKE ? OR LOWER(staff.last_name) LIKE ?)";
+    $where[] = "(LOWER(staff.username) LIKE ? OR LOWER(staff.first_name) LIKE ? OR LOWER(staff.last_name) LIKE ? OR LOWER(CONCAT(COALESCE(staff.first_name, ''), ' ', COALESCE(staff.last_name, ''))) LIKE ?)";
     $like_val = '%' . strtolower($staff_filter) . '%';
-    $params = array_merge($params, [$like_val, $like_val, $like_val]);
+    $params = array_merge($params, [$like_val, $like_val, $like_val, $like_val]);
 }
 
 $records = [];
@@ -572,27 +565,10 @@ try {
     error_log("KPI calculation error: " . $e->getMessage());
 }
 
-// â”€â”€ Fetch dynamic filters data (from fuel_transactions for accurate type list) â”€
-$fuel_types = [];
-try {
-    // Pull distinct fuel types from actual transactions so the dropdown matches stored data
-    $ft_stmt = $pdo->prepare("
-        SELECT DISTINCT
-            CASE
-                WHEN UPPER(fuel_type) LIKE '%TURBO%DIESEL%' THEN 'Turbo Diesel'
-                WHEN UPPER(fuel_type) LIKE '%KEROSENE%'     THEN 'Kerosene'
-                WHEN UPPER(fuel_type) LIKE '%XCS%'          THEN 'XCS Plus'
-                WHEN UPPER(fuel_type) LIKE '%XTRA%UNL%'     THEN 'Xtra UNL'
-                WHEN UPPER(fuel_type) LIKE '%DIESEL%'       THEN 'Diesel'
-                ELSE fuel_type
-            END AS normalized_type
-        FROM fuel_transactions
-        WHERE station_id = ?
-        ORDER BY 1
-    ");
-    $ft_stmt->execute([$station_id]);
-    $fuel_types = array_unique($ft_stmt->fetchAll(PDO::FETCH_COLUMN));
-} catch (Exception $e) {}
+// ── Standard 5 Canonical Petron Fuel Types ─────────────────────────
+$fuel_types = function_exists('petron_standard_fuel_types')
+    ? petron_standard_fuel_types()
+    : ['Diesel', 'Kerosene', 'Turbo Diesel', 'XCS Plus', 'Xtra UNL'];
 
 // ── EXPORTS ───────────────────────────────────────────────────────────
 if (in_array($export, ['excel', 'pdf'])) {
@@ -664,7 +640,7 @@ if (in_array($export, ['excel', 'pdf'])) {
             }
             $tbody .= '</tr>';
         }
-        echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Calibration Review</title>
+        echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Fuel Calibration Review</title>
         <style>body{font-family:Arial,sans-serif;font-size:10px;padding:20px;color:#333;}
         .pbtn{margin-bottom:12px}@media print{.pbtn{display:none}}
         .hdr{border-bottom:3px solid #002F6C;margin-bottom:14px;padding-bottom:8px;display:flex;align-items:center;justify-content:between;}
@@ -675,8 +651,8 @@ if (in_array($export, ['excel', 'pdf'])) {
         tr:nth-child(even) td{background:#f8fafc}
         </style></head><body>';
         echo '<div class="pbtn"><button onclick="window.print()" style="background:#002F6C;color:#fff;border:none;padding:8px 18px;border-radius:5px;cursor:pointer;font-weight:bold;">Print</button>
-        <a href="javascript:history.back()" style="margin-left:8px;background:#6c757d;color:#fff;border:none;padding:8px 18px;border-radius:5px;cursor:pointer;text-decoration:none;font-weight:bold;">â† Back</a></div>';
-        echo '<div class="hdr"><div><h1>Calibration Review</h1><p style="margin:2px 0 0;color:#666;">Date: ' . htmlspecialchars($date_filter) . ' | Station: ' . htmlspecialchars(user_station_name()) . '</p></div></div>';
+        <a href="javascript:history.back()" style="margin-left:8px;background:#6c757d;color:#fff;border:none;padding:8px 18px;border-radius:5px;cursor:pointer;text-decoration:none;font-weight:bold;">← Back</a></div>';
+        echo '<div class="hdr"><div><h1>Fuel Calibration Review</h1><p style="margin:2px 0 0;color:#666;">Date: ' . htmlspecialchars($date_filter) . ' | Station: ' . htmlspecialchars(user_station_name()) . '</p></div></div>';
         echo '<table><thead><tr>';
         foreach ($headers as $h) echo '<th>' . htmlspecialchars($h) . '</th>';
         echo '</tr></thead>';
@@ -970,7 +946,7 @@ require_once __DIR__ . '/../partials/header.php'; require_once __DIR__ . '/../pa
     <!-- Page Header -->
     <div class="int-head">
         <div>
-            <h1><i class="fas fa-check-double"></i> Fuel Transaction Validation</h1>
+            <h1><i class="fas fa-ruler"></i> Fuel Calibration Review</h1>
         </div>
     </div>
 
