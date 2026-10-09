@@ -1116,7 +1116,7 @@ function srFetchAdminLegacy($pdo, $station_id, $date_start, $date_end, $shift_st
                 $q->execute([$station_id, $date_start, $date_end, $station_id, $date_start, $date_end]);
                 $raw_pb_rows = $q->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
-                $canonical_order = ['Cash', 'Card', 'E-Wallet', 'Petron Fleet Card', 'Credit Account', 'Petron Loyalty Points'];
+                $canonical_order = ['Cash', 'Card', 'E-Wallet', 'Petron Value Card (PVC Points)', 'Credit Account', 'Petron Fleet Card', 'Petron Loyalty Points'];
                 $pb_map = [];
                 foreach ($canonical_order as $co) {
                     $pb_map[$co] = [

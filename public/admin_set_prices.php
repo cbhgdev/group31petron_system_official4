@@ -1914,6 +1914,11 @@ button[title*="Reset"],
 </div>
 
 
+<div style="display:inline-flex;align-items:center;gap:8px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:600;margin-bottom:14px;">
+    <i class="fas fa-file-invoice-dollar" style="color:#002F6C;font-size:14px;"></i>
+    <span><strong>Pricing Mode: VAT-Inclusive</strong> &mdash; All product selling prices and service rates displayed and edited already include 12% VAT.</span>
+</div>
+
 <!-- ── Section Tabs ──────────────────────────────────────────────────── -->
 <input type="hidden" id="activeSection" value="<?php echo htmlspecialchars($active_tab); ?>">
 <div class="ato-tab-bar">
@@ -2381,7 +2386,7 @@ button[title*="Reset"],
                         <th style="width:17%;text-align:left;">Product Name</th>
                         <th style="width:11%;text-align:left;">Category / Brand</th>
                         <th style="width:6.5%;text-align:center;">UOM</th>
-                        <th style="width:7.5%;text-align:right;">Selling Price</th>
+                        <th style="width:7.5%;text-align:right;">Selling Price (VAT-Inc)</th>
                         <th style="width:5%;text-align:center;">Stock</th>
                         <th style="width:9.5%;text-align:center;">Price Req.</th>
                         <th style="width:7%;text-align:center;">Status</th>
@@ -2614,8 +2619,8 @@ button[title*="Reset"],
                             <th style="color:#fff;width:7%;text-align:left;">Code</th>
                             <th style="color:#fff;width:19%;text-align:left;">Service Name</th>
                             <th style="color:#fff;width:12%;text-align:left;">Category</th>
-                            <th style="color:#fff;width:9%;text-align:right;">Service Fee</th>
-                            <th style="color:#fff;width:9%;text-align:right;">Labor Fee</th>
+                            <th style="color:#fff;width:9%;text-align:right;">Service Fee (VAT-Inc)</th>
+                            <th style="color:#fff;width:9%;text-align:right;">Labor Fee (VAT-Inc)</th>
                             <th style="color:#fff;width:11%;text-align:center;">Price Req.</th>
                             <th style="color:#fff;width:8%;text-align:center;">Status</th>
                             <th style="color:#fff;width:10%;text-align:center;">Last Updated</th>

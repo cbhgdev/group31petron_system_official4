@@ -539,7 +539,33 @@ body {
       <?php
       // Render payment-method specific metadata fields
       $pm_lower = strtolower($pay_method);
-      if (strpos($pm_lower, 'card') !== false) {
+      if (strpos($pm_lower, 'pvc') !== false || strpos($pm_lower, 'value card') !== false || strpos($pm_lower, 'loyalt') !== false || strpos($pm_lower, 'point') !== false) {
+          $pvc_card = $txn['loyalty_card_no'] ?? $txn['card_number'] ?? '';
+          $pts_redeemed = (float)($txn['loyalty_points_redeemed'] ?? $txn['points_redeemed'] ?? 0);
+          $pts_discount = (float)($txn['loyalty_discount_amount'] ?? $txn['loyalty_discount'] ?? 0);
+          if ($pvc_card) {
+              echo '<div class="vrow"><span class="vrow-key">Petron Value Card</span><span class="vrow-val" style="font-family:monospace; font-weight:700;">' . htmlspecialchars($pvc_card) . '</span></div>';
+          }
+          if ($pts_redeemed > 0) {
+              echo '<div class="vrow"><span class="vrow-key">Points Redeemed</span><span class="vrow-val" style="font-weight:700; color:#002F6C;">' . number_format($pts_redeemed, 2) . ' pts</span></div>';
+          }
+          if ($pts_discount > 0) {
+              echo '<div class="vrow"><span class="vrow-key">Loyalty Discount</span><span class="vrow-val" style="font-weight:700; color:#16a34a;">-&#8369;' . number_format($pts_discount, 2) . '</span></div>';
+          }
+      } elseif (strpos($pm_lower, 'fleet') !== false) {
+          $fleet_no  = $txn['fleet_card_number'] ?? '';
+          $comp_name = $txn['company_name'] ?? '';
+          $auth_no   = $txn['authorization_number'] ?? '';
+          if ($fleet_no) {
+              echo '<div class="vrow"><span class="vrow-key">Fleet Card No.</span><span class="vrow-val" style="font-family:monospace;">' . htmlspecialchars($fleet_no) . '</span></div>';
+          }
+          if ($comp_name) {
+              echo '<div class="vrow"><span class="vrow-key">Company Name</span><span class="vrow-val">' . htmlspecialchars($comp_name) . '</span></div>';
+          }
+          if ($auth_no) {
+              echo '<div class="vrow"><span class="vrow-key">Auth Number</span><span class="vrow-val" style="font-family:monospace;">' . htmlspecialchars($auth_no) . '</span></div>';
+          }
+      } elseif (strpos($pm_lower, 'card') !== false) {
           $card_type = $txn['card_type'] ?? '';
           $last_four = $txn['card_last_four'] ?? '';
           $ref_no    = $txn['reference_number'] ?? $txn['card_reference'] ?? '';

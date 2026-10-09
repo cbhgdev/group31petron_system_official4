@@ -815,8 +815,7 @@ if (adm_table_exists($pdo, 'job_orders')) {
 usort($ar_customer_map, fn($a, $b) => $b['total_balance'] <=> $a['total_balance']);
 $ar_customer_list = array_slice($ar_customer_map, 0, 5);
 
-// ── 8. PAYMENT BREAKDOWN (Canonical Taxonomy) ─────────────────────
-$canonical_pms = ['Cash', 'Card', 'E-Wallet', 'Petron Fleet Card', 'Credit Account', 'Petron Loyalty Points'];
+$canonical_pms = ['Cash', 'Card', 'E-Wallet', 'Petron Value Card (PVC Points)', 'Credit Account', 'Petron Fleet Card', 'Petron Loyalty Points'];
 $payment_map = array_fill_keys($canonical_pms, 0.0);
 $payment_ewallet_map = ['GCash' => 0.0, 'Maya' => 0.0];
 
@@ -1881,9 +1880,8 @@ include __DIR__ . '/../partials/header.php';
                                 &bull; Maya: <span id="pm_maya"><?= adm_money($payment_ewallet_map['Maya'] ?? 0) ?></span>
                             </div>
                         </div>
-                        <div style="font-size:13px; padding:7px 10px; background:#FFF; border:1px solid #E2E8F0; border-radius:6px;">Petron Fleet: <strong id="pm_fleet"><?= adm_money($payment_map['Petron Fleet Card'] ?? 0) ?></strong></div>
+                        <div style="font-size:13px; padding:7px 10px; background:#FFF; border:1px solid #E2E8F0; border-radius:6px;">PVC Points: <strong id="pm_pvc"><?= adm_money(($payment_map['Petron Value Card (PVC Points)'] ?? 0) + ($payment_map['Petron Loyalty Points'] ?? 0)) ?></strong></div>
                         <div style="font-size:13px; padding:7px 10px; background:#FFF; border:1px solid #E2E8F0; border-radius:6px;">Credit Acct: <strong id="pm_credit_acct"><?= adm_money($payment_map['Credit Account'] ?? 0) ?></strong></div>
-                        <div style="font-size:13px; padding:7px 10px; background:#FFF; border:1px solid #E2E8F0; border-radius:6px;">Loyalty Points: <strong id="pm_loyalty"><?= adm_money($payment_map['Petron Loyalty Points'] ?? 0) ?></strong></div>
                     </div>
                 </div>
             </div>

@@ -344,7 +344,7 @@ require_login();
     <label>Payment Method</label>
     <select id="histFilterPayment" name="payment">
       <option value="">All Methods</option>
-      <?php foreach(['Cash','Card','E-Wallet','Petron Fleet Card','Credit Account','Petron Loyalty Points'] as $_pm): ?>
+      <?php foreach(['Cash','Card','E-Wallet','Petron Value Card (PVC Points)','Credit Account'] as $_pm): ?>
       <option value="<?= $_pm ?>" <?= $hist_filter_pay===$_pm?'selected':'' ?>><?= $_pm ?></option>
       <?php endforeach; ?>
     </select>

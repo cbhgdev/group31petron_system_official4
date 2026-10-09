@@ -617,23 +617,14 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
         } catch (Exception $e) {}
     }
 
-    // ── Calculate totals & Loyalty Redemption ─────────────────────────────────
-    // Subtotal (Vatable Sales) = sum of items
-    // VAT (12%) = subtotal * 0.12
-    // Gross Total = subtotal + VAT (12%)
-    $items_subtotal = 0;
+    // ── Calculate totals & VAT-Inclusive Pricing ──────────────────────────────
+    // Item selling prices are VAT-inclusive per Petron standard.
+    // Gross Amount = sum of (quantity * unit_price)
+    $items_subtotal = 0.0;
     foreach ($data['items'] as $item) {
         $items_subtotal += floatval($item['quantity'] ?? 1) * floatval($item['unit_price'] ?? 0);
     }
-    $items_subtotal = round($items_subtotal, 2);
-
-    $subtotal_amount = floatval($data['subtotal'] ?? $items_subtotal);
-    if ($subtotal_amount <= 0) {
-        $subtotal_amount = $items_subtotal;
-    }
-
-    $vat_amount = floatval($data['vat_amount'] ?? round($subtotal_amount * 0.12, 2));
-    $gross_amount = round($subtotal_amount + $vat_amount, 2);
+    $gross_amount = round($items_subtotal, 2);
 
     // ── Payment method setup ──────────────────────────────────────────────────
     $raw_payment_method  = trim((string)($data['payment_method'] ?? 'Cash'));
@@ -641,6 +632,13 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
     $norm_pay            = normalize_payment_type($raw_payment_method, $raw_ewallet_prov);
     $payment_method      = $norm_pay['payment_type'];
     $ewallet_provider    = $norm_pay['provider'] ?: ($raw_ewallet_prov ?: null);
+
+    // Fleet Card is removed from active payment methods
+    if ($payment_method === 'Petron Fleet Card') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Petron Fleet Card has been decommissioned from active payments. Please select Petron Value Card (PVC Points) or another valid payment method.']);
+        return;
+    }
 
     // ── Server-side Loyalty Validation & Discount Computation ─────────────────
     require_once __DIR__ . '/../loyalty_schema_fix.php';
@@ -671,11 +669,40 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
     $validated_points_redeemed = 0;
     $loyalty_discount_amount = 0.0;
 
-    // Fleet Card purchases earn separate Fleet Card test rewards and are excluded from consumer loyalty
-    if ($payment_method !== 'Petron Fleet Card' && $target_customer_id > 0) {
-        $loyalty_acc = get_or_create_loyalty_account($pdo, $target_customer_id, $card_no);
-        $curr_points_balance = (int)($loyalty_acc['points_balance'] ?? 0);
-        $req_points_redeemed = max(0, intval($data['loyalty_points_redeemed'] ?? 0));
+    // Fetch authoritative linked PVC loyalty account without auto-creating
+    if ($target_customer_id > 0) {
+        $loyalty_acc = get_customer_pvc_account($pdo, $target_customer_id);
+        if ($loyalty_acc) {
+            $curr_points_balance = (int)($loyalty_acc['points_balance'] ?? 0);
+            $card_no = $loyalty_acc['card_number'] ?: $card_no;
+        }
+    }
+
+    $is_pvc_payment = ($payment_method === 'Petron Value Card (PVC Points)');
+
+    if ($is_pvc_payment) {
+        if ($target_customer_id <= 0) {
+            http_response_code(400);
+            echo json_encode(['error' => 'A registered customer is required to redeem Petron Value Card (PVC Points).']);
+            return;
+        }
+        if (!$loyalty_acc) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Selected customer does not have an active linked Petron Value Card (PVC).']);
+            return;
+        }
+        if ($curr_points_balance <= 0) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Selected customer has 0 PVC points available for redemption.']);
+            return;
+        }
+
+        // Auto-calculate eligible redemption
+        $max_points_needed = (int)ceil($gross_amount / $redemption_val);
+        $validated_points_redeemed = min($curr_points_balance, $max_points_needed);
+        $loyalty_discount_amount = min($gross_amount, round($validated_points_redeemed * $redemption_val, 2));
+    } elseif ($target_customer_id > 0 && $loyalty_acc && !empty($data['loyalty_points_redeemed'])) {
+        $req_points_redeemed = max(0, intval($data['loyalty_points_redeemed']));
         if ($curr_points_balance >= $min_redeem_pts && $req_points_redeemed > 0) {
             $max_points_needed = (int)ceil($gross_amount / $redemption_val);
             $validated_points_redeemed = min($req_points_redeemed, $curr_points_balance, $max_points_needed);
@@ -686,14 +713,15 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
     // True net total after loyalty discount
     $total_amount = max(0.0, round($gross_amount - $loyalty_discount_amount, 2));
 
-    // Points earned on the net purchase amount (₱100 eligible purchase = 1 point)
-    $validated_points_earned = ($payment_method === 'Petron Fleet Card') ? 0 : intval(floor($total_amount / $pts_per_amount));
+    // Authoritative Server-Side Tax Calculation (VAT-Inclusive Extraction)
+    $tax_calc = petron_calculate_taxes($gross_amount, $loyalty_discount_amount, (int)$station_id);
+    $subtotal_amount = $tax_calc['subtotal_amount']; // Vatable Sales (or Non-VAT Sales)
+    $vat_amount      = $tax_calc['vat_amount'];      // Extracted VAT (or 0 for Non-VAT)
 
     // amount_paid: the actual amount the customer paid/tendered right now
     $amount_paid = floatval($data['amount_paid'] ?? $data['amount_tendered'] ?? 0);
 
     // ── Determine payment_status based on amount vs total ─────────────────────
-    // Accept both 'Credit Account' (new) and 'Credit' (legacy) as credit method
     $is_credit_account = in_array($payment_method, ['Credit Account', 'Credit'], true);
 
     if ($is_credit_account) {
@@ -729,8 +757,6 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
                     return;
                 }
                 $available = floatval($cust['credit_limit']) - floatval($cust['balance']);
-                // Only enforce credit limit if one is actually set (> 0)
-                // If credit_limit = 0 or NULL, treat as unlimited — all registered customers can use credit
                 $credit_limit_set = floatval($cust['credit_limit']) > 0;
                 if ($credit_limit_set && $total_amount > $available) {
                     http_response_code(400);
@@ -744,9 +770,25 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
         } catch (Exception $e) {
             error_log("Credit limit check warning: " . $e->getMessage());
         }
-        $balance_due = $total_amount; // full amount is on credit
+        $balance_due = $total_amount; // full net amount is on credit
+    } elseif ($is_pvc_payment) {
+        if ($total_amount <= 0.009) {
+            // Available PVC points covered 100% of the transaction
+            $amount_paid = 0.00;
+            $resolved_payment_status = 'Paid';
+            $balance_due = 0.00;
+        } else {
+            // Points covered a portion; check if customer paid the rest
+            if ($amount_paid >= $total_amount - 0.009) {
+                $resolved_payment_status = 'Paid';
+                $balance_due = 0.00;
+            } else {
+                $resolved_payment_status = 'Partially Paid';
+                $balance_due = max(0.0, round($total_amount - $amount_paid, 2));
+            }
+        }
     } else {
-        // Cash / Credit Card / Debit Card / GCash / Maya / Petron Fleet Card
+        // Cash / Card / E-Wallet
         if ($total_amount <= 0) {
             $amount_paid = 0;
             $resolved_payment_status = 'Paid';
@@ -767,6 +809,13 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
             $resolved_payment_status = 'Paid';
             $balance_due = 0;
         }
+    }
+
+    // ── Points earned on eligible monetary payments only (₱100 eligible purchase = 1 point) ──
+    $validated_points_earned = 0;
+    if ($target_customer_id > 0 && $loyalty_acc && $resolved_payment_status === 'Paid') {
+        $monetary_paid = max(0.0, min($total_amount, ($amount_paid > 0 ? $amount_paid : $total_amount)));
+        $validated_points_earned = intval(floor($monetary_paid / $pts_per_amount));
     }
 
     // ── Determine ar_status ──────────────────────────────────────────────────
@@ -1050,8 +1099,8 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
             // Determined by whether items contain service-type and/or merchandise-type entries
             'transaction_type'           => $resolved_transaction_type,
             // ── Loyalty fields ────────────────────────────────────────────────────
-            'loyalty_type'               => ($payment_method !== 'Petron Fleet Card') ? ($data['loyalty_type'] ?? 'Petron Rewards Card') : 'No Loyalty',
-            'loyalty_card_no'            => ($payment_method !== 'Petron Fleet Card') ? ($card_no ?: ($loyalty_acc['card_number'] ?? null)) : null,
+            'loyalty_type'               => ($target_customer_id > 0 && $loyalty_acc) ? 'Petron Value Card (PVC)' : 'No Loyalty',
+            'loyalty_card_no'            => ($target_customer_id > 0 && $loyalty_acc) ? ($loyalty_acc['card_number'] ?? $card_no) : null,
             'loyalty_points_earned'      => $validated_points_earned,
             'loyalty_points_redeemed'    => $validated_points_redeemed,
         ];
@@ -1286,12 +1335,8 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
         }
 
         // ── Loyalty Points Transaction & Customer Account Update ──────────────
-        // Fleet Card purchases earn separate Fleet Card rewards and are excluded from consumer loyalty (Petron Value Card / Rewards)
-        if ($payment_method !== 'Petron Fleet Card' && $target_customer_id > 0 && ($validated_points_earned > 0 || $validated_points_redeemed > 0 || !empty($card_no))) {
+        if ($target_customer_id > 0 && $loyalty_acc && ($validated_points_earned > 0 || $validated_points_redeemed > 0)) {
             try {
-                if (!$loyalty_acc) {
-                    $loyalty_acc = get_or_create_loyalty_account($pdo, $target_customer_id, $card_no);
-                }
                 $accId = (int)$loyalty_acc['id'];
                 $newBalance = max(0, $curr_points_balance + $validated_points_earned - $validated_points_redeemed);
 
@@ -1299,32 +1344,39 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
 
                 $remarks = "POS Transaction - Ref: " . $transaction_id;
                 if ($loyalty_discount_amount > 0) {
-                    $remarks .= " (Discount: ₱" . number_format($loyalty_discount_amount, 2) . ")";
+                    $remarks .= " (PVC Discount: ₱" . number_format($loyalty_discount_amount, 2) . ", Redeemed: {$validated_points_redeemed} pts)";
+                }
+                if ($validated_points_earned > 0) {
+                    $remarks .= " (Earned: {$validated_points_earned} pts)";
                 }
 
-                $lTxn = $pdo->prepare("
-                    INSERT INTO loyalty_transactions (
-                        loyalty_account_id, customer_id, reference_id, transaction_type,
-                        points_earned, points_redeemed, points_balance_after, created_by, created_at, remarks
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
-                ");
-                $lTxn->execute([
-                    $accId,
-                    $target_customer_id,
-                    $transaction_id,
-                    $txnTypeLabel,
-                    $validated_points_earned,
-                    $validated_points_redeemed,
-                    $newBalance,
-                    $me['id'] ?? null,
-                    $remarks
-                ]);
+                $dupCheck = $pdo->prepare("SELECT id FROM loyalty_transactions WHERE reference_id = ? AND transaction_type = ? LIMIT 1");
+                $dupCheck->execute([$transaction_id, $txnTypeLabel]);
+                if (!$dupCheck->fetchColumn()) {
+                    $lTxn = $pdo->prepare("
+                        INSERT INTO loyalty_transactions (
+                            loyalty_account_id, customer_id, reference_id, transaction_type,
+                            points_earned, points_redeemed, points_balance_after, created_by, created_at, remarks
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
+                    ");
+                    $lTxn->execute([
+                        $accId,
+                        $target_customer_id,
+                        $transaction_id,
+                        $txnTypeLabel,
+                        $validated_points_earned,
+                        $validated_points_redeemed,
+                        $newBalance,
+                        $me['id'] ?? null,
+                        $remarks
+                    ]);
 
-                // Update loyalty_accounts & customers balance
-                $pdo->prepare("UPDATE loyalty_accounts SET points_balance = ?, updated_at = NOW() WHERE id = ?")
-                    ->execute([$newBalance, $accId]);
-                $pdo->prepare("UPDATE customers SET points = ? WHERE id = ?")
-                    ->execute([$newBalance, $target_customer_id]);
+                    // Update loyalty_accounts & customers balance
+                    $pdo->prepare("UPDATE loyalty_accounts SET points_balance = ?, updated_at = NOW() WHERE id = ?")
+                        ->execute([$newBalance, $accId]);
+                    $pdo->prepare("UPDATE customers SET points = ? WHERE id = ?")
+                        ->execute([$newBalance, $target_customer_id]);
+                }
             } catch (Exception $lErr) {
                 error_log("Loyalty transaction processing warning: " . $lErr->getMessage());
             }

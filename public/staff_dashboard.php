@@ -640,8 +640,7 @@ $latest_job_orders = stf_rows($pdo, "
 
 // ── 7. CHARTS DATA (Payment Types, JO Status, Daily Trend) ───────────────────
 
-// Chart 1: Payment Type Distribution (Canonical Payment Types)
-$canonical_pms = ['Cash', 'Card', 'E-Wallet', 'Petron Fleet Card', 'Credit Account', 'Petron Loyalty Points'];
+$canonical_pms = ['Cash', 'Card', 'E-Wallet', 'Petron Value Card (PVC Points)', 'Credit Account', 'Petron Fleet Card', 'Petron Loyalty Points'];
 $payment_map = array_fill_keys($canonical_pms, 0.0);
 $payment_ewallet_map = ['GCash' => 0.0, 'Maya' => 0.0];
 
@@ -1899,7 +1898,7 @@ require_once __DIR__ . '/../partials/header.php';
                 <h2><i class="fas fa-chart-pie" style="color:#10B981;"></i> Payment Type Distribution</h2>
             </div>
             <div class="stf-card-body">
-                <p style="font-size:12px; color:#475569; font-weight:600; margin:0 0 8px 0;">Breakdown of payments encoded (Cash, Card, E-Wallet, Petron Fleet Card, Credit Account, Petron Loyalty Points).</p>
+                <p style="font-size:12px; color:#475569; font-weight:600; margin:0 0 8px 0;">Breakdown of payments encoded (Cash, Card, E-Wallet, Petron Value Card (PVC Points), Credit Account).</p>
                 <div class="stf-chart-wrap">
                     <canvas id="paymentTypeChart"></canvas>
                 </div>

@@ -865,9 +865,8 @@ table.rpt-table.rpt-table-fixed .badge {
                         <option value="E-Wallet" <?= $sel_pm === 'E-Wallet' ? 'selected' : '' ?>>E-Wallet</option>
                         <option value="GCash" <?= $sel_pm === 'GCash' ? 'selected' : '' ?>>&nbsp;&nbsp;↳ GCash</option>
                         <option value="Maya" <?= $sel_pm === 'Maya' ? 'selected' : '' ?>>&nbsp;&nbsp;↳ Maya</option>
-                        <option value="Petron Fleet Card" <?= in_array($sel_pm, ['Petron Fleet Card', 'Fleet Card'], true) ? 'selected' : '' ?>>Petron Fleet Card</option>
                         <option value="Credit Account" <?= in_array($sel_pm, ['Credit Account', 'Credit Account (AR)', 'Credit'], true) ? 'selected' : '' ?>>Credit Account</option>
-                        <option value="Petron Loyalty Points" <?= in_array($sel_pm, ['Petron Loyalty Points', 'Loyalty Points'], true) ? 'selected' : '' ?>>Petron Loyalty Points</option>
+                        <option value="Petron Value Card (PVC Points)" <?= in_array($sel_pm, ['Petron Value Card (PVC Points)', 'Petron Loyalty Points', 'Loyalty Points', 'PVC Points'], true) ? 'selected' : '' ?>>Petron Value Card (PVC Points)</option>
                     </select>
 
                     <label class="ms-1"><i class="fas fa-exchange-alt me-1"></i> Type</label>
@@ -1254,9 +1253,8 @@ table.rpt-table.rpt-table-fixed .badge {
                         <option value="E-Wallet" <?= $sel_pm === 'E-Wallet' ? 'selected' : '' ?>>E-Wallet</option>
                         <option value="GCash" <?= $sel_pm === 'GCash' ? 'selected' : '' ?>>&nbsp;&nbsp;↳ GCash</option>
                         <option value="Maya" <?= $sel_pm === 'Maya' ? 'selected' : '' ?>>&nbsp;&nbsp;↳ Maya</option>
-                        <option value="Petron Fleet Card" <?= in_array($sel_pm, ['Petron Fleet Card', 'Fleet Card'], true) ? 'selected' : '' ?>>Petron Fleet Card</option>
                         <option value="Credit Account" <?= in_array($sel_pm, ['Credit Account', 'Credit Account (AR)', 'Credit'], true) ? 'selected' : '' ?>>Credit Account</option>
-                        <option value="Petron Loyalty Points" <?= in_array($sel_pm, ['Petron Loyalty Points', 'Loyalty Points'], true) ? 'selected' : '' ?>>Petron Loyalty Points</option>
+                        <option value="Petron Value Card (PVC Points)" <?= in_array($sel_pm, ['Petron Value Card (PVC Points)', 'Petron Loyalty Points', 'Loyalty Points', 'PVC Points'], true) ? 'selected' : '' ?>>Petron Value Card (PVC Points)</option>
                     </select>
 
                     <label class="ms-1"><i class="fas fa-user me-1"></i> Customer</label>
@@ -1278,7 +1276,7 @@ table.rpt-table.rpt-table-fixed .badge {
                         <option value="">All Types</option>
                         <option value="Walk-in" <?= $sel_ctype === 'Walk-in' ? 'selected' : '' ?>>Walk-in</option>
                         <option value="Credit Account" <?= in_array($sel_ctype, ['Credit Account', 'Credit']) ? 'selected' : '' ?>>Credit Account</option>
-                        <option value="Petron Fleet Card" <?= in_array($sel_ctype, ['Petron Fleet Card', 'Fleet Card']) ? 'selected' : '' ?>>Petron Fleet Card</option>
+                        <option value="Petron Value Card (PVC Points)" <?= in_array($sel_ctype, ['Petron Value Card (PVC Points)', 'Petron Fleet Card', 'Fleet Card']) ? 'selected' : '' ?>>Petron Value Card (PVC Points)</option>
                     </select>
 
                     <label class="ms-1"><i class="fas fa-credit-card me-1"></i> Payment Status</label>

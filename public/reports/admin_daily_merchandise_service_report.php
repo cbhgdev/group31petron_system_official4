@@ -147,8 +147,9 @@ $payment_breakdown = [
     'Cash' => ['count' => 0, 'amount' => 0.0, 'providers' => []],
     'Card' => ['count' => 0, 'amount' => 0.0, 'providers' => []],
     'E-Wallet' => ['count' => 0, 'amount' => 0.0, 'providers' => ['GCash' => ['count' => 0, 'amount' => 0.0], 'Maya' => ['count' => 0, 'amount' => 0.0]]],
-    'Petron Fleet Card' => ['count' => 0, 'amount' => 0.0, 'providers' => []],
+    'Petron Value Card (PVC Points)' => ['count' => 0, 'amount' => 0.0, 'providers' => []],
     'Credit Account' => ['count' => 0, 'amount' => 0.0, 'providers' => []],
+    'Petron Fleet Card' => ['count' => 0, 'amount' => 0.0, 'providers' => []],
     'Petron Loyalty Points' => ['count' => 0, 'amount' => 0.0, 'providers' => []]
 ];
 
@@ -163,9 +164,9 @@ try {
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$admin_station_id, $report_date_from, $report_date_to]);
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $norm = function_exists('normalize_payment_type') ? normalize_payment_type($row['payment_method'] ?? 'Cash', $row['ewallet_provider'] ?? '') : ['type' => $row['payment_method'] ?? 'Cash', 'provider' => $row['ewallet_provider'] ?? ''];
-        $method = $norm['type'];
-        $prov = $norm['provider'];
+        $norm = function_exists('normalize_payment_type') ? normalize_payment_type($row['payment_method'] ?? 'Cash', $row['ewallet_provider'] ?? '') : ['payment_type' => $row['payment_method'] ?? 'Cash', 'provider' => $row['ewallet_provider'] ?? ''];
+        $method = $norm['payment_type'] ?? $norm['type'] ?? 'Cash';
+        $prov = $norm['provider'] ?? '';
         if (!isset($payment_breakdown[$method])) {
             $payment_breakdown[$method] = ['count' => 0, 'amount' => 0.0, 'providers' => []];
         }
@@ -191,9 +192,9 @@ try {
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$admin_station_id, $report_date_from, $report_date_to]);
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $norm = function_exists('normalize_payment_type') ? normalize_payment_type($row['payment_method'] ?? 'Cash', $row['ewallet_provider'] ?? '') : ['type' => $row['payment_method'] ?? 'Cash', 'provider' => $row['ewallet_provider'] ?? ''];
-        $method = $norm['type'];
-        $prov = $norm['provider'];
+        $norm = function_exists('normalize_payment_type') ? normalize_payment_type($row['payment_method'] ?? 'Cash', $row['ewallet_provider'] ?? '') : ['payment_type' => $row['payment_method'] ?? 'Cash', 'provider' => $row['ewallet_provider'] ?? ''];
+        $method = $norm['payment_type'] ?? $norm['type'] ?? 'Cash';
+        $prov = $norm['provider'] ?? '';
         if (!isset($payment_breakdown[$method])) {
             $payment_breakdown[$method] = ['count' => 0, 'amount' => 0.0, 'providers' => []];
         }

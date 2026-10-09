@@ -792,8 +792,7 @@ $top_services_final = array_slice($services_map, 0, 5, true);
 $top_service_labels = !empty($top_services_final) ? array_keys($top_services_final) : ['No Services Recorded'];
 $top_service_counts = !empty($top_services_final) ? array_values($top_services_final) : [0];
 
-// Canonical Payment Taxonomy
-$canonical_payment_types = ['Cash', 'Card', 'E-Wallet', 'Petron Fleet Card', 'Credit Account', 'Petron Loyalty Points'];
+$canonical_payment_types = ['Cash', 'Card', 'E-Wallet', 'Petron Value Card (PVC Points)', 'Credit Account', 'Petron Fleet Card', 'Petron Loyalty Points'];
 $payment_map = array_fill_keys($canonical_payment_types, 0.0);
 $payment_ewallet_map = ['GCash' => 0.0, 'Maya' => 0.0];
 

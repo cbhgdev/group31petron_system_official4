@@ -442,9 +442,8 @@ include __DIR__ . '/../partials/header.php';
                         <option value="Cash">Cash</option>
                         <option value="Card">Card</option>
                         <option value="E-Wallet">E-Wallet</option>
-                        <option value="Petron Fleet Card">Petron Fleet Card</option>
+                        <option value="Petron Value Card (PVC Points)">Petron Value Card (PVC Points)</option>
                         <option value="Credit Account">Credit Account</option>
-                        <option value="Petron Loyalty Points">Petron Loyalty Points</option>
                     </select>
                 </div>
                 
@@ -470,10 +469,10 @@ include __DIR__ . '/../partials/header.php';
                     <input type="text" name="card_reference" id="card_reference" class="inp full" placeholder="e.g., Auth / Ref #">
                 </div>
 
-                <!-- Fleet Card Details -->
-                <div class="form-group mb-3" id="fleet_pos_multi_field" style="display: none;">
-                    <label class="lbl">Petron Fleet Card Number <span style="color: red;">*</span></label>
-                    <input type="text" name="fleet_card_number" id="fleet_card_number" class="inp full" placeholder="e.g., PFC-1234-5678">
+                <!-- PVC Points Details -->
+                <div class="form-group mb-3" id="pvc_pos_multi_field" style="display: none; background: #eff6ff; border: 1px solid #bfdbfe; padding: 12px; border-radius: 6px;">
+                    <label class="lbl" style="color: #1e40af; font-weight:600;"><i class="fas fa-id-card"></i> Petron Value Card (PVC Points)</label>
+                    <small class="muted" style="color: #1e40af; display:block;">PVC points redemption will be automatically calculated and validated.</small>
                 </div>
             </div>
             
@@ -979,9 +978,11 @@ function togglePosMultiPayment() {
     const cardField = document.getElementById('card_pos_multi_field');
     const fleetField = document.getElementById('fleet_pos_multi_field');
     
+    const pvcField = document.getElementById('pvc_pos_multi_field');
+    
     if (ewField) ewField.style.display = (paymentType === 'E-Wallet') ? 'block' : 'none';
     if (cardField) cardField.style.display = (paymentType === 'Card') ? 'block' : 'none';
-    if (fleetField) fleetField.style.display = (paymentType === 'Petron Fleet Card') ? 'block' : 'none';
+    if (pvcField) pvcField.style.display = (paymentType === 'Petron Value Card (PVC Points)') ? 'block' : 'none';
 }
 
 function toggleGcashRef() {
@@ -1012,14 +1013,6 @@ function validateForm() {
         const ewRef = document.getElementById('ewallet_reference');
         if (!ewRef || !ewRef.value.trim()) {
             alert('Reference number is required for E-Wallet payments.');
-            return false;
-        }
-    }
-    
-    if (paymentType === 'Petron Fleet Card') {
-        const fleetNum = document.getElementById('fleet_card_number');
-        if (!fleetNum || !fleetNum.value.trim()) {
-            alert('Fleet card number is required for Petron Fleet Card payments.');
             return false;
         }
     }

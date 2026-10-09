@@ -791,17 +791,50 @@ input:checked + .ss-slider:before {
                             <span class="ss-slider"></span>
                         </label>
                     </div>
-                    <div class="ss-toggle-wrapper">
-                        <span class="ss-toggle-label">Show Report Footer</span>
-                        <label class="ss-switch">
-                            <input type="checkbox" id="ss_show_report_footer" name="show_report_footer" checked>
-                            <span class="ss-slider"></span>
-                        </label>
+            <!-- Tax & Invoice Configuration (VAT-Inclusive Standard) -->
+            <div class="ss-card" id="section_tax">
+                <div class="ss-card-title">
+                    <i class="fas fa-file-invoice-dollar"></i> Tax &amp; Invoice Configuration (VAT-Inclusive Standard)
+                </div>
+                <div class="ss-grid-2" style="margin-bottom:16px;">
+                    <div class="ss-form-group">
+                        <label for="ss_tax_type"><i class="fas fa-building" style="color:#002F6C; margin-right:4px;"></i> Station Tax Registration</label>
+                        <select id="ss_tax_type" name="tax_type" class="ss-form-control">
+                            <option value="VAT">VAT-Registered (12% Standard)</option>
+                            <option value="NON-VAT">Non-VAT / Tax Exempt (0%)</option>
+                        </select>
+                        <small style="color:#64748b; font-size:12.5px; margin-top:5px; display:block;">Determines tax classification on transactions, receipts, and reporting.</small>
+                    </div>
+                    <div class="ss-form-group">
+                        <label for="ss_station_vat_tin"><i class="fas fa-id-card" style="color:#002F6C; margin-right:4px;"></i> Taxpayer Identification Number (VAT TIN)</label>
+                        <input type="text" id="ss_station_vat_tin" name="station_vat_tin" class="ss-form-control" placeholder="e.g., 123-456-789-000" value="123-456-789-000">
+                        <small style="color:#64748b; font-size:12.5px; margin-top:5px; display:block;">Printed on official thermal receipts and VAT invoices.</small>
+                    </div>
+                </div>
+                <div class="ss-grid-2">
+                    <div class="ss-form-group">
+                        <label for="ss_tax_rate"><i class="fas fa-percentage" style="color:#002F6C; margin-right:4px;"></i> Value-Added Tax Rate (%)</label>
+                        <input type="number" id="ss_tax_rate" name="tax_rate" class="ss-form-control" value="12" min="0" max="100" step="0.01">
+                        <small style="color:#64748b; font-size:12.5px; margin-top:5px; display:block;">Standard tax rate applied to vatable sales (Standard: 12%).</small>
+                    </div>
+                    <div class="ss-form-group">
+                        <label for="ss_tax_pricing"><i class="fas fa-tag" style="color:#002F6C; margin-right:4px;"></i> Pricing Convention</label>
+                        <select id="ss_tax_pricing" name="tax_pricing" class="ss-form-control" style="background:#f8fafc; font-weight:700; color:#002F6C;">
+                            <option value="inclusive" selected>VAT-Inclusive Selling Prices (Petron Standard)</option>
+                        </select>
+                        <small style="color:#64748b; font-size:12.5px; margin-top:5px; display:block;">Entered/displayed selling prices already include VAT. System extracts VAT ($Gross &times; 12/112$).</small>
+                    </div>
+                </div>
+                <!-- Tax Extraction Formula Guide Notice -->
+                <div style="margin-top:10px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:12px 16px; display:flex; align-items:flex-start; gap:12px;">
+                    <i class="fas fa-info-circle" style="color:#1d4ed8; font-size:20px; margin-top:2px;"></i>
+                    <div style="font-size:13.5px; color:#1e40af; line-height:1.5;">
+                        <strong>VAT-Inclusive Pricing Rule:</strong> For VAT-registered stations, all customer-facing selling prices in the Transactions Hub and product pricing tables already include VAT. The system automatically extracts <strong>Vatable Sales = Gross &divide; 1.12</strong> and <strong>VAT = Gross &minus; Vatable Sales</strong> without adding duplicate taxes on top.
                     </div>
                 </div>
             </div>
 
-                        <!-- Maintenance Settings (Enhanced with Timer & Message) -->
+            <!-- Maintenance Settings (Enhanced with Timer & Message) -->
             <div class="ss-card" id="section_maintenance">
                 <div class="ss-card-title">
                     <i class="fas fa-tools"></i> Maintenance Settings
@@ -1110,6 +1143,18 @@ function populateFormFields(s) {
     document.getElementById('ss_default_orientation').value = s.default_orientation || 'Portrait';
     document.getElementById('ss_show_company_logo_reports').checked = (s.show_company_logo_reports === '1' || s.show_company_logo_reports === 1 || s.show_company_logo_reports === true || s.show_company_logo_reports === undefined);
     document.getElementById('ss_show_report_footer').checked = (s.show_report_footer === '1' || s.show_report_footer === 1 || s.show_report_footer === true || s.show_report_footer === undefined);
+    if (document.getElementById('ss_tax_type')) {
+        document.getElementById('ss_tax_type').value = s.tax_type || (s.is_vat_registered === '0' ? 'NON-VAT' : 'VAT');
+    }
+    if (document.getElementById('ss_station_vat_tin')) {
+        document.getElementById('ss_station_vat_tin').value = s.station_vat_tin || s.vat_tin || '';
+    }
+    if (document.getElementById('ss_tax_rate')) {
+        document.getElementById('ss_tax_rate').value = s.tax_rate || '12';
+    }
+    if (document.getElementById('ss_tax_pricing')) {
+        document.getElementById('ss_tax_pricing').value = s.tax_pricing || 'inclusive';
+    }
     document.getElementById('ss_maintenance_mode').checked = (s.maintenance_mode == '1');
     if (document.getElementById('ss_maintenance_message')) {
         document.getElementById('ss_maintenance_message').value = s.maintenance_message || 'The system is currently undergoing scheduled maintenance to improve performance and stability. Please check back shortly.';
@@ -1546,6 +1591,11 @@ async function saveAllSystemSettings() {
             default_orientation: document.getElementById('ss_default_orientation').value,
             show_company_logo_reports: document.getElementById('ss_show_company_logo_reports').checked ? '1' : '0',
             show_report_footer: document.getElementById('ss_show_report_footer').checked ? '1' : '0',
+            tax_type: document.getElementById('ss_tax_type') ? document.getElementById('ss_tax_type').value : 'VAT',
+            station_vat_tin: document.getElementById('ss_station_vat_tin') ? document.getElementById('ss_station_vat_tin').value.trim() : '',
+            tax_rate: document.getElementById('ss_tax_rate') ? document.getElementById('ss_tax_rate').value : '12',
+            tax_pricing: document.getElementById('ss_tax_pricing') ? document.getElementById('ss_tax_pricing').value : 'inclusive',
+            is_vat_registered: (document.getElementById('ss_tax_type') && document.getElementById('ss_tax_type').value === 'NON-VAT') ? '0' : '1',
             maintenance_mode: document.getElementById('ss_maintenance_mode').checked ? '1' : '0',
             system_status: document.getElementById('ss_system_status').value,
             last_system_update: nowStr,

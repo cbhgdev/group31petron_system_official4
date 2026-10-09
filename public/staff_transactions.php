@@ -561,9 +561,8 @@ Merchandise Inventory
                                             <option value="Cash">Cash</option>
                                             <option value="Card">Card</option>
                                             <option value="E-Wallet">E-Wallet</option>
-                                            <option value="Petron Fleet Card">Petron Fleet Card</option>
+                                            <option value="Petron Value Card (PVC Points)">Petron Value Card (PVC Points)</option>
                                             <option value="Credit Account">Credit Account</option>
-                                            <option value="Petron Loyalty Points">Petron Loyalty Points</option>
                                         </select>
                                     </div>
                                 </div>
@@ -614,11 +613,10 @@ Merchandise Inventory
                                     </div>
                                 </div>
 
-                                <div class="form-row" id="fleet_payment_fields" style="display: none;">
+                                <div class="form-row" id="pvc_payment_fields" style="display: none;">
                                     <div class="form-group">
-                                        <label class="form-label">Petron Fleet Card Number <span style="color: red;">*</span></label>
-                                        <input type="text" name="fleet_card_number" id="fleet_card_number_merch" 
-                                               class="form-input" placeholder="Enter Petron fleet card number">
+                                        <label class="form-label">Petron Value Card (PVC Points)</label>
+                                        <p style="margin: 0; color: #1e40af; font-size: 13px;">Customer loyalty points will be validated and redeemed upon submission.</p>
                                     </div>
                                 </div>
 
@@ -984,12 +982,13 @@ function toggleCashFields() {
     const efuelFields = document.getElementById('efuel_payment_fields');
     const fleetFields = document.getElementById('fleet_payment_fields');
     
-    // Hide all payment-specific fields
+    const pvcFields = document.getElementById('pvc_payment_fields');
     if (cashFields) cashFields.style.display = 'none';
     if (cardFields) cardFields.style.display = 'none';
     if (ewalletFields) ewalletFields.style.display = 'none';
     if (efuelFields) efuelFields.style.display = 'none';
     if (fleetFields) fleetFields.style.display = 'none';
+    if (pvcFields) pvcFields.style.display = 'none';
     
     // Show relevant fields based on payment method
     switch(paymentMethod) {
@@ -1002,9 +1001,8 @@ function toggleCashFields() {
         case 'E-Wallet':
             if (ewalletFields) ewalletFields.style.display = 'flex';
             break;
-        case 'Petron Fleet Card':
-        case 'Fleet Card':
-            if (fleetFields) fleetFields.style.display = 'flex';
+        case 'Petron Value Card (PVC Points)':
+            if (pvcFields) pvcFields.style.display = 'flex';
             break;
         case 'Petron E-Fuel':
             if (efuelFields) efuelFields.style.display = 'flex';
@@ -1175,15 +1173,6 @@ function printReceipt() {
         }
         paymentData.ewallet_reference = ewalletReference;
         paymentData.ewallet_provider = ewalletProvider;
-        paymentData.amount_tendered = getGrandTotal();
-    } else if (paymentMethod === 'Petron Fleet Card' || paymentMethod === 'Fleet Card') {
-        const fleetInput = document.getElementById('fleet_card_number_merch') || document.getElementById('efuel_card_number_merch');
-        const fleetCardNumber = fleetInput ? fleetInput.value.trim() : '';
-        if (!fleetCardNumber) {
-            alert('Please enter Petron Fleet Card number');
-            return;
-        }
-        paymentData.fleet_card_number = fleetCardNumber;
         paymentData.amount_tendered = getGrandTotal();
     } else if (paymentMethod === 'E-Fuel Card' || paymentMethod === 'Petron E-Fuel') {
         const efuelCardNumber = document.getElementById('efuel_card_number_merch').value;

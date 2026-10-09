@@ -904,9 +904,8 @@ function closeModal(id) {
                         <option value="Cash">Cash</option>
                         <option value="Card">Card</option>
                         <option value="E-Wallet">E-Wallet</option>
-                        <option value="Petron Fleet Card">Petron Fleet Card</option>
+                        <option value="Petron Value Card (PVC Points)">Petron Value Card (PVC Points)</option>
                         <option value="Credit Account">Credit Account</option>
-                        <option value="Petron Loyalty Points">Petron Loyalty Points</option>
                     </select>
                 </div>
 
@@ -922,10 +921,10 @@ function closeModal(id) {
                     <small class="muted" style="color: #15803d;">Specify the provider and transaction reference</small>
                 </div>
 
-                <!-- Petron Fleet Card Field -->
-                <div class="form-group mb-3" id="fleet_card_pos_field" style="display: none; background: #eff6ff; border: 1px solid #bfdbfe; padding: 12px; border-radius: 6px;">
-                    <label class="lbl" style="font-weight: 600; color: #1e40af;">Petron Fleet Card Number</label>
-                    <input type="text" name="fleet_card_number" id="fleet_card_number_pos" class="inp full" placeholder="Enter Fleet Card Number">
+                <!-- Petron Value Card (PVC Points) Field -->
+                <div class="form-group mb-3" id="pvc_points_pos_field" style="display: none; background: #eff6ff; border: 1px solid #bfdbfe; padding: 12px; border-radius: 6px;">
+                    <label class="lbl" style="font-weight: 600; color: #1e40af;"><i class="fas fa-id-card"></i> Petron Value Card (PVC Points)</label>
+                    <small class="muted" style="color: #1e40af; display:block; margin-top:2px;">Points will be validated and automatically redeemed upon processing.</small>
                 </div>
 
                 <div class="form-group mb-3">
@@ -1551,8 +1550,9 @@ function toggleCreditFields() {
                 if (prov) prov.value = 'GCash';
             }
         }
-    } else if (paymentType === 'Petron Fleet Card' || paymentType === 'Fleet Card') {
-        if (fleetCardField) fleetCardField.style.display = 'block';
+    } else if (paymentType === 'Petron Value Card (PVC Points)') {
+        const pvcField = document.getElementById('pvc_points_pos_field');
+        if (pvcField) pvcField.style.display = 'block';
     } else if (paymentType === 'Credit Account' || paymentType === 'Account Receivable' || paymentType === 'Credit') {
         if (accountReceivableField) accountReceivableField.style.display = 'block';
     }
@@ -1623,15 +1623,6 @@ function validateMultiPayment() {
         }
     }
 
-    // Additional validation for Petron Fleet Card
-    if (paymentType === 'Petron Fleet Card') {
-        const fc = document.getElementById('fleet_card_number_pos');
-        if (!fc || !fc.value.trim()) {
-            alert('Petron Fleet Card number is required.');
-            return false;
-        }
-    }
-    
     // Additional validation for Credit Account
     if (paymentType === 'Credit Account' || paymentType === 'Account Receivable') {
         const customerId = document.getElementById('customer_id');

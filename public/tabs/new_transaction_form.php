@@ -437,9 +437,8 @@
                     <option value="Cash">Cash</option>
                     <option value="Card">Card</option>
                     <option value="E-Wallet">E-Wallet</option>
-                    <option value="Petron Fleet Card">Petron Fleet Card</option>
+                    <option value="Petron Value Card (PVC Points)">Petron Value Card (PVC Points)</option>
                     <option value="Credit Account">Credit Account</option>
-                    <option value="Petron Loyalty Points">Petron Loyalty Points</option>
                 </select>
             </div>
 
@@ -454,10 +453,10 @@
                 <input type="text" id="unified_ewallet_ref" name="ewallet_reference" placeholder="e.g. GC123456789 or MY123456789" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; box-sizing: border-box;">
             </div>
 
-            <!-- Fleet Card Field -->
-            <div id="unified_fleet_fields" style="display: none; margin-bottom: 1rem; padding: 10px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px;">
-                <label for="unified_fleet_card_number" style="font-weight: 600; color: #1e40af; display: block; margin-bottom: 4px; font-size: 0.85rem;">Petron Fleet Card Number</label>
-                <input type="text" id="unified_fleet_card_number" name="fleet_card_number" placeholder="Enter Fleet Card Number" style="width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 4px; box-sizing: border-box;">
+            <!-- PVC Points Field -->
+            <div id="unified_pvc_fields" style="display: none; margin-bottom: 1rem; padding: 10px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px;">
+                <label style="font-weight: 600; color: #1e40af; display: block; margin-bottom: 4px; font-size: 0.85rem;"><i class="fas fa-id-card"></i> Petron Value Card (PVC Points)</label>
+                <small style="color: #1e40af; display:block;">PVC points redemption will be automatically applied to this transaction.</small>
             </div>
             
             <div class="payment-row">
@@ -765,9 +764,6 @@ async function processTransaction() {
         const ewRef = document.getElementById('unified_ewallet_ref') ? document.getElementById('unified_ewallet_ref').value : '';
         formData.append('ewallet_provider', ewProv);
         formData.append('ewallet_reference', ewRef);
-    } else if (paymentMethod === 'Petron Fleet Card') {
-        const fcNum = document.getElementById('unified_fleet_card_number') ? document.getElementById('unified_fleet_card_number').value : '';
-        formData.append('fleet_card_number', fcNum);
     }
     
     // Service info
@@ -819,9 +815,9 @@ async function processTransaction() {
 function toggleUnifiedPaymentFields() {
     const pm = document.getElementById('payment_method') ? document.getElementById('payment_method').value : '';
     const ewDiv = document.getElementById('unified_ewallet_fields');
-    const flDiv = document.getElementById('unified_fleet_fields');
+    const pvcDiv = document.getElementById('unified_pvc_fields');
     if (ewDiv) ewDiv.style.display = (pm === 'E-Wallet') ? 'block' : 'none';
-    if (flDiv) flDiv.style.display = (pm === 'Petron Fleet Card') ? 'block' : 'none';
+    if (pvcDiv) pvcDiv.style.display = (pm === 'Petron Value Card (PVC Points)') ? 'block' : 'none';
 }
 
 // Initialize

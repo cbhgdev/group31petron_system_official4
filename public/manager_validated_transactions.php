@@ -1315,9 +1315,8 @@ try {
                     <option value="E-Wallet" <?php echo $payment_method === 'E-Wallet' ? 'selected' : ''; ?>>E-Wallet</option>
                     <option value="GCash" <?php echo $payment_method === 'GCash' ? 'selected' : ''; ?>>&nbsp;&nbsp;↳ GCash</option>
                     <option value="Maya" <?php echo $payment_method === 'Maya' ? 'selected' : ''; ?>>&nbsp;&nbsp;↳ Maya</option>
-                    <option value="Petron Fleet Card" <?php echo in_array($payment_method, ['Petron Fleet Card', 'Fleet Card'], true) ? 'selected' : ''; ?>>Petron Fleet Card</option>
                     <option value="Credit Account" <?php echo in_array($payment_method, ['Credit Account', 'Credit'], true) ? 'selected' : ''; ?>>Credit Account</option>
-                    <option value="Petron Loyalty Points" <?php echo in_array($payment_method, ['Petron Loyalty Points', 'Loyalty Points'], true) ? 'selected' : ''; ?>>Petron Loyalty Points</option>
+                    <option value="Petron Value Card (PVC Points)" <?php echo in_array($payment_method, ['Petron Value Card (PVC Points)', 'Petron Loyalty Points', 'Loyalty Points', 'PVC Points'], true) ? 'selected' : ''; ?>>Petron Value Card (PVC Points)</option>
                 </select>
             </div>
             <!-- Shift Filter -->
@@ -2660,7 +2659,7 @@ function openAdjustModal(rowId, txnId, customer, entryType, txnDate, staffName, 
                 return pm;
             })(payMethod);
 
-            const validPayMethods = ['Cash', 'Card', 'E-Wallet', 'Petron Fleet Card', 'Credit Account', 'Petron Loyalty Points'];
+            const validPayMethods = ['Cash', 'Card', 'E-Wallet', 'Petron Value Card (PVC Points)', 'Credit Account'];
 
             let html = `
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 20px;margin-bottom:16px;padding:14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:13px;">

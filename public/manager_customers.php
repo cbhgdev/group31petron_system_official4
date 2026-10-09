@@ -1313,9 +1313,8 @@ button.remove-v-btn i {
                             <option value="Cash">Cash</option>
                             <option value="Card">Card</option>
                             <option value="E-Wallet">E-Wallet</option>
-                            <option value="Petron Fleet Card">Petron Fleet Card</option>
+                            <option value="Petron Value Card (PVC Points)">Petron Value Card (PVC Points)</option>
                             <option value="Credit Account">Credit Account</option>
-                            <option value="Petron Loyalty Points">Petron Loyalty Points</option>
                         </select>
                     </div>
                     <div class="cust-field" id="arEwalletProviderField" style="display:none;">
@@ -2457,7 +2456,7 @@ function openPaymentModal(reference = '', balance = 0, source = '', sourceId = 0
     const targetMethod = matchedRow ? (matchedRow.payment_method || 'Cash') : 'Cash';
 
     // Populate dropdown with methods from DB + current target method
-    const defaultMethods = ['Cash', 'Card', 'E-Wallet', 'Petron Fleet Card', 'Credit Account', 'Petron Loyalty Points'];
+    const defaultMethods = ['Cash', 'Card', 'E-Wallet', 'Petron Value Card (PVC Points)', 'Credit Account'];
     const availableMethods = window.currentPaymentMethodsData && window.currentPaymentMethodsData.length
         ? window.currentPaymentMethodsData
         : defaultMethods;

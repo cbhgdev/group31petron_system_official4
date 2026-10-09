@@ -212,7 +212,7 @@ function fetchMerchandiseServiceReport($pdo, $station_id, $date_start, $date_end
         } catch (Exception $e) {}
         
         // Aggregate payments into canonical taxonomy
-        $canonical_types = ['Cash', 'Card', 'E-Wallet', 'Petron Fleet Card', 'Credit Account', 'Petron Loyalty Points'];
+        $canonical_types = ['Cash', 'Card', 'E-Wallet', 'Petron Value Card (PVC Points)', 'Credit Account', 'Petron Fleet Card', 'Petron Loyalty Points'];
         $aggregated = [];
         foreach ($canonical_types as $ct) {
             $aggregated[$ct] = [

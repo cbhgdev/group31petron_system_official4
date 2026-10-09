@@ -292,7 +292,7 @@ try {
     $stmt->execute();
     $raw_payments = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
-    $canonical_order = ['Cash', 'Card', 'E-Wallet', 'Petron Fleet Card', 'Credit Account', 'Petron Loyalty Points'];
+    $canonical_order = ['Cash', 'Card', 'E-Wallet', 'Petron Value Card (PVC Points)', 'Credit Account', 'Petron Fleet Card', 'Petron Loyalty Points'];
     $payment_breakdown_map = [];
 
     foreach ($raw_payments as $rp) {

@@ -653,9 +653,8 @@ overflow: hidden;
                 <option value="E-Wallet" <?=$f_pay==='E-Wallet'?'selected':''?>>E-Wallet</option>
                 <option value="GCash" <?=$f_pay==='GCash'?'selected':''?>>&nbsp;&nbsp;↳ GCash</option>
                 <option value="Maya" <?=$f_pay==='Maya'?'selected':''?>>&nbsp;&nbsp;↳ Maya</option>
-                <option value="Petron Fleet Card" <?=in_array($f_pay, ['Petron Fleet Card', 'Fleet Card'], true)?'selected':''?>>Petron Fleet Card</option>
                 <option value="Credit Account" <?=in_array($f_pay, ['Credit Account', 'Credit'], true)?'selected':''?>>Credit Account</option>
-                <option value="Petron Loyalty Points" <?=in_array($f_pay, ['Petron Loyalty Points', 'Loyalty Points'], true)?'selected':''?>>Petron Loyalty Points</option>
+                <option value="Petron Value Card (PVC Points)" <?=in_array($f_pay, ['Petron Value Card (PVC Points)', 'Petron Loyalty Points', 'Loyalty Points', 'PVC Points'], true)?'selected':''?>>Petron Value Card (PVC Points)</option>
             </select>
         </div>
         <div>

@@ -32,7 +32,14 @@ function loyalty_ensure_tables(PDO $pdo): void {
         if ((int)$stmt->fetchColumn() === 0) {
             $pdo->exec("
                 INSERT INTO loyalty_programs (id, program_name, points_per_amount, minimum_redeem_points, redemption_value, status)
-                VALUES (1, 'Petron Rewards Card', 100.00, 1, 1.00, 'active')
+                VALUES (1, 'Petron Value Card (PVC)', 100.00, 1, 1.00, 'active')
+            ");
+        } else {
+            // Ensure program 1 reflects Petron Value Card (PVC)
+            $pdo->exec("
+                UPDATE loyalty_programs 
+                SET program_name = 'Petron Value Card (PVC)' 
+                WHERE id = 1 AND (program_name = 'Petron Rewards Card' OR program_name LIKE '%Rewards%')
             ");
         }
 
@@ -79,30 +86,6 @@ function loyalty_ensure_tables(PDO $pdo): void {
                 KEY `idx_reference` (`reference_id`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         ");
-
-        // Auto-create loyalty_accounts for any existing customers that don't have one yet
-        $custs = $pdo->query("
-            SELECT c.id, c.customer_id, c.points 
-            FROM customers c 
-            LEFT JOIN loyalty_accounts la ON la.customer_id = c.id
-            WHERE la.id IS NULL
-        ")->fetchAll(PDO::FETCH_ASSOC);
-
-        $insStmt = $pdo->prepare("
-            INSERT INTO loyalty_accounts (customer_id, program_id, card_number, points_balance, status)
-            VALUES (?, 1, ?, ?, 'active')
-        ");
-        foreach ($custs as $c) {
-            $cardNo = !empty($c['customer_id']) ? $c['customer_id'] : ('CUS-1253-' . date('Ym') . '-' . str_pad($c['id'], 3, '0', STR_PAD_LEFT));
-            $pts = (int)($c['points'] ?? 0);
-            try {
-                $insStmt->execute([$c['id'], $cardNo, $pts]);
-            } catch (Exception $e) {
-                // If card_number duplicate, use custom unique
-                $insStmt->execute([$c['id'], 'CUS-LOYALTY-' . $c['id'], $pts]);
-            }
-        }
-
     } catch (Exception $e) {
         error_log('loyalty_ensure_tables error: ' . $e->getMessage());
     }
@@ -110,6 +93,39 @@ function loyalty_ensure_tables(PDO $pdo): void {
     if (session_status() === PHP_SESSION_ACTIVE) {
         $_SESSION['loyalty_tables_ensured'] = true;
     }
+}
+
+/**
+ * Authoritatively get existing linked PVC account for a customer.
+ * NEVER creates a card automatically.
+ */
+function get_customer_pvc_account(PDO $pdo, int $customerId): ?array {
+    loyalty_ensure_tables($pdo);
+    if ($customerId <= 0) {
+        return null;
+    }
+    $stmt = $pdo->prepare("SELECT * FROM loyalty_accounts WHERE customer_id = ? AND program_id = 1 AND status = 'active' LIMIT 1");
+    $stmt->execute([$customerId]);
+    $account = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($account) {
+        return $account;
+    }
+    // Also check if customer has a card number in customers table and ensure it exists in loyalty_accounts
+    try {
+        $cStmt = $pdo->prepare("SELECT id, name, customer_id, id_number, points, loyalty_card_no FROM customers WHERE id = ? LIMIT 1");
+        $cStmt->execute([$customerId]);
+        $cust = $cStmt->fetch(PDO::FETCH_ASSOC);
+        if ($cust) {
+            $cardNo = trim((string)($cust['loyalty_card_no'] ?: $cust['customer_id'] ?: ''));
+            if ($cardNo !== '') {
+                $ins = $pdo->prepare("INSERT INTO loyalty_accounts (customer_id, program_id, card_number, points_balance, status) VALUES (?, 1, ?, ?, 'active') ON DUPLICATE KEY UPDATE points_balance = VALUES(points_balance), status = 'active'");
+                $ins->execute([$customerId, $cardNo, (int)($cust['points'] ?? 0)]);
+                $stmt->execute([$customerId]);
+                return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            }
+        }
+    } catch (Exception $e) {}
+    return null;
 }
 
 /**

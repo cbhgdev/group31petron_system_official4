@@ -587,14 +587,13 @@ try {
 
 // â”€â”€ Config lookups — DB-driven with safe fallbacks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 $payment_methods = [
-    ['method_key' => 'Cash',                  'method_name' => 'Cash'],
-    ['method_key' => 'Card',                  'method_name' => 'Card'],
-    ['method_key' => 'E-Wallet',              'method_name' => 'E-Wallet'],
-    ['method_key' => 'GCash',                 'method_name' => '— GCash'],
-    ['method_key' => 'Maya',                  'method_name' => '— Maya'],
-    ['method_key' => 'Petron Fleet Card',     'method_name' => 'Petron Fleet Card'],
-    ['method_key' => 'Credit Account',        'method_name' => 'Credit Account'],
-    ['method_key' => 'Petron Loyalty Points', 'method_name' => 'Petron Loyalty Points'],
+    ['method_key' => 'Cash',                           'method_name' => 'Cash'],
+    ['method_key' => 'Card',                           'method_name' => 'Card'],
+    ['method_key' => 'E-Wallet',                       'method_name' => 'E-Wallet'],
+    ['method_key' => 'GCash',                          'method_name' => '— GCash'],
+    ['method_key' => 'Maya',                           'method_name' => '— Maya'],
+    ['method_key' => 'Petron Value Card (PVC Points)',  'method_name' => 'Petron Value Card (PVC Points)'],
+    ['method_key' => 'Credit Account',                 'method_name' => 'Credit Account'],
 ];
 
 // â”€â”€ Status normaliser â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1025,8 +1024,9 @@ $payment_summary = [
     'Cash' => 0,
     'Card' => 0,
     'E-Wallet' => 0,
-    'Petron Fleet Card' => 0,
+    'Petron Value Card (PVC Points)' => 0,
     'Credit Account' => 0,
+    'Petron Fleet Card' => 0,
     'Petron Loyalty Points' => 0,
 ];
 $ewallet_by_provider = ['GCash' => 0, 'Maya' => 0];

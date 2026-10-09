@@ -94,6 +94,16 @@ if (empty($loyalty_programs_list)) {
     ];
 }
 
+$station_tax_cfg = function_exists('petron_get_station_tax_config') ? petron_get_station_tax_config((int)$station_id) : [
+    'station_id' => (int)$station_id,
+    'is_vat_registered' => true,
+    'tax_type' => 'VAT',
+    'tax_rate' => 0.12,
+    'tax_percent' => 12.0,
+    'pricing' => 'inclusive',
+    'tax_label' => 'VAT (12%)'
+];
+
 // Active sub-section: merchandise | history | fuel | fuel_history
 $section = $_GET['section'] ?? 'merchandise';
 if (!in_array($section, ['merchandise', 'history', 'fuel', 'fuel_history'])) {
@@ -271,10 +281,14 @@ try {
             {$customerContactExpr} AS contact_number,
             {$customerCreditLimitExpr} AS credit_limit,
             {$customerBalanceExpr} AS balance,
+            la.id AS loyalty_account_id,
             COALESCE(la.points_balance, {$customerPointsExpr}, 0) AS points,
+            COALESCE(la.points_balance, {$customerPointsExpr}, 0) AS pvc_points_balance,
             {$customerIdExpr} AS customer_id,
             {$customerIdNumberExpr} AS id_number,
-            COALESCE(NULLIF(la.card_number,''), {$customerLoyaltyCardExpr}, {$customerIdExpr}, {$customerIdNumberExpr}, '') AS loyalty_card_no,
+            COALESCE(NULLIF(la.card_number, ''), NULLIF({$customerLoyaltyCardExpr}, ''), '') AS loyalty_card_no,
+            COALESCE(NULLIF(la.card_number, ''), NULLIF({$customerLoyaltyCardExpr}, ''), '') AS pvc_card_number,
+            CASE WHEN (la.id IS NOT NULL AND la.card_number IS NOT NULL AND la.card_number != '') OR (NULLIF({$customerLoyaltyCardExpr}, '') IS NOT NULL) THEN 1 ELSE 0 END AS has_pvc_card,
             COALESCE(la.status, 'active') AS loyalty_status,
             COALESCE(NULLIF(cv.vehicle_type,''), {$customerVehicleTypeExpr}) AS vehicle_type,
             COALESCE(NULLIF(cv.brand,''), {$customerMakeExpr}) AS vehicle_brand,
@@ -284,7 +298,7 @@ try {
             COALESCE(NULLIF(cv.engine_no,''), {$customerEngineExpr}) AS engine_number,
             COALESCE(NULLIF(cv.chassis_no,''), {$customerChassisExpr}) AS chassis_number
         FROM customers c
-        LEFT JOIN loyalty_accounts la ON la.customer_id = c.id AND la.program_id = 1
+        LEFT JOIN loyalty_accounts la ON la.customer_id = c.id AND la.program_id = 1 AND la.status = 'active'
         LEFT JOIN (
             SELECT cv1.* FROM customer_vehicles cv1
             INNER JOIN (
@@ -310,6 +324,22 @@ try {
 } catch (Exception $e) { 
     $customers = []; 
     $customer_names = [];
+}
+
+// ── PVC Loyalty Program Configuration ──────────────────────────────────────────
+$pvc_program = null;
+$pvc_conversion_rate = 1.00;
+try {
+    require_once __DIR__ . '/../backend/loyalty_schema_fix.php';
+    loyalty_ensure_tables($pdo);
+    $lpStmt = $pdo->query("SELECT * FROM loyalty_programs WHERE status = 'active' ORDER BY id ASC LIMIT 1");
+    $pvc_program = $lpStmt ? $lpStmt->fetch(PDO::FETCH_ASSOC) : null;
+    if ($pvc_program) {
+        $pvc_conversion_rate = floatval($pvc_program['redemption_value'] ?? 1.00) ?: 1.00;
+    }
+} catch (Exception $e) {
+    $pvc_program = null;
+    $pvc_conversion_rate = 1.00;
 }
 
 // ── Current shift ─────────────────────────────────────────────────────────────
@@ -1048,10 +1078,10 @@ if ($section === 'history' || $section === 'fuel_history') {
                 $merch_where2  .= " AND mt.payment_method IN ('Card', 'Credit Card', 'Debit Card')";
             } elseif ($hist_filter_pay === 'Credit Account') {
                 $merch_where2  .= " AND mt.payment_method IN ('Credit Account', 'Credit', 'Credit (Utang)', 'Account Receivable', 'Accounts Receivable')";
+            } elseif ($hist_filter_pay === 'Petron Value Card (PVC Points)' || $hist_filter_pay === 'Petron Loyalty Points') {
+                $merch_where2  .= " AND (mt.payment_method IN ('Petron Value Card (PVC Points)', 'Petron Loyalty Points', 'Loyalty Points') OR mt.payment_method LIKE '%PVC%' OR mt.payment_method LIKE '%Value Card%' OR COALESCE(mt.loyalty_points_redeemed, 0) > 0)";
             } elseif ($hist_filter_pay === 'Petron Fleet Card') {
                 $merch_where2  .= " AND (mt.payment_method IN ('Petron Fleet Card', 'Fleet Card') OR mt.payment_method LIKE '%Fleet%')";
-            } elseif ($hist_filter_pay === 'Petron Loyalty Points') {
-                $merch_where2  .= " AND (mt.payment_method IN ('Petron Loyalty Points', 'Loyalty Points') OR COALESCE(mt.loyalty_points_redeemed, 0) > 0)";
             } else {
                 $merch_where2  .= " AND mt.payment_method = ?";
                 $merch_params2[] = $hist_filter_pay;
@@ -1509,12 +1539,14 @@ if ($section === 'merchandise') {
                 // ── settle_payment: capture amount, compute balance, set status ──────
                 if ($jo_action === 'settle_payment') {
                     $amount_now   = round((float)($_POST['settle_amount'] ?? 0), 2);
-                    $pay_method   = trim($_POST['settle_method'] ?? 'Cash');
+                    $raw_pay_method = trim($_POST['settle_method'] ?? 'Cash');
+                    $norm_pay     = normalize_payment_type($raw_pay_method);
+                    $pay_method   = $norm_pay['payment_type'];
                     $remarks      = trim($_POST['settle_remarks'] ?? '');
                     $mark_complete = !empty($_POST['mark_complete_on_settle']);
 
                     if ($jo_src === 'merchandise_transactions') {
-                        $row = $pdo->prepare("SELECT id, transaction_id, total_amount, COALESCE(amount_paid,0) AS amount_paid, COALESCE(balance_due, total_amount) AS balance_due, customer_name FROM merchandise_transactions WHERE id=? AND (station_id=? OR ?=0) LIMIT 1");
+                        $row = $pdo->prepare("SELECT id, transaction_id, total_amount, COALESCE(amount_paid,0) AS amount_paid, COALESCE(balance_due, total_amount) AS balance_due, customer_name, customer_id FROM merchandise_transactions WHERE id=? AND (station_id=? OR ?=0) LIMIT 1");
                         $row->execute([$jo_id, $station_id, $station_id]);
                         $cur = $row->fetch(PDO::FETCH_ASSOC);
                         if ($cur) {
@@ -1528,6 +1560,26 @@ if ($section === 'merchandise') {
                             $params = [$new_status, $new_ar_stat, $new_paid, $new_balance, $pay_method];
                             if ($mark_complete || $new_balance <= 0.009) { $sets .= ", workflow_status='Completed'"; }
                             $pdo->prepare("UPDATE merchandise_transactions SET $sets WHERE id=? AND (station_id=? OR ?=0)")->execute(array_merge($params, [$jo_id, $station_id, $station_id]));
+
+                            if ($pay_method === 'Petron Value Card (PVC Points)' && !empty($cur['customer_id'])) {
+                                try {
+                                    $cId = (int)$cur['customer_id'];
+                                    $pvcAcc = get_customer_pvc_account($pdo, $cId);
+                                    if ($pvcAcc && (int)$pvcAcc['points_balance'] > 0) {
+                                        $ptsNeeded = min((int)$pvcAcc['points_balance'], (int)ceil($amount_now / $pvc_conversion_rate));
+                                        $discVal = round($ptsNeeded * $pvc_conversion_rate, 2);
+                                        $newBal = max(0, (int)$pvcAcc['points_balance'] - $ptsNeeded);
+                                        $pdo->prepare("UPDATE loyalty_accounts SET points_balance = ?, updated_at = NOW() WHERE id = ?")->execute([$newBal, $pvcAcc['id']]);
+                                        $pdo->prepare("UPDATE customers SET points = ? WHERE id = ?")->execute([$newBal, $cId]);
+                                        $pdo->prepare("INSERT INTO loyalty_transactions (loyalty_account_id, customer_id, reference_id, transaction_type, points_earned, points_redeemed, points_balance_after, created_by, created_at, remarks) VALUES (?, ?, ?, 'Settlement', 0, ?, ?, ?, NOW(), ?)")
+                                            ->execute([$pvcAcc['id'], $cId, $cur['transaction_id'] ?? '', $ptsNeeded, $newBal, $me['id'] ?? null, "Settlement - PVC Points: {$ptsNeeded} pts (₱" . number_format($discVal, 2) . ")"]);
+                                        $pdo->prepare("UPDATE merchandise_transactions SET loyalty_points_redeemed = COALESCE(loyalty_points_redeemed, 0) + ?, loyalty_discount_amount = COALESCE(loyalty_discount_amount, 0) + ? WHERE id = ?")
+                                            ->execute([$ptsNeeded, $discVal, $jo_id]);
+                                    }
+                                } catch (Exception $pvcSettleErr) {
+                                    error_log("PVC settlement error: " . $pvcSettleErr->getMessage());
+                                }
+                            }
 
                             try {
                                 $jo_sync_sets = "payment_status=?, amount_paid=?, balance_due=?, payment_method=?, updated_at=NOW()";
@@ -1551,7 +1603,7 @@ if ($section === 'merchandise') {
                             $_SESSION['success'] = $new_status === 'Paid' ? 'Payment fully settled. Balance: ₱0.00.' : 'Partial payment recorded. Balance due: ₱' . number_format($new_balance, 2) . '.';
                         }
                     } else {
-                        $row = $pdo->prepare("SELECT COALESCE(total_cost,estimated_cost,0) AS total_amount, COALESCE(amount_paid,0) AS amount_paid, COALESCE(balance_due, COALESCE(total_cost,estimated_cost,0)) AS balance_due FROM job_orders WHERE id=? AND (station_id=? OR ?=0) LIMIT 1");
+                        $row = $pdo->prepare("SELECT id, job_order_id, COALESCE(total_cost,estimated_cost,0) AS total_amount, COALESCE(amount_paid,0) AS amount_paid, COALESCE(balance_due, COALESCE(total_cost,estimated_cost,0)) AS balance_due, customer_id, customer_name FROM job_orders WHERE id=? AND (station_id=? OR ?=0) LIMIT 1");
                         $row->execute([$jo_id, $station_id, $station_id]);
                         $cur = $row->fetch(PDO::FETCH_ASSOC);
                         if ($cur) {
@@ -1564,6 +1616,36 @@ if ($section === 'merchandise') {
                             $params = [$new_status, $new_paid, $new_balance, $pay_method];
                             if ($mark_complete || $new_balance <= 0.009) { $sets .= ", status='Completed'"; }
                             $pdo->prepare("UPDATE job_orders SET $sets WHERE id=? AND (station_id=? OR ?=0)")->execute(array_merge($params, [$jo_id, $station_id, $station_id]));
+
+                            if ($pay_method === 'Petron Value Card (PVC Points)') {
+                                try {
+                                    $cId = !empty($cur['customer_id']) ? (int)$cur['customer_id'] : 0;
+                                    if (!$cId && !empty($cur['customer_name'])) {
+                                        $cStmt = $pdo->prepare("SELECT id FROM customers WHERE station_id = ? AND (LOWER(TRIM(name)) = LOWER(TRIM(?)) OR LOWER(TRIM(CONCAT_WS(' ', first_name, last_name))) = LOWER(TRIM(?))) LIMIT 1");
+                                        $cStmt->execute([$station_id, $cur['customer_name'], $cur['customer_name']]);
+                                        $cId = (int)$cStmt->fetchColumn();
+                                    }
+                                    if ($cId > 0) {
+                                        $pvcAcc = get_customer_pvc_account($pdo, $cId);
+                                        if ($pvcAcc && (int)$pvcAcc['points_balance'] > 0) {
+                                            $ptsNeeded = min((int)$pvcAcc['points_balance'], (int)ceil($amount_now / $pvc_conversion_rate));
+                                            $discVal = round($ptsNeeded * $pvc_conversion_rate, 2);
+                                            $newBal = max(0, (int)$pvcAcc['points_balance'] - $ptsNeeded);
+                                            $pdo->prepare("UPDATE loyalty_accounts SET points_balance = ?, updated_at = NOW() WHERE id = ?")->execute([$newBal, $pvcAcc['id']]);
+                                            $pdo->prepare("UPDATE customers SET points = ? WHERE id = ?")->execute([$newBal, $cId]);
+                                            $pdo->prepare("INSERT INTO loyalty_transactions (loyalty_account_id, customer_id, reference_id, transaction_type, points_earned, points_redeemed, points_balance_after, created_by, created_at, remarks) VALUES (?, ?, ?, 'Settlement', 0, ?, ?, ?, NOW(), ?)")
+                                                ->execute([$pvcAcc['id'], $cId, $cur['job_order_id'] ?? ('JO-' . $jo_id), $ptsNeeded, $newBal, $me['id'] ?? null, "Settlement - PVC Points: {$ptsNeeded} pts (₱" . number_format($discVal, 2) . ")"]);
+                                            try {
+                                                $pdo->prepare("UPDATE merchandise_transactions SET loyalty_points_redeemed = COALESCE(loyalty_points_redeemed, 0) + ?, loyalty_discount_amount = COALESCE(loyalty_discount_amount, 0) + ? WHERE (job_order_db_id = ? OR id = ?) AND (station_id=? OR ?=0)")
+                                                    ->execute([$ptsNeeded, $discVal, $jo_id, $jo_id, $station_id, $station_id]);
+                                            } catch (Exception $mt_pvc) {}
+                                        }
+                                    }
+                                } catch (Exception $pvcSettleErr) {
+                                    error_log("PVC settlement error in job_orders: " . $pvcSettleErr->getMessage());
+                                }
+                            }
+
                             try {
                                 $mt_sync_sets = "payment_status=?, amount_paid=?, balance_due=?, payment_method=?, updated_at=NOW()";
                                 if ($mark_complete || $new_balance <= 0.009) { $mt_sync_sets .= ", workflow_status='Completed'"; }
@@ -6923,6 +7005,9 @@ setTimeout(function() {
                             <button type="button" class="txn-btn secondary" onclick="resetJobOrderForm()" title="Reset all job order fields">
                                 <i class="fas fa-undo"></i> Reset
                             </button>
+                            <button type="button" id="joAddToCartBtn" class="txn-btn primary" onclick="addServiceFromFormToCart()" style="background:#002F70;border-color:#002F70;display:inline-flex;align-items:center;gap:6px;font-weight:700;" title="Add Job Order Service to Cart">
+                                <i class="fas fa-cart-plus"></i> Add Service to Cart
+                            </button>
                         </div>
 
                         <!-- Mechanic busy warning banner -->
@@ -8176,7 +8261,7 @@ setTimeout(function() {
                             <option value="Cash">Cash</option>
                             <option value="Card">Card</option>
                             <option value="E-Wallet">E-Wallet</option>
-                            <option value="Petron Fleet Card">Petron Fleet Card</option>
+                            <option value="Petron Value Card (PVC Points)">Petron Value Card (PVC Points)</option>
                             <option value="Credit Account">Credit Account</option>
                         </select>
                     </div>
@@ -8264,71 +8349,52 @@ setTimeout(function() {
                         </div>
                     </div>
 
-                    <!-- Petron Fleet Card fields -->
-                    <div id="fleetCardFields" style="display:none;margin-bottom:8px;">
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Amount Paid <span style="color:#dc2626;">*</span></label>
-                                <input type="number" id="fcAmount" class="txn-input" style="font-size:12px;padding:7px 10px;"
-                                       step="0.01" min="0" placeholder="₱0.00"
-                                       oninput="onPaymentAmountInput('fcAmount'); if(typeof calcFleetRewards === 'function') calcFleetRewards();">
-                            </div>
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Fleet Card Number <span style="color:#dc2626;">*</span></label>
-                                <input type="text" id="fcNumber" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="Card #">
-                            </div>
-                        </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Fleet Account / Company <span style="color:#dc2626;">*</span></label>
-                                <input type="text" id="fcCompanyName" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="Company Name">
-                            </div>
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Transaction Reference / Auth No.</label>
-                                <input type="text" id="fcAuthNumber" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="Auth / Ref #">
-                            </div>
-                        </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Vehicle / Plate Number (Opt)</label>
-                                <input type="text" id="fcPlateNumber" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="e.g. ABC 1234">
-                            </div>
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Odometer Reading (Opt)</label>
-                                <input type="text" id="fcOdometer" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="e.g. 45000 km">
-                            </div>
-                        </div>
-
-                        <!-- Fleet Card Rewards Box (Separate Section) -->
-                        <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;margin-top:6px;">
-                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                                <span style="font-size:10.5px;font-weight:700;color:#002F70;text-transform:uppercase;letter-spacing:0.3px;display:flex;align-items:center;gap:5px;">
-                                    <i class="fas fa-award" style="color:#f59e0b;"></i> Fleet Card Rewards Info
+                    <!-- Petron Value Card (PVC Points) fields -->
+                    <div id="pvcPointsFields" style="display:none;margin-bottom:8px;">
+                        <div style="background:#f0fdf4;border:1.5px solid #86efac;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #bbf7d0;">
+                                <span style="font-size:11px;font-weight:700;color:#166534;display:flex;align-items:center;gap:6px;">
+                                    <i class="fas fa-id-card" style="color:#15803d;"></i> Petron Value Card (PVC) Redemption
                                 </span>
-                                <span style="font-size:9.5px;color:#64748b;background:#e2e8f0;padding:2px 6px;border-radius:4px;font-weight:600;">Fleet Program</span>
+                                <span id="pvcRateBadge" style="font-size:9.5px;color:#166534;background:#dcfce7;padding:2px 8px;border-radius:10px;font-weight:700;border:1px solid #86efac;">
+                                    ₱<?= number_format($pvc_conversion_rate, 2) ?> / pt
+                                </span>
+                            </div>
+                            <div id="pvcCustomerNotice" style="display:none;font-size:11px;font-weight:600;color:#991b1b;background:#fee2e2;border:1px solid #fca5a5;padding:6px 10px;border-radius:6px;margin-bottom:8px;">
+                                <i class="fas fa-exclamation-triangle"></i> Please select a customer with an active linked Petron Value Card.
                             </div>
                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">
                                 <div class="txn-field">
-                                    <label style="font-size:9.5px;font-weight:600;color:#475569;">Rewards Balance</label>
-                                    <input type="number" id="fcRewardsBalance" class="txn-input" style="font-size:11.5px;padding:5px 8px;background:#fff;font-weight:600;" value="0" min="0" oninput="if(typeof calcFleetRewards === 'function') calcFleetRewards();" placeholder="0">
+                                    <label style="font-size:10px;font-weight:600;color:#374151;">Linked PVC Card #</label>
+                                    <input type="text" id="pvcCardNumberDisplay" class="txn-input" style="font-size:11.5px;padding:6px 8px;background:#ffffff;font-weight:700;color:#1e3a8a;" readonly placeholder="No linked card">
                                 </div>
                                 <div class="txn-field">
-                                    <label style="font-size:9.5px;font-weight:600;color:#475569;">Points Earned</label>
-                                    <input type="number" id="fcPointsEarned" class="txn-input" style="font-size:11.5px;padding:5px 8px;background:#f0fdf4;font-weight:700;color:#16a34a;" readonly value="0">
+                                    <label style="font-size:10px;font-weight:600;color:#374151;">Available Points Balance</label>
+                                    <input type="text" id="pvcAvailablePoints" class="txn-input" style="font-size:11.5px;padding:6px 8px;background:#ffffff;font-weight:700;color:#15803d;" readonly value="0" placeholder="0">
+                                </div>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">
+                                <div class="txn-field">
+                                    <label style="font-size:10px;font-weight:600;color:#374151;">Points Redeemed <span style="font-size:9px;color:#15803d;">(Auto-Calculated)</span></label>
+                                    <input type="number" id="pvcPointsRedeemed" class="txn-input" style="font-size:11.5px;padding:6px 8px;background:#f8fafc;font-weight:700;color:#0f172a;" readonly value="0">
+                                </div>
+                                <div class="txn-field">
+                                    <label style="font-size:10px;font-weight:600;color:#374151;">Loyalty Discount (₱)</label>
+                                    <input type="text" id="pvcDiscountDisplay" class="txn-input" style="font-size:11.5px;padding:6px 8px;background:#dcfce7;font-weight:700;color:#166534;" readonly value="₱0.00">
                                 </div>
                             </div>
                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px;">
                                 <div class="txn-field">
-                                    <label style="font-size:9.5px;font-weight:600;color:#475569;">Points Redeemed (Opt)</label>
-                                    <input type="number" id="fcPointsRedeemed" class="txn-input" style="font-size:11.5px;padding:5px 8px;" min="0" value="0" oninput="if(typeof calcFleetRewards === 'function') calcFleetRewards();" placeholder="0">
+                                    <label style="font-size:10px;font-weight:600;color:#374151;">Points Balance After</label>
+                                    <input type="text" id="pvcPointsAfter" class="txn-input" style="font-size:11.5px;padding:6px 8px;background:#eff6ff;font-weight:700;color:#1d4ed8;" readonly value="0">
                                 </div>
                                 <div class="txn-field">
-                                    <label style="font-size:9.5px;font-weight:600;color:#475569;">Remaining Points</label>
-                                    <input type="number" id="fcPointsAfter" class="txn-input" style="font-size:11.5px;padding:5px 8px;background:#eff6ff;font-weight:700;color:#1d4ed8;" readonly value="0">
+                                    <label style="font-size:10px;font-weight:600;color:#374151;">Remaining Balance Due</label>
+                                    <input type="text" id="pvcRemainingBalanceDisplay" class="txn-input" style="font-size:11.5px;padding:6px 8px;background:#fff7ed;font-weight:700;color:#c2410c;" readonly value="₱0.00">
                                 </div>
                             </div>
-                            <div style="font-size:9px;color:#64748b;line-height:1.3;margin-top:4px;border-top:1px dashed #e2e8f0;padding-top:4px;">
-                                <i class="fas fa-info-circle" style="color:#3b82f6;"></i> <em>Note: Fleet Card points are locally recorded/test points for demonstration and fleet customer records. Official live fleet integration is not active.</em>
+                            <div style="font-size:9.5px;color:#475569;line-height:1.3;margin-top:6px;border-top:1px dashed #86efac;padding-top:5px;">
+                                <i class="fas fa-check-circle" style="color:#16a34a;"></i> Eligible redemption points and discount value are calculated automatically based on the linked loyalty account balance.
                             </div>
                         </div>
                     </div>
@@ -8430,9 +8496,6 @@ setTimeout(function() {
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                        <div id="fleetCardLoyaltyNotice" style="display:none;margin-top:6px;padding:6px 8px;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;font-size:10px;color:#92400e;line-height:1.3;">
-                            <i class="fas fa-info-circle"></i> <strong>Note:</strong> Purchases paid using <em>Petron Fleet Card</em> earn Fleet Card rewards and are excluded from earning Petron Value Card / Rewards points.
-                        </div>
                     </div>
 
                     <!-- Loyalty Fields (hidden by default, shown when Loyalty Program is selected) -->
@@ -8530,11 +8593,11 @@ setTimeout(function() {
                 <!-- ── Totals + Checkout (pinned bottom) ─────────── -->
                 <div class="cart-footer">
                     <div class="cart-total-row">
-                        <span>Subtotal</span>
+                        <span id="cartSubtotalLabel"><?= (!empty($station_tax_cfg['is_vat_registered'])) ? 'Vatable Sales' : 'Non-VAT Sales' ?></span>
                         <span class="calc-val" id="cartSubtotal">₱0.00</span>
                     </div>
                     <div class="cart-total-row">
-                        <span>VAT (12%)</span>
+                        <span id="cartVatLabel"><?= htmlspecialchars($station_tax_cfg['tax_label'] ?? 'VAT (12%)') ?></span>
                         <span class="calc-val" id="cartVat">₱0.00</span>
                     </div>
                     <div class="cart-total-row" id="cartLoyaltyDiscountRow" style="display:none;color:#dc2626;">
@@ -9078,6 +9141,7 @@ setTimeout(function() {
             }
         };
         let selectedProduct = null;
+        const stationTaxConfig = <?= json_encode($station_tax_cfg) ?>;
         const pointsPerAmount = <?= (float)$points_per_amount ?>;
         const redemptionValue  = <?= (float)$redemption_value ?>;
         const minimumRedeemPoints = <?= (int)$minimum_redeem_points ?>;
@@ -9099,26 +9163,48 @@ setTimeout(function() {
 
         window.getGrossTotal = function getGrossTotal() {
             const currentCart = Array.isArray(window.cart) ? window.cart : (typeof cart !== 'undefined' && Array.isArray(cart) ? cart : []);
-            const subtotal = currentCart.reduce((s, i) => s + (parseFloat(i.quantity) || 0) * (parseFloat(i.unit_price) || 0), 0);
-            return Math.round(subtotal * 1.12 * 100) / 100;
+            let subtotal = currentCart.reduce((s, i) => s + (parseFloat(i.quantity) || 0) * (parseFloat(i.unit_price) || 0), 0);
+
+            // Seamlessly incorporate Job Order service fee and tip if entered in form and not yet committed to cart
+            const hasServiceInCart = currentCart.some(i => i.item_type === 'service');
+            if (!hasServiceInCart) {
+                const formSvcType = (document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim();
+                const formSvcPrice = parseFloat(document.getElementById('joServicePrice')?.value || 0) || 0;
+                const formLaborPrice = parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) || 0;
+                if (formSvcType && (formSvcPrice > 0 || formLaborPrice > 0)) {
+                    subtotal += (formSvcPrice + formLaborPrice);
+                }
+            }
+
+            // Selling prices are already VAT-inclusive. Do NOT multiply by 1.12.
+            return Math.round(subtotal * 100) / 100;
         };
 
         window.getLoyaltyDiscount = function getLoyaltyDiscount(grossTotal) {
             const payMethod = document.getElementById('paymentMethod')?.value || '';
+            const isPvc = (payMethod === 'Petron Value Card (PVC Points)');
             const program = document.getElementById('loyaltyProgram')?.value || 'No Loyalty';
             const applyCheckbox = document.getElementById('loyaltyApplyRedemption');
-            if (program === 'No Loyalty' || payMethod === 'Petron Fleet Card' || !applyCheckbox || !applyCheckbox.checked) return 0;
             
-            const balance = parseInt(document.getElementById('loyaltyPointsBalance')?.value || '0', 10) || 0;
+            if (!isPvc && (program === 'No Loyalty' || !applyCheckbox || !applyCheckbox.checked)) return 0;
+            
+            let balance = 0;
+            if (isPvc) {
+                balance = parseInt(document.getElementById('pvcAvailablePoints')?.value || '0', 10) || 0;
+            } else {
+                balance = parseInt(document.getElementById('loyaltyPointsBalance')?.value || '0', 10) || 0;
+            }
+            
             const config = getLoyaltyProgramConfig();
-            if (balance < config.minPoints) return 0;
+            const convRate = (typeof pvcConversionRate === 'number' && pvcConversionRate > 0) ? pvcConversionRate : (config.redemptionValue || 1.0);
+            if (balance <= 0) return 0;
 
             const gross = (typeof grossTotal === 'number' && grossTotal >= 0) ? grossTotal : getGrossTotal();
             if (gross <= 0) return 0;
 
-            const maxPointsNeeded = Math.ceil(gross / config.redemptionValue);
+            const maxPointsNeeded = Math.ceil(gross / convRate);
             const validPoints = Math.min(balance, maxPointsNeeded);
-            const discount = Math.min(gross, Math.round(validPoints * config.redemptionValue * 100) / 100);
+            const discount = Math.min(gross, Math.round(validPoints * convRate * 100) / 100);
             return discount;
         };
 
@@ -9138,70 +9224,82 @@ setTimeout(function() {
             const eligibilityBadge = document.getElementById('loyaltyEligibilityBadge');
             const applyCheckbox = document.getElementById('loyaltyApplyRedemption');
 
-            const cardVal = customer.loyalty_card_no || customer.customer_id || customer.id_number || '';
-            const pts = parseInt(customer.points || 0, 10) || 0;
-            const hasLoyaltyCard = (cardVal && String(cardVal).trim() !== '') || pts > 0;
+            // Authoritative PVC card info
+            const cardVal = (customer.pvc_card_number || customer.loyalty_card_no || '').trim();
+            const pts = parseInt(customer.pvc_points_balance ?? customer.points ?? 0, 10) || 0;
+            const hasPvcCard = customer.has_pvc_card === true || (cardVal !== '');
             const isAccountActive = (customer.loyalty_status || 'active').toLowerCase() === 'active';
 
+            // Sync PVC panel
+            const pvcCardDisplay = document.getElementById('pvcCardNumberDisplay');
+            const pvcAvailEl = document.getElementById('pvcAvailablePoints');
+            const pvcNotice = document.getElementById('pvcCustomerNotice');
+            if (pvcCardDisplay) pvcCardDisplay.value = hasPvcCard ? cardVal : 'No linked PVC card';
+            if (pvcAvailEl) pvcAvailEl.value = hasPvcCard ? pts : 0;
+            if (pvcNotice) pvcNotice.style.display = hasPvcCard ? 'none' : 'block';
+
             const payMethod = document.getElementById('paymentMethod')?.value || '';
-            if (payMethod !== 'Petron Fleet Card') {
-                if (hasLoyaltyCard) {
-                    if (loyaltyDropdown) {
-                        if (loyaltyDropdown.value === 'No Loyalty' && loyaltyDropdown.options.length > 1) {
-                            loyaltyDropdown.selectedIndex = 1;
-                        }
-                    }
-                    if (loyaltyCardNoInput) loyaltyCardNoInput.value = cardVal;
-                    if (loyaltyCardDisplay) loyaltyCardDisplay.textContent = 'Card: ' + (cardVal || 'Linked Account');
-                    if (loyaltyPointsBalanceEl) loyaltyPointsBalanceEl.value = pts;
 
-                    const config = getLoyaltyProgramConfig();
-                    const isEligible = isAccountActive && pts >= config.minPoints;
-
-                    if (loyaltyAccountStatus) {
-                        loyaltyAccountStatus.innerHTML = isAccountActive 
-                            ? '<i class="fas fa-check-circle" style="color:#16a34a;"></i> <span style="color:#16a34a;">Active Account</span>' 
-                            : '<i class="fas fa-times-circle" style="color:#dc2626;"></i> <span style="color:#dc2626;">Inactive</span>';
+            if (hasPvcCard) {
+                if (loyaltyDropdown) {
+                    if (loyaltyDropdown.value === 'No Loyalty' && loyaltyDropdown.options.length > 1) {
+                        loyaltyDropdown.selectedIndex = 1;
                     }
-                    if (eligibilityBadge) {
-                        eligibilityBadge.style.display = 'inline-block';
-                        if (isEligible) {
-                            eligibilityBadge.style.background = '#dcfce7';
-                            eligibilityBadge.style.color = '#166534';
-                            eligibilityBadge.textContent = 'Eligible (' + pts + ' pts)';
-                        } else if (pts < config.minPoints) {
-                            eligibilityBadge.style.background = '#fef3c7';
-                            eligibilityBadge.style.color = '#92400e';
-                            eligibilityBadge.textContent = 'Min ' + config.minPoints + ' pt to redeem';
-                        } else {
-                            eligibilityBadge.style.background = '#fee2e2';
-                            eligibilityBadge.style.color = '#991b1b';
-                            eligibilityBadge.textContent = 'Ineligible';
-                        }
-                    }
-
-                    if (applyCheckbox) {
-                        applyCheckbox.disabled = !isEligible;
-                        if (!isEligible) applyCheckbox.checked = false;
-                    }
-                    onLoyaltyChange();
-                } else {
-                    if (loyaltyDropdown) loyaltyDropdown.value = 'No Loyalty';
-                    if (loyaltyCardNoInput) loyaltyCardNoInput.value = '';
-                    if (loyaltyCardDisplay) loyaltyCardDisplay.textContent = 'Card: None';
-                    if (loyaltyPointsBalanceEl) loyaltyPointsBalanceEl.value = 0;
-                    if (eligibilityBadge) {
-                        eligibilityBadge.style.display = 'inline-block';
-                        eligibilityBadge.style.background = '#f1f5f9';
-                        eligibilityBadge.style.color = '#64748b';
-                        eligibilityBadge.textContent = 'No Loyalty Account';
-                    }
-                    if (applyCheckbox) {
-                        applyCheckbox.checked = false;
-                        applyCheckbox.disabled = true;
-                    }
-                    onLoyaltyChange();
                 }
+                if (loyaltyCardNoInput) loyaltyCardNoInput.value = cardVal;
+                if (loyaltyCardDisplay) loyaltyCardDisplay.textContent = 'PVC Card: ' + cardVal;
+                if (loyaltyPointsBalanceEl) loyaltyPointsBalanceEl.value = pts;
+
+                const config = getLoyaltyProgramConfig();
+                const isEligible = isAccountActive && pts >= config.minPoints;
+
+                if (loyaltyAccountStatus) {
+                    loyaltyAccountStatus.innerHTML = isAccountActive 
+                        ? '<i class="fas fa-check-circle" style="color:#16a34a;"></i> <span style="color:#16a34a;">Active Account</span>' 
+                        : '<i class="fas fa-times-circle" style="color:#dc2626;"></i> <span style="color:#dc2626;">Inactive</span>';
+                }
+                if (eligibilityBadge) {
+                    eligibilityBadge.style.display = 'inline-block';
+                    if (isEligible) {
+                        eligibilityBadge.style.background = '#dcfce7';
+                        eligibilityBadge.style.color = '#166534';
+                        eligibilityBadge.textContent = 'Eligible (' + pts + ' pts)';
+                    } else if (pts < config.minPoints) {
+                        eligibilityBadge.style.background = '#fef3c7';
+                        eligibilityBadge.style.color = '#92400e';
+                        eligibilityBadge.textContent = 'Min ' + config.minPoints + ' pt to redeem';
+                    } else {
+                        eligibilityBadge.style.background = '#fee2e2';
+                        eligibilityBadge.style.color = '#991b1b';
+                        eligibilityBadge.textContent = 'Ineligible';
+                    }
+                }
+
+                if (applyCheckbox) {
+                    applyCheckbox.disabled = !isEligible;
+                    if (!isEligible) applyCheckbox.checked = false;
+                }
+                onLoyaltyChange();
+            } else {
+                if (loyaltyDropdown) loyaltyDropdown.value = 'No Loyalty';
+                if (loyaltyCardNoInput) loyaltyCardNoInput.value = '';
+                if (loyaltyCardDisplay) loyaltyCardDisplay.textContent = 'Card: None';
+                if (loyaltyPointsBalanceEl) loyaltyPointsBalanceEl.value = 0;
+                if (eligibilityBadge) {
+                    eligibilityBadge.style.display = 'inline-block';
+                    eligibilityBadge.style.background = '#f1f5f9';
+                    eligibilityBadge.style.color = '#64748b';
+                    eligibilityBadge.textContent = 'No PVC Account';
+                }
+                if (applyCheckbox) {
+                    applyCheckbox.checked = false;
+                    applyCheckbox.disabled = true;
+                }
+                onLoyaltyChange();
+            }
+
+            if (payMethod === 'Petron Value Card (PVC Points)') {
+                calcLoyaltyPoints();
             }
         };
 
@@ -9255,7 +9353,7 @@ setTimeout(function() {
             const program = document.getElementById('loyaltyProgram')?.value || 'No Loyalty';
             const pointsEarnedInput = document.getElementById('loyaltyPointsEarned');
             const config = getLoyaltyProgramConfig();
-            if (payMethod === 'Petron Fleet Card' || program === 'No Loyalty') {
+            if (program === 'No Loyalty') {
                 if (pointsEarnedInput) pointsEarnedInput.value = 0;
             } else if (pointsEarnedInput) {
                 const netAmount = (typeof grand === 'number' && grand >= 0) ? grand : getGrandTotal();
@@ -9267,6 +9365,7 @@ setTimeout(function() {
 
         window.calcLoyaltyPoints = function calcLoyaltyPoints() {
             const payMethod = document.getElementById('paymentMethod')?.value || '';
+            const isPvc = (payMethod === 'Petron Value Card (PVC Points)');
             const program = document.getElementById('loyaltyProgram')?.value || 'No Loyalty';
             const balanceInput = document.getElementById('loyaltyPointsBalance');
             const earnedInput = document.getElementById('loyaltyPointsEarned');
@@ -9285,12 +9384,81 @@ setTimeout(function() {
 
             const gross = getGrossTotal();
             const config = getLoyaltyProgramConfig();
+            const convRate = (typeof pvcConversionRate === 'number' && pvcConversionRate > 0) ? pvcConversionRate : (config.redemptionValue || 1.0);
 
             if (rateBadge) {
-                rateBadge.textContent = `1 pt = ₱${fmtNum(config.redemptionValue)}`;
+                rateBadge.textContent = `1 pt = ₱${fmtNum(convRate)}`;
             }
 
-            if (program === 'No Loyalty' || payMethod === 'Petron Fleet Card') {
+            // ── HANDLE PVC POINTS PAYMENT METHOD ──────────────────────────────
+            if (isPvc) {
+                const pvcCardDisplay = document.getElementById('pvcCardNumberDisplay');
+                const pvcAvailEl = document.getElementById('pvcAvailablePoints');
+                const pvcNotice = document.getElementById('pvcCustomerNotice');
+                const pvcPointsRedeemedEl = document.getElementById('pvcPointsRedeemed');
+                const pvcDiscountEl = document.getElementById('pvcDiscountDisplay');
+                const pvcPointsAfterEl = document.getElementById('pvcPointsAfter');
+                const pvcRemainingEl = document.getElementById('pvcRemainingBalanceDisplay');
+
+                let currentBalance = 0;
+                let activeCustomer = null;
+                const custId = selectedCustomerIds.jo || selectedCustomerIds.merch;
+                if (custId && Array.isArray(customerData)) {
+                    activeCustomer = customerData.find(c => c.id == custId);
+                }
+
+                if (activeCustomer && activeCustomer.has_pvc_card) {
+                    currentBalance = parseInt(activeCustomer.pvc_points_balance || activeCustomer.points || 0, 10) || 0;
+                    if (pvcCardDisplay) pvcCardDisplay.value = activeCustomer.pvc_card_number;
+                    if (pvcAvailEl) pvcAvailEl.value = currentBalance;
+                    if (pvcNotice) pvcNotice.style.display = 'none';
+                } else if (pvcAvailEl) {
+                    currentBalance = parseInt(pvcAvailEl.value || '0', 10) || 0;
+                    if (pvcNotice) pvcNotice.style.display = (!activeCustomer || !activeCustomer.has_pvc_card) ? 'block' : 'none';
+                }
+
+                const maxPointsNeeded = gross > 0 ? Math.ceil(gross / convRate) : 0;
+                const pointsRedeemed = Math.min(currentBalance, maxPointsNeeded);
+                const discount = Math.min(gross, Math.round(pointsRedeemed * convRate * 100) / 100);
+                const remainingBalance = Math.max(0, Math.round((gross - discount) * 100) / 100);
+                const remainingPoints = Math.max(0, currentBalance - pointsRedeemed);
+
+                if (pvcPointsRedeemedEl) pvcPointsRedeemedEl.value = pointsRedeemed;
+                if (pvcDiscountEl) pvcDiscountEl.value = '₱' + fmtNum(discount);
+                if (pvcPointsAfterEl) pvcPointsAfterEl.value = remainingPoints;
+                if (pvcRemainingEl) pvcRemainingEl.value = '₱' + fmtNum(remainingBalance);
+
+                if (redeemedInput) redeemedInput.value = pointsRedeemed;
+                if (remainingInput) remainingInput.value = remainingPoints;
+                if (discountInput) discountInput.value = '₱' + fmtNum(discount);
+                if (balanceInput) balanceInput.value = currentBalance;
+
+                if (discRow && discVal) {
+                    if (discount > 0) {
+                        discRow.style.display = 'flex';
+                        discVal.textContent = '-₱' + fmtNum(discount);
+                    } else {
+                        discRow.style.display = 'none';
+                        discVal.textContent = '-₱0.00';
+                    }
+                }
+                if (grandEl) grandEl.textContent = '₱' + fmtNum(remainingBalance);
+
+                // Points Earned on remaining monetary amount paid only (0 if fully covered by PVC points)
+                const pointsEarned = Math.floor(remainingBalance / config.pointsPerAmount);
+                if (earnedInput) earnedInput.value = Math.max(0, pointsEarned);
+                if (afterInput) afterInput.value = Math.max(0, remainingPoints + pointsEarned);
+
+                if (errorEl) errorEl.style.display = 'none';
+                if (typeof computeChange === 'function') computeChange();
+                if (typeof onPaymentAmountInput === 'function') onPaymentAmountInput();
+                if (typeof updatePaymentStatusBadge === 'function') updatePaymentStatusBadge();
+                if (typeof updateCheckoutBtn === 'function') updateCheckoutBtn();
+                return;
+            }
+
+            // ── HANDLE OTHER PAYMENT METHODS (Cash, Card, E-Wallet, Credit) ───
+            if (program === 'No Loyalty') {
                 if (redeemedInput) redeemedInput.value = 0;
                 if (remainingInput) remainingInput.value = 0;
                 if (earnedInput) earnedInput.value = 0;
@@ -9299,7 +9467,7 @@ setTimeout(function() {
                 if (discRow) discRow.style.display = 'none';
                 if (errorEl) errorEl.style.display = 'none';
                 if (grandEl) grandEl.textContent = '₱' + fmtNum(gross);
-                if (eligibilityBadge && program === 'No Loyalty') eligibilityBadge.style.display = 'none';
+                if (eligibilityBadge) eligibilityBadge.style.display = 'none';
                 if (applyCheckbox) {
                     applyCheckbox.checked = false;
                     applyCheckbox.disabled = true;
@@ -9324,9 +9492,9 @@ setTimeout(function() {
             let discount = 0;
 
             if (applyCheckbox && applyCheckbox.checked && isEligible && gross > 0) {
-                const maxPointsNeeded = Math.ceil(gross / config.redemptionValue);
+                const maxPointsNeeded = Math.ceil(gross / convRate);
                 pointsRedeemed = Math.min(currentBalance, maxPointsNeeded);
-                discount = Math.min(gross, Math.round(pointsRedeemed * config.redemptionValue * 100) / 100);
+                discount = Math.min(gross, Math.round(pointsRedeemed * convRate * 100) / 100);
                 if (hintEl) {
                     hintEl.textContent = `Redeeming ${pointsRedeemed} pts for ₱${fmtNum(discount)} discount.`;
                     hintEl.style.color = '#15803d';
@@ -9361,7 +9529,7 @@ setTimeout(function() {
             if (grandEl) grandEl.textContent = '₱' + fmtNum(netGrand);
 
             // Points Earned = Math.floor(netGrand / pointsPerAmount) (₱100 eligible purchase = 1 point)
-            const pointsEarned = (payMethod === 'Petron Fleet Card') ? 0 : Math.floor(netGrand / config.pointsPerAmount);
+            const pointsEarned = Math.floor(netGrand / config.pointsPerAmount);
             if (earnedInput) earnedInput.value = Math.max(0, pointsEarned);
 
             // Points After = Remaining Points + Points Earned
@@ -9384,12 +9552,10 @@ setTimeout(function() {
                 }
             }
 
-            // Enable / disable checkout button based on validity
             const checkoutBtn = document.getElementById('checkoutBtn');
             if (checkoutBtn && typeof updateCheckoutBtn === 'function') {
                 updateCheckoutBtn();
             }
-
             if (typeof computeChange === 'function') computeChange();
             if (typeof onPaymentAmountInput === 'function') onPaymentAmountInput();
             if (typeof updatePaymentStatusBadge === 'function') updatePaymentStatusBadge();
@@ -10285,8 +10451,9 @@ setTimeout(function() {
         //      — skips parts that are out of stock (warns user)
         //      — skips parts already in cart (merges quantity)
         async function applyJobOrderToCart() {
-            const svcType   = (document.getElementById('joServiceTypeValue')?.value || '').trim();
+            const svcType     = (document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim();
             const laborCharge = parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) || 0;
+            const enteredPrice = parseFloat((document.getElementById('joServicePrice')?.value || '0').replace(/[^0-9.]/g, '')) || 0;
 
             if (!svcType) return; // caller already validated
 
@@ -10296,10 +10463,13 @@ setTimeout(function() {
             // ── 1. Ensure each selected service is in cart individually ──────────
             selectedNames.forEach(name => {
                 const svc = types.find(s => s.name === name);
-                const price = svc && parseFloat(svc.price) > 0 ? parseFloat(svc.price) : 0;
+                let price = svc && parseFloat(svc.price) > 0 ? parseFloat(svc.price) : 0;
+                if (enteredPrice > 0 && (selectedNames.length === 1 || price <= 0)) {
+                    price = enteredPrice;
+                }
                 const existing = cart.find(i => i.item_type === 'service' && i.product_name === name);
                 if (existing) {
-                    if (existing.unit_price <= 0 && price > 0) existing.unit_price = price;
+                    if (price > 0) existing.unit_price = price;
                 } else {
                     cart.push({
                         item_type:    'service',
@@ -10374,6 +10544,7 @@ setTimeout(function() {
 
             renderCart();
             updateCheckoutBtn();
+            if (typeof calcLoyaltyPoints === 'function') calcLoyaltyPoints();
 
             // ── 3. Feedback ───────────────────────────────────────────────────
             if (skipped.length > 0) {
@@ -10590,15 +10761,24 @@ setTimeout(function() {
 
         function onJoServicePriceInput() {
             // Price manually entered — live update cart if already added
-            const svcType  = (document.getElementById('joServiceTypeValue')?.value || '').trim();
+            const svcType  = (document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim();
             const svcPrice = parseFloat(document.getElementById('joServicePrice')?.value || 0);
             if (svcType) {
-                const existingSvc = cart.find(i => i.item_type === 'service' && i.product_name === svcType);
-                if (existingSvc) {
-                    existingSvc.unit_price = Math.max(0, svcPrice);
+                const names = svcType.split(', ').map(s => s.trim()).filter(Boolean);
+                let updated = false;
+                names.forEach(name => {
+                    const existingSvc = cart.find(i => i.item_type === 'service' && (i.product_name === name || i.product_name === svcType));
+                    if (existingSvc && (names.length === 1 || existingSvc.unit_price <= 0)) {
+                        existingSvc.unit_price = Math.max(0, svcPrice);
+                        updated = true;
+                    }
+                });
+                if (updated) {
                     renderCart();
                 }
             }
+            updateCheckoutBtn();
+            if (typeof calcLoyaltyPoints === 'function') calcLoyaltyPoints();
         }
 
         function onJoLaborChargeInput() {
@@ -10628,6 +10808,8 @@ setTimeout(function() {
                 cart = cart.filter(i => i.category !== 'Labor' && i.category !== 'Tip' && i.product_name !== 'Labor Charge' && i.product_name !== 'Tip');
             }
             renderCart();
+            updateCheckoutBtn();
+            if (typeof calcLoyaltyPoints === 'function') calcLoyaltyPoints();
         }
 
         // ── Customer data for search and autocomplete ─────────────────────────────
@@ -10646,13 +10828,18 @@ setTimeout(function() {
                 'plate_number' => $customer['plate_number'] ?? '',
                 'engine_number' => $customer['engine_number'] ?? '',
                 'chassis_number' => $customer['chassis_number'] ?? '',
-                'points' => (int)($customer['points'] ?? 0),
+                'loyalty_account_id' => (int)($customer['loyalty_account_id'] ?? 0),
+                'points' => (int)($customer['pvc_points_balance'] ?? $customer['points'] ?? 0),
+                'pvc_points_balance' => (int)($customer['pvc_points_balance'] ?? $customer['points'] ?? 0),
                 'customer_id' => $customer['customer_id'] ?? '',
-                'loyalty_card_no' => $customer['loyalty_card_no'] ?? $customer['customer_id'] ?? $customer['id_number'] ?? '',
-                'loyalty_status' => $customer['loyalty_status'] ?? 'active',
+                'loyalty_card_no' => trim((string)($customer['pvc_card_number'] ?? $customer['loyalty_card_no'] ?? '')),
+                'pvc_card_number' => trim((string)($customer['pvc_card_number'] ?? $customer['loyalty_card_no'] ?? '')),
+                'has_pvc_card' => (int)($customer['has_pvc_card'] ?? 0) === 1 || (!empty($customer['pvc_card_number']) && trim((string)$customer['pvc_card_number']) !== ''),
+                'loyalty_status' => $customer['loyalty_status'] ?? 'inactive',
                 'id_number' => $customer['id_number'] ?? ''
             ];
         }, $customers)) ?>;
+        const pvcConversionRate = <?= (float)$pvc_conversion_rate ?>;
 
         console.log('Customer data loaded:', customerData.length, 'customers');
         if (customerData.length > 0) {
@@ -11203,6 +11390,16 @@ setTimeout(function() {
             // Auto-switch loyalty dropdown based on Customer Master Data
             applyCustomerLoyalty(customer);
 
+            // Also sync other form prefix (merch/jo) so customer is uniform across both
+            const otherPrefix = prefix === 'jo' ? 'merch' : 'jo';
+            selectedCustomerIds[otherPrefix] = parseInt(customer.id, 10) || null;
+            const otherFirst = document.getElementById(otherPrefix + 'FirstName');
+            const otherLast  = document.getElementById(otherPrefix + 'LastName');
+            const otherContact = document.getElementById(otherPrefix + 'ContactNumber');
+            if (otherFirst) otherFirst.value = customer.first_name || '';
+            if (otherLast) otherLast.value = customer.last_name || '';
+            if (otherContact) otherContact.value = customer.contact_number || '';
+
             // Hide search results and clear search input
             const resultsDiv = document.getElementById(prefix + 'CustomerResults');
             const searchInput = document.getElementById(prefix + 'SearchCustomer');
@@ -11347,6 +11544,25 @@ setTimeout(function() {
             const banner = document.getElementById(prefix + 'CustomerLockedBanner');
             if (banner) banner.style.display = 'flex';
             
+            // Also sync other form prefix (merch/jo) so customer is uniform across both
+            const otherPrefix = prefix === 'jo' ? 'merch' : 'jo';
+            selectedCustomerIds[otherPrefix] = parseInt(customer.id, 10) || null;
+            const otherFirst = document.getElementById(otherPrefix + 'FirstName');
+            const otherLast  = document.getElementById(otherPrefix + 'LastName');
+            const otherContact = document.getElementById(otherPrefix + 'ContactNumber');
+            if (otherFirst) otherFirst.value = customer.first_name || '';
+            if (otherLast) otherLast.value = customer.last_name || '';
+            if (otherContact) otherContact.value = customer.contact_number || '';
+            [otherFirst, otherLast, otherContact].forEach(el => {
+                if (!el) return;
+                el.setAttribute('readonly', true);
+                el.style.background = '#f0fdf4';
+                el.style.cursor = 'not-allowed';
+                el.style.color = '#15803d';
+            });
+            const otherBanner = document.getElementById(otherPrefix + 'CustomerLockedBanner');
+            if (otherBanner) otherBanner.style.display = 'flex';
+
             // Automatically fill loyalty fields if customer matches
             applyCustomerLoyalty(customer);
 
@@ -12089,7 +12305,7 @@ setTimeout(function() {
 
         // ── Add currently configured Job Order service to cart ───────────────
         async function addServiceFromFormToCart() {
-            const svcType      = (document.getElementById('joServiceTypeValue')?.value || '').trim();
+            const svcType      = (document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim();
             const svcPrice     = parseFloat(document.getElementById('joServicePrice')?.value || 0);
             const vehiclePlate = (document.getElementById('joVehiclePlate')?.value || '').trim();
             const vehicleType  = (document.getElementById('joVehicleType')?.value || '').trim();
@@ -12133,7 +12349,7 @@ setTimeout(function() {
         // - If a product is selected in the Merchandise form, adds it to cart.
         // - At least one of the two must be present.
         async function addToCartWithService() {
-            const svcType  = (document.getElementById('joServiceTypeValue')?.value || '').trim();
+            const svcType  = (document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim();
             const svcPrice = parseFloat(document.getElementById('joServicePrice')?.value || 0);
             const hasProduct = !!selectedProduct;
 
@@ -12954,10 +13170,23 @@ setTimeout(function() {
                 </div>`;
             }).join('');
 
-            const subtotal = cart.reduce((s, i) => s + i.quantity * i.unit_price, 0);
-            const vat      = subtotal * 0.12;
-            const grand    = subtotal + vat;
-            updateTotals(subtotal, vat, grand);
+            const gross = getGrossTotal();
+            const discount = (typeof getLoyaltyDiscount === 'function') ? getLoyaltyDiscount(gross) : 0;
+            const netGrand = Math.max(0, Math.round((gross - discount) * 100) / 100);
+
+            const isVat = stationTaxConfig && stationTaxConfig.is_vat_registered;
+            const taxRate = isVat ? (stationTaxConfig.tax_rate || 0.12) : 0;
+            let vatableSales = 0;
+            let vatAmount = 0;
+            if (isVat && netGrand > 0) {
+                vatableSales = Math.round((netGrand / (1 + taxRate)) * 100) / 100;
+                vatAmount = Math.round((netGrand - vatableSales) * 100) / 100;
+            } else {
+                vatableSales = isVat ? 0 : netGrand;
+                vatAmount = 0;
+            }
+
+            updateTotals(vatableSales, vatAmount, netGrand);
             if (typeof syncProductCheckboxes === 'function') syncProductCheckboxes();
             if (typeof syncServiceCheckboxes === 'function') syncServiceCheckboxes();
 
@@ -12999,20 +13228,40 @@ setTimeout(function() {
             }
         }
 
-        function updateTotals(subtotal, vat, grand) {
+        function updateTotals(vatable, vat, grand) {
             const s = document.getElementById('cartSubtotal');
             const v = document.getElementById('cartVat');
             const g = document.getElementById('cartGrandTotal');
+            const sLabel = document.getElementById('cartSubtotalLabel');
+            const vLabel = document.getElementById('cartVatLabel');
             const discRow = document.getElementById('cartLoyaltyDiscountRow');
             const discVal = document.getElementById('cartLoyaltyDiscount');
             const discInput = document.getElementById('loyaltyDiscountAmount');
 
-            const grossAmount = (typeof grand === 'number' && grand >= 0) ? grand : (subtotal + vat);
-            const discount = (typeof getLoyaltyDiscount === 'function') ? getLoyaltyDiscount(grossAmount) : 0;
-            const netGrand = Math.max(0, Math.round((grossAmount - discount) * 100) / 100);
+            const gross = getGrossTotal();
+            const discount = (typeof getLoyaltyDiscount === 'function') ? getLoyaltyDiscount(gross) : 0;
+            const netGrand = (typeof grand === 'number' && grand >= 0) ? grand : Math.max(0, Math.round((gross - discount) * 100) / 100);
 
-            if (s) s.textContent = '₱' + fmtNum(subtotal);
-            if (v) v.textContent = '₱' + fmtNum(vat);
+            const isVat = stationTaxConfig && stationTaxConfig.is_vat_registered;
+            const taxRate = isVat ? (stationTaxConfig.tax_rate || 0.12) : 0;
+
+            let vatableSales = vatable;
+            let vatAmount = vat;
+            if (typeof vatable !== 'number' || typeof vat !== 'number') {
+                if (isVat && netGrand > 0) {
+                    vatableSales = Math.round((netGrand / (1 + taxRate)) * 100) / 100;
+                    vatAmount = Math.round((netGrand - vatableSales) * 100) / 100;
+                } else {
+                    vatableSales = isVat ? 0 : netGrand;
+                    vatAmount = 0;
+                }
+            }
+
+            if (sLabel) sLabel.textContent = isVat ? 'Vatable Sales' : 'Non-VAT Sales';
+            if (vLabel) vLabel.textContent = isVat ? `VAT (${Math.round(taxRate * 100)}%)` : 'VAT (0%)';
+
+            if (s) s.textContent = '₱' + fmtNum(vatableSales);
+            if (v) v.textContent = '₱' + fmtNum(vatAmount);
             if (discRow && discVal) {
                 if (discount > 0) {
                     discRow.style.display = 'flex';
@@ -13049,7 +13298,7 @@ setTimeout(function() {
             const method = document.getElementById('paymentMethod')?.value || '';
             const isCard = (method === 'Card' || method === 'Credit Card' || method === 'Debit Card');
             const isEwallet = (method === 'E-Wallet' || method === 'GCash' || method === 'Maya');
-            const isFleet = (method === 'Petron Fleet Card');
+            const isPvc = (method === 'Petron Value Card (PVC Points)');
 
             const containers = {
                 'cashFields':           method === 'Cash',
@@ -13057,7 +13306,8 @@ setTimeout(function() {
                 'creditCardFields':     false,
                 'debitCardFields':      false,
                 'ewalletFields':        isEwallet,
-                'fleetCardFields':      isFleet,
+                'pvcPointsFields':      isPvc,
+                'fleetCardFields':      false,
                 'efuelCardFields':      false,
                 'creditAccountFields':  method === 'Credit Account'
             };
@@ -13071,58 +13321,44 @@ setTimeout(function() {
                 if (prov) prov.value = method;
             }
 
-            // Fleet Card loyalty notice & consumer loyalty exclusion
-            const fleetNotice = document.getElementById('fleetCardLoyaltyNotice');
-            const loyaltySelect = document.getElementById('loyaltyProgram');
-            if (isFleet) {
-                if (fleetNotice) fleetNotice.style.display = 'block';
-                if (loyaltySelect) {
-                    loyaltySelect.value = 'No Loyalty';
-                    loyaltySelect.disabled = true;
-                    loyaltySelect.style.background = '#f1f5f9';
-                    loyaltySelect.style.cursor = 'not-allowed';
-                }
-                if (typeof onLoyaltyChange === 'function') onLoyaltyChange();
-
-                // Auto-sync plate & odometer from Job Order if available and empty in Fleet Card
-                const joPlate = document.getElementById('joVehiclePlate')?.value || '';
-                const fcPlate = document.getElementById('fcPlateNumber');
-                if (joPlate && fcPlate && !fcPlate.value) {
-                    fcPlate.value = joPlate;
-                }
-                const joOdo = document.getElementById('joOdometerReading')?.value || document.getElementById('joOdometer')?.value || '';
-                const fcOdo = document.getElementById('fcOdometer');
-                if (joOdo && fcOdo && !fcOdo.value) {
-                    fcOdo.value = joOdo;
-                }
-            } else {
-                if (fleetNotice) fleetNotice.style.display = 'none';
-                if (loyaltySelect) {
-                    loyaltySelect.disabled = false;
-                    loyaltySelect.style.background = '';
-                    loyaltySelect.style.cursor = '';
-                }
-            }
-
             const generalBalanceWrap = document.getElementById('generalBalanceWrap');
-            const needsBalance = ['Card','Credit Card','Debit Card','E-Wallet','GCash','Maya','Petron Fleet Card'].includes(method);
+            const needsBalance = ['Card','Credit Card','Debit Card','E-Wallet','GCash','Maya'].includes(method);
             if (generalBalanceWrap) generalBalanceWrap.style.display = needsBalance ? 'block' : 'none';
 
-            const grand = getGrandTotal();
-            const prefillMap = {
-                'Cash': 'amountTendered',
-                'Card': 'cardAmount', 'Credit Card': 'cardAmount', 'Debit Card': 'cardAmount',
-                'E-Wallet': 'ewAmount', 'GCash': 'ewAmount', 'Maya': 'ewAmount',
-                'Petron Fleet Card': 'fcAmount'
-            };
-            const fillId = prefillMap[method];
-            if (fillId) {
-                const inp = document.getElementById(fillId);
-                if (inp && (!inp.value || parseFloat(inp.value) === 0)) inp.value = grand > 0 ? grand.toFixed(2) : '';
-            }
+            if (isPvc) {
+                // Ensure customer is linked and calculate redemption
+                let activeCustomer = null;
+                const custId = selectedCustomerIds.jo || selectedCustomerIds.merch;
+                if (custId && Array.isArray(customerData)) {
+                    activeCustomer = customerData.find(c => c.id == custId);
+                }
+                const pvcCardDisplay = document.getElementById('pvcCardNumberDisplay');
+                const pvcAvailEl = document.getElementById('pvcAvailablePoints');
+                const pvcNotice = document.getElementById('pvcCustomerNotice');
 
-            if (isFleet && typeof calcFleetRewards === 'function') {
-                calcFleetRewards();
+                if (activeCustomer && activeCustomer.has_pvc_card) {
+                    if (pvcCardDisplay) pvcCardDisplay.value = activeCustomer.pvc_card_number;
+                    if (pvcAvailEl) pvcAvailEl.value = activeCustomer.pvc_points_balance || activeCustomer.points || 0;
+                    if (pvcNotice) pvcNotice.style.display = 'none';
+                } else {
+                    if (pvcCardDisplay) pvcCardDisplay.value = 'No linked card';
+                    if (pvcAvailEl) pvcAvailEl.value = '0';
+                    if (pvcNotice) pvcNotice.style.display = 'block';
+                }
+                calcLoyaltyPoints();
+            } else {
+                const grand = getGrandTotal();
+                const prefillMap = {
+                    'Cash': 'amountTendered',
+                    'Card': 'cardAmount', 'Credit Card': 'cardAmount', 'Debit Card': 'cardAmount',
+                    'E-Wallet': 'ewAmount', 'GCash': 'ewAmount', 'Maya': 'ewAmount'
+                };
+                const fillId = prefillMap[method];
+                if (fillId) {
+                    const inp = document.getElementById(fillId);
+                    if (inp && (!inp.value || parseFloat(inp.value) === 0)) inp.value = grand > 0 ? grand.toFixed(2) : '';
+                }
+                calcLoyaltyPoints();
             }
 
             computeChange();
@@ -13149,6 +13385,10 @@ setTimeout(function() {
         }
 
         function _getAmountPaid(method) {
+            if (method === 'Petron Value Card (PVC Points)') {
+                const gross = typeof getGrossTotal === 'function' ? getGrossTotal() : 0;
+                return typeof getLoyaltyDiscount === 'function' ? getLoyaltyDiscount(gross) : 0;
+            }
             const idMap = {
                 'Cash': 'amountTendered',
                 'Card': 'cardAmount',
@@ -13156,8 +13396,7 @@ setTimeout(function() {
                 'Debit Card': 'cardAmount',
                 'E-Wallet': 'ewAmount',
                 'GCash': 'ewAmount',
-                'Maya': 'ewAmount',
-                'Petron Fleet Card': 'fcAmount'
+                'Maya': 'ewAmount'
             };
             const id = idMap[method];
             let val = id ? parseFloat(document.getElementById(id)?.value || 0) : 0;
@@ -13270,7 +13509,8 @@ setTimeout(function() {
             const btn    = document.getElementById('checkoutBtn');
             const method = document.getElementById('paymentMethod')?.value || '';
             if (!btn) return;
-            let disabled = cart.length === 0 || !method;
+            const hasPendingSvc = ((document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim() !== '') && ((parseFloat(document.getElementById('joServicePrice')?.value || 0) > 0) || (parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) > 0));
+            let disabled = (cart.length === 0 && !hasPendingSvc) || !method;
             if (method === 'Credit Account') {
                 if (!document.getElementById('creditCustomer')?.value) disabled = true;
             }
@@ -13293,38 +13533,46 @@ setTimeout(function() {
             if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing…'; }
 
             try {
+                // Auto-commit Job Order service to cart if configured in form but not yet committed
+                const pendingSvcType = (document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim();
+                const pendingSvcPrice = parseFloat(document.getElementById('joServicePrice')?.value || 0);
+                const pendingLabor = parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) || 0;
+                if (pendingSvcType && (pendingSvcPrice > 0 || pendingLabor > 0) && !cart.some(i => i.item_type === 'service')) {
+                    await applyJobOrderToCart();
+                }
+
                 if (cart.length === 0) {
                     showTxnAlert('Cart is empty.', 'warning');
                     _resetSubmitBtn();
                     return;
                 }
 
-            const method = document.getElementById('paymentMethod')?.value || '';
-            if (!method) {
-                showTxnAlert('Please select a payment method.', 'warning');
-                _resetSubmitBtn();
-                return;
-            }
+                const method = document.getElementById('paymentMethod')?.value || '';
+                if (!method) {
+                    showTxnAlert('Please select a payment method.', 'warning');
+                    _resetSubmitBtn();
+                    return;
+                }
 
-            const gross = getGrossTotal();
-            const loyaltyDiscount = getLoyaltyDiscount(gross);
-            const grand = getGrandTotal();
-            const hasService = cart.some(i => i.item_type === 'service');
-            const activeCustomerPrefix = hasService ? 'jo' : 'merch';
-            let firstName = '', lastName = '', contactNumber = '';
-            if (hasService) {
-                firstName     = (document.getElementById('joFirstName')?.value || '').trim();
-                lastName      = (document.getElementById('joLastName')?.value  || '').trim();
-                contactNumber = (document.getElementById('joContactNumber')?.value || '').trim();
-                if (!firstName) { showTxnAlert('Please enter the customer\'s first name in the Job Order section.', 'warning'); _resetSubmitBtn(); return; }
-            } else {
-                firstName     = (document.getElementById('merchFirstName')?.value || '').trim();
-                lastName      = (document.getElementById('merchLastName')?.value  || '').trim();
-                contactNumber = (document.getElementById('merchContactNumber')?.value || '').trim();
-                if (!firstName) { showTxnAlert('Please enter the customer\'s first name.', 'warning'); _resetSubmitBtn(); return; }
-            }
-            let selectedCustomerId = selectedCustomerIds.jo || selectedCustomerIds.merch || null;
-            const fullName = [firstName, lastName].filter(Boolean).join(' ') || firstName || 'Walk-in Customer';
+                const gross = getGrossTotal();
+                const loyaltyDiscount = getLoyaltyDiscount(gross);
+                const grand = getGrandTotal();
+                const hasService = cart.some(i => i.item_type === 'service');
+                const activeCustomerPrefix = hasService ? 'jo' : 'merch';
+                let firstName = '', lastName = '', contactNumber = '';
+                if (hasService) {
+                    firstName     = (document.getElementById('joFirstName')?.value || document.getElementById('merchFirstName')?.value || '').trim();
+                    lastName      = (document.getElementById('joLastName')?.value  || document.getElementById('merchLastName')?.value  || '').trim();
+                    contactNumber = (document.getElementById('joContactNumber')?.value || document.getElementById('merchContactNumber')?.value || '').trim();
+                    if (!firstName) { showTxnAlert('Please enter the customer\'s first name in the Job Order section.', 'warning'); _resetSubmitBtn(); return; }
+                } else {
+                    firstName     = (document.getElementById('merchFirstName')?.value || document.getElementById('joFirstName')?.value || '').trim();
+                    lastName      = (document.getElementById('merchLastName')?.value  || document.getElementById('joLastName')?.value  || '').trim();
+                    contactNumber = (document.getElementById('merchContactNumber')?.value || document.getElementById('joContactNumber')?.value || '').trim();
+                    if (!firstName) { showTxnAlert('Please enter the customer\'s first name.', 'warning'); _resetSubmitBtn(); return; }
+                }
+                let selectedCustomerId = selectedCustomerIds.jo || selectedCustomerIds.merch || null;
+                const fullName = [firstName, lastName].filter(Boolean).join(' ') || firstName || 'Walk-in Customer';
 
             if (method === 'Credit Account') {
                 if (!document.getElementById('creditCustomer')?.value) {
@@ -13332,14 +13580,32 @@ setTimeout(function() {
                 }
             }
 
-            const loyaltyProgram = document.getElementById('loyaltyProgram')?.value || 'No Loyalty';
-            const loyaltyCardNo = (document.getElementById('loyaltyCardNo')?.value || '').trim();
-            const loyaltyPointsBalance = parseInt(document.getElementById('loyaltyPointsBalance')?.value || 0) || 0;
-            const loyaltyPointsEarned = parseInt(document.getElementById('loyaltyPointsEarned')?.value || 0) || 0;
-            const loyaltyPointsRedeemed = parseInt(document.getElementById('loyaltyPointsRedeemed')?.value || 0) || 0;
-            const hasLoyaltyCard = loyaltyProgram !== 'No Loyalty' && (loyaltyCardNo !== '' || selectedCustomerId !== null);
+            const isPvc = (method === 'Petron Value Card (PVC Points)');
+            if (isPvc) {
+                if (!selectedCustomerId) {
+                    showTxnAlert('A registered customer is required to redeem Petron Value Card (PVC Points).', 'warning');
+                    _resetSubmitBtn(); return;
+                }
+                const activeCust = Array.isArray(customerData) ? customerData.find(c => c.id == selectedCustomerId) : null;
+                if (!activeCust || !activeCust.has_pvc_card) {
+                    showTxnAlert('The selected customer does not have an active linked Petron Value Card (PVC).', 'warning');
+                    _resetSubmitBtn(); return;
+                }
+                const availPts = parseInt(activeCust.pvc_points_balance || activeCust.points || 0, 10) || 0;
+                if (availPts <= 0) {
+                    showTxnAlert('Selected customer has 0 PVC points available to redeem.', 'warning');
+                    _resetSubmitBtn(); return;
+                }
+            }
 
-            if (loyaltyProgram !== 'No Loyalty' && loyaltyPointsRedeemed > loyaltyPointsBalance) {
+            const loyaltyProgram = document.getElementById('loyaltyProgram')?.value || 'No Loyalty';
+            const loyaltyCardNo = (document.getElementById('loyaltyCardNo')?.value || document.getElementById('pvcCardNumberDisplay')?.value || '').trim();
+            const loyaltyPointsBalance = parseInt(document.getElementById('loyaltyPointsBalance')?.value || document.getElementById('pvcAvailablePoints')?.value || 0) || 0;
+            const loyaltyPointsEarned = parseInt(document.getElementById('loyaltyPointsEarned')?.value || 0) || 0;
+            const loyaltyPointsRedeemed = isPvc ? (parseInt(document.getElementById('pvcPointsRedeemed')?.value || 0, 10) || 0) : (parseInt(document.getElementById('loyaltyPointsRedeemed')?.value || 0) || 0);
+            const hasLoyaltyCard = isPvc || (loyaltyProgram !== 'No Loyalty' && (loyaltyCardNo !== '' || selectedCustomerId !== null));
+
+            if (!isPvc && loyaltyProgram !== 'No Loyalty' && loyaltyPointsRedeemed > loyaltyPointsBalance) {
                 showTxnAlert(`Cannot redeem more points than current balance (${loyaltyPointsBalance} pts).`, 'warning');
                 document.getElementById('loyaltyPointsRedeemed')?.focus();
                 _resetSubmitBtn(); return;
@@ -13378,6 +13644,14 @@ setTimeout(function() {
             let paymentStatus;
             if (method === 'Credit Account') {
                 paymentStatus = 'Pending';
+            } else if (isPvc) {
+                if (grand <= 0.009) {
+                    paymentStatus = 'Paid';
+                } else if (amountPaid >= grand - 0.009) {
+                    paymentStatus = 'Paid';
+                } else {
+                    paymentStatus = 'Partially Paid';
+                }
             } else if (amountPaid <= 0) {
                 paymentStatus = 'Pending';
             } else if (amountPaid < grand - 0.009) {
@@ -13390,12 +13664,12 @@ setTimeout(function() {
 
             const isCard          = method === 'Card' || method === 'Credit Card' || method === 'Debit Card';
             const isEwallet       = method === 'E-Wallet' || method === 'GCash' || method === 'Maya';
-            const isFleet         = method === 'Petron Fleet Card';
             const isCredit        = method === 'Credit Account';
 
             // Canonical top-level payment method
             const canonicalPaymentMethod = isCard ? 'Card'
                                          : isEwallet ? 'E-Wallet'
+                                         : isPvc ? 'Petron Value Card (PVC Points)'
                                          : method;
 
             const ewProviderVal = isEwallet ? (
@@ -13415,13 +13689,15 @@ setTimeout(function() {
                 document.getElementById('cardRefNumber')?.value || document.getElementById('ccRefNumber')?.value || document.getElementById('dcRefNumber')?.value || null
             ) : null;
 
-            const subtotal = cart.reduce((s, i) => s + i.quantity * i.unit_price, 0);
-            const vat = subtotal * 0.12;
+            const isVat = stationTaxConfig && stationTaxConfig.is_vat_registered;
+            const taxRate = isVat ? (stationTaxConfig.tax_rate || 0.12) : 0;
+            const vatableSales = isVat ? (grand > 0 ? Math.round((grand / (1 + taxRate)) * 100) / 100 : 0) : grand;
+            const vatAmount = isVat ? (grand > 0 ? Math.round((grand - vatableSales) * 100) / 100 : 0) : 0;
 
             const payload = {
                 action:                  'create_transaction',
-                subtotal:                parseFloat(subtotal.toFixed(2)),
-                vat_amount:              parseFloat(vat.toFixed(2)),
+                subtotal:                parseFloat(vatableSales.toFixed(2)),
+                vat_amount:              parseFloat(vatAmount.toFixed(2)),
                 discount_amount:         parseFloat(loyaltyDiscount.toFixed(2)),
                 loyalty_discount_amount: parseFloat(loyaltyDiscount.toFixed(2)),
                 total_amount:            parseFloat(grand.toFixed(2)),
@@ -13431,7 +13707,7 @@ setTimeout(function() {
                 customer_contact:        contactNumber || null,
                 customer_name:           fullName,
                 payment_method:          canonicalPaymentMethod,
-                amount_paid:             amountPaid > 0 ? amountPaid : (method === 'Cash' ? grand : null),
+                amount_paid:             isPvc ? (amountPaid > 0 ? amountPaid : (grand <= 0.009 ? 0 : null)) : (amountPaid > 0 ? amountPaid : (method === 'Cash' ? grand : null)),
                 amount_tendered:         method === 'Cash' ? (amountPaid > 0 ? amountPaid : grand) : null,
                 change_amount:           method === 'Cash' && amountPaid >= grand ? parseFloat((amountPaid - grand).toFixed(2)) : null,
                 balance_due:             balanceDue > 0 ? parseFloat(balanceDue.toFixed(2)) : null,
@@ -13445,24 +13721,16 @@ setTimeout(function() {
                 ewallet_provider:    ewProviderVal,
                 ewallet_reference:   isEwallet ? (document.getElementById('ewRefNumber')?.value || null) : null,
 
-                fleet_card_number:   isFleet ? (document.getElementById('fcNumber')?.value || null) : null,
-                fleet_company_name:  isFleet ? (document.getElementById('fcCompanyName')?.value || null) : null,
-                fleet_auth_number:   isFleet ? (document.getElementById('fcAuthNumber')?.value || null) : null,
-                fleet_vehicle_plate: isFleet ? (document.getElementById('fcPlateNumber')?.value || null) : null,
-                fleet_odometer:      isFleet ? (document.getElementById('fcOdometer')?.value || null) : null,
-                fleet_points_earned: isFleet ? (parseInt(document.getElementById('fcPointsEarned')?.value || 0, 10) || null) : null,
-                fleet_points_redeemed: isFleet ? (parseInt(document.getElementById('fcPointsRedeemed')?.value || 0, 10) || null) : null,
-
                 credit_customer_id:    isCredit ? (parseInt(document.getElementById('creditCustomer')?.value) || null) : null,
                 credit_company_name:   isCredit ? (document.getElementById('creditCompanyName')?.value || null) : null,
                 credit_account_number: isCredit ? (document.getElementById('creditAccountNumber')?.value || null) : null,
                 credit_po_number:      isCredit ? (document.getElementById('creditPoNumber')?.value || null) : null,
                 credit_due_date:       isCredit ? (document.getElementById('creditDueDate')?.value || null) : null,
                 
-                loyalty_type:            (!isFleet && loyaltyProgram !== 'No Loyalty') ? loyaltyProgram : null,
-                loyalty_card_no:         (!isFleet && hasLoyaltyCard) ? loyaltyCardNo : null,
-                loyalty_points_earned:   (!isFleet && hasLoyaltyCard) ? loyaltyPointsEarned : null,
-                loyalty_points_redeemed: (!isFleet && hasLoyaltyCard) ? loyaltyPointsRedeemed : null,
+                loyalty_type:            (isPvc || loyaltyProgram !== 'No Loyalty') ? 'Petron Value Card (PVC)' : null,
+                loyalty_card_no:         (isPvc || hasLoyaltyCard) ? (loyaltyCardNo || null) : null,
+                loyalty_points_earned:   (hasLoyaltyCard) ? loyaltyPointsEarned : null,
+                loyalty_points_redeemed: (hasLoyaltyCard) ? loyaltyPointsRedeemed : null,
 
                 items: cart.map(i => ({
                     item_type:    i.item_type,
@@ -14967,7 +15235,7 @@ setTimeout(function() {
                   <option value="Debit Card">Debit Card</option>
                   <option value="GCash">GCash</option>
                   <option value="Maya">Maya</option>
-                  <option value="Petron Fleet Card">Petron Fleet Card</option>
+                  <option value="Petron Value Card (PVC Points)">Petron Value Card (PVC Points)</option>
                   <option value="Credit Account">Credit Account</option>
                 </select>
               </div>
@@ -15187,14 +15455,14 @@ setTimeout(function() {
             if (sel && sel.value !== method) sel.value = method;
             // Show/hide contextual fields
             document.getElementById('pmCashFields').style.display   = (method === 'Cash') ? 'block' : 'none';
-            document.getElementById('pmRefFields').style.display    = ['Credit Card','Debit Card','GCash','Maya','Petron Fleet Card'].includes(method) ? 'block' : 'none';
+            document.getElementById('pmRefFields').style.display    = ['Credit Card','Debit Card','GCash','Maya','Petron Value Card (PVC Points)'].includes(method) ? 'block' : 'none';
             document.getElementById('pmCreditFields').style.display = (method === 'Credit Account') ? 'block' : 'none';
             var labels = {
-                'Credit Card':       'Card Reference No.',
-                'Debit Card':        'Card Reference No.',
-                'GCash':             'GCash Reference No.',
-                'Maya':              'Maya Reference No.',
-                'Petron Fleet Card': 'Fleet Card No.'
+                'Credit Card':                   'Card Reference No.',
+                'Debit Card':                    'Card Reference No.',
+                'GCash':                         'GCash Reference No.',
+                'Maya':                          'Maya Reference No.',
+                'Petron Value Card (PVC Points)':'PVC Card / Auth No.'
             };
             var lbl = document.getElementById('pmRefLabel');
             if (lbl) lbl.textContent = labels[method] || 'Reference No.';
@@ -15516,6 +15784,20 @@ setTimeout(function() {
                         document.getElementById('viewMTPayStatus').innerHTML = txn.payment_status_badge || '—';
                         document.getElementById('viewMTSubtotal').textContent = txn.subtotal_display || '₱0.00';
                         document.getElementById('viewMTVAT').textContent = txn.vat_display || '₱0.00';
+
+                        var ptsRedeemed = parseInt(txn.loyalty_points_redeemed || 0, 10);
+                        var discAmt = parseFloat(txn.loyalty_discount_amount || txn.discount_amount || 0);
+                        var loyaltyRow = document.getElementById('viewMTLoyaltyRow');
+                        if (loyaltyRow) {
+                            if (ptsRedeemed > 0 || discAmt > 0) {
+                                loyaltyRow.style.display = 'flex';
+                                var loyaltyPtsEl = document.getElementById('viewMTLoyaltyPoints');
+                                if (loyaltyPtsEl) loyaltyPtsEl.textContent = ptsRedeemed + ' pts (₱' + discAmt.toFixed(2) + ')';
+                            } else {
+                                loyaltyRow.style.display = 'none';
+                            }
+                        }
+
                         document.getElementById('viewMTTotal').textContent = txn.total_display || '₱0.00';
                         document.getElementById('viewMTPaid').textContent = txn.paid_display || '₱0.00';
                         
@@ -16511,6 +16793,10 @@ setTimeout(function() {
                       <span style="font-size:11.5px;color:#64748b;font-weight:700;text-transform:uppercase;">VAT (12%):</span>
                       <span id="viewMTVAT" style="font-size:12.5px;font-weight:700;color:#475569;">₱0.00</span>
                     </div>
+                    <div id="viewMTLoyaltyRow" style="display:none;justify-content:space-between;align-items:center;background:#eff6ff;padding:4px 8px;border-radius:6px;border:1px dashed #93c5fd;">
+                      <span style="font-size:11.5px;color:#002F70;font-weight:700;text-transform:uppercase;">PVC Points Redeemed:</span>
+                      <span id="viewMTLoyaltyPoints" style="font-size:12.5px;font-weight:700;color:#002F70;">0 pts (₱0.00)</span>
+                    </div>
                     <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;border-top:1.5px solid #e2e8f0;">
                       <span style="font-size:13.5px;color:#002F70;font-weight:900;text-transform:uppercase;">Total Amount:</span>
                       <span id="viewMTTotal" style="font-size:18px;font-weight:900;color:#002F70;">₱0.00</span>
@@ -17067,6 +17353,19 @@ window.viewMerchandiseDetails = function(txnId, btn) {
             // Financials
             setTxt('viewMTSubtotal', txn.subtotal_display || ('₱' + parseFloat(txn.subtotal || 0).toFixed(2)));
             setTxt('viewMTVAT', txn.vat_display || ('₱' + parseFloat(txn.vat || 0).toFixed(2)));
+
+            var ptsRedeemed = parseInt(txn.loyalty_points_redeemed || 0, 10);
+            var discAmt = parseFloat(txn.loyalty_discount_amount || txn.discount_amount || 0);
+            var loyaltyRow = document.getElementById('viewMTLoyaltyRow');
+            if (loyaltyRow) {
+                if (ptsRedeemed > 0 || discAmt > 0) {
+                    loyaltyRow.style.display = 'flex';
+                    setTxt('viewMTLoyaltyPoints', ptsRedeemed + ' pts (₱' + discAmt.toFixed(2) + ')');
+                } else {
+                    loyaltyRow.style.display = 'none';
+                }
+            }
+
             setTxt('viewMTTotal', txn.total_display || ('₱' + parseFloat(txn.total_amount || 0).toFixed(2)));
             setTxt('viewMTPaid', txn.paid_display || ('₱' + parseFloat(txn.amount_paid || 0).toFixed(2)));
 

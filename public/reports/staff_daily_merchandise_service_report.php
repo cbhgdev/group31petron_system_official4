@@ -200,8 +200,9 @@ $payment_breakdown = [
     'Cash' => ['amount' => 0.0, 'providers' => []],
     'Card' => ['amount' => 0.0, 'providers' => []],
     'E-Wallet' => ['amount' => 0.0, 'providers' => ['GCash' => 0.0, 'Maya' => 0.0]],
-    'Petron Fleet Card' => ['amount' => 0.0, 'providers' => []],
+    'Petron Value Card (PVC Points)' => ['amount' => 0.0, 'providers' => []],
     'Credit Account' => ['amount' => 0.0, 'providers' => []],
+    'Petron Fleet Card' => ['amount' => 0.0, 'providers' => []],
     'Petron Loyalty Points' => ['amount' => 0.0, 'providers' => []]
 ];
 try {
@@ -213,9 +214,9 @@ try {
     ");
     $stmt->execute($params);
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-        $norm = function_exists('normalize_payment_type') ? normalize_payment_type($row['payment_method'] ?? 'Cash', $row['ewallet_provider'] ?? '') : ['type' => $row['payment_method'] ?? 'Cash', 'provider' => $row['ewallet_provider'] ?? ''];
-        $method = $norm['type'];
-        $prov = $norm['provider'];
+        $norm = function_exists('normalize_payment_type') ? normalize_payment_type($row['payment_method'] ?? 'Cash', $row['ewallet_provider'] ?? '') : ['payment_type' => $row['payment_method'] ?? 'Cash', 'provider' => $row['ewallet_provider'] ?? ''];
+        $method = $norm['payment_type'] ?? $norm['type'] ?? 'Cash';
+        $prov = $norm['provider'] ?? '';
         if (!isset($payment_breakdown[$method])) {
             $payment_breakdown[$method] = ['amount' => 0.0, 'providers' => []];
         }

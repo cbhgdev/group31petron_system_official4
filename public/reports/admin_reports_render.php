@@ -602,6 +602,58 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                     </table>
                 </div>
 
+                <!-- 3b. TAX & VAT BREAKDOWN (VAT-INCLUSIVE PRICING STANDARD) -->
+                <?php
+                $tot_daily_sales = (float)($daily_summary['overall']['amount'] ?? 0);
+                $station_tax_cfg = function_exists('petron_get_station_tax_config') ? petron_get_station_tax_config() : ['is_vat_registered' => true, 'tax_rate' => 0.12];
+                $calc_tax = function_exists('petron_calculate_taxes') ? petron_calculate_taxes($tot_daily_sales, 0.0) : ['subtotal_amount' => round($tot_daily_sales / 1.12, 2), 'vat_amount' => round($tot_daily_sales - round($tot_daily_sales / 1.12, 2), 2), 'non_vat_sales' => 0.0];
+                $vatable_base = $calc_tax['subtotal_amount'] ?? round($tot_daily_sales / 1.12, 2);
+                $vat_ext      = $calc_tax['vat_amount'] ?? round($tot_daily_sales - $vatable_base, 2);
+                $non_vat_base = $calc_tax['non_vat_sales'] ?? 0.0;
+                ?>
+                <div class="rpt-section-heading"><i class="fas fa-file-invoice-dollar me-2"></i>TAX &amp; VAT BREAKDOWN (VAT-INCLUSIVE STANDARD)</div>
+                <div class="table-responsive mb-4">
+                    <table class="rpt-table align-middle" style="max-width:600px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left;">Tax Classification</th>
+                                <th style="text-align:right;">Amount (₱)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if ($station_tax_cfg['is_vat_registered']): ?>
+                            <tr>
+                                <td style="text-align:left;">Vatable Sales (VAT-Exclusive Base)</td>
+                                <td style="text-align:right;" class="fw-bold">₱<?= number_format((float)$vatable_base, 2) ?></td>
+                            </tr>
+                            <tr>
+                                <td style="text-align:left;">Value-Added Tax (12% Extracted)</td>
+                                <td style="text-align:right;" class="fw-bold text-primary">₱<?= number_format((float)$vat_ext, 2) ?></td>
+                            </tr>
+                            <tr>
+                                <td style="text-align:left;">VAT-Exempt / Zero-Rated Sales</td>
+                                <td style="text-align:right;">₱0.00</td>
+                            </tr>
+                            <?php else: ?>
+                            <tr>
+                                <td style="text-align:left;">Non-VAT / Exempt Sales</td>
+                                <td style="text-align:right;" class="fw-bold">₱<?= number_format((float)$non_vat_base, 2) ?></td>
+                            </tr>
+                            <tr>
+                                <td style="text-align:left;">Value-Added Tax (0%)</td>
+                                <td style="text-align:right;">₱0.00</td>
+                            </tr>
+                            <?php endif; ?>
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <td style="text-align:left;" class="fw-bold">Total Gross Sales (VAT-Inclusive):</td>
+                                <td style="text-align:right;" class="fw-bold text-success">₱<?= number_format($tot_daily_sales, 2) ?></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+                </div>
+
                 <!-- 4. PAYMENT METHOD SUMMARY -->
                 <div class="rpt-section-heading"><i class="fas fa-credit-card me-2"></i>PAYMENT METHOD SUMMARY</div>
                 <div class="table-responsive mb-4">
@@ -1563,6 +1615,57 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                             </tr>
                         </tfoot>
                         <?php endif; ?>
+                    </table>
+                </div>
+
+                <!-- Revenue Summary Tax Breakdown & VAT Extraction Summary -->
+                <?php
+                $station_tax_cfg = function_exists('petron_get_station_tax_config') ? petron_get_station_tax_config() : ['is_vat_registered' => true, 'tax_rate' => 0.12];
+                $rev_tax = function_exists('petron_calculate_taxes') ? petron_calculate_taxes($tot_net, 0.0) : ['subtotal_amount' => round($tot_net / 1.12, 2), 'vat_amount' => round($tot_net - round($tot_net / 1.12, 2), 2), 'non_vat_sales' => 0.0];
+                $rev_vatable = $rev_tax['subtotal_amount'] ?? round($tot_net / 1.12, 2);
+                $rev_vat_amt = $rev_tax['vat_amount'] ?? round($tot_net - $rev_vatable, 2);
+                $rev_non_vat = $rev_tax['non_vat_sales'] ?? 0.0;
+                ?>
+                <div class="rpt-section-heading mt-4"><i class="fas fa-file-invoice-dollar me-2"></i>TAX BREAKDOWN &amp; VAT EXTRACTION SUMMARY (VAT-INCLUSIVE)</div>
+                <div class="table-responsive mb-4">
+                    <table class="rpt-table align-middle" style="max-width:600px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left;">Tax Classification</th>
+                                <th class="text-end" style="text-align:right;">Amount (₱)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php if ($station_tax_cfg['is_vat_registered']): ?>
+                            <tr>
+                                <td style="text-align:left;">Vatable Revenue Base (VAT-Exclusive)</td>
+                                <td class="text-end fw-bold" style="text-align:right;">₱<?= number_format((float)$rev_vatable, 2) ?></td>
+                            </tr>
+                            <tr>
+                                <td style="text-align:left;">Output Value-Added Tax (12% Extracted)</td>
+                                <td class="text-end fw-bold text-primary" style="text-align:right;">₱<?= number_format((float)$rev_vat_amt, 2) ?></td>
+                            </tr>
+                            <tr>
+                                <td style="text-align:left;">VAT-Exempt / Zero-Rated Revenue</td>
+                                <td class="text-end" style="text-align:right;">₱0.00</td>
+                            </tr>
+                            <?php else: ?>
+                            <tr>
+                                <td style="text-align:left;">Non-VAT / Exempt Revenue</td>
+                                <td class="text-end fw-bold" style="text-align:right;">₱<?= number_format((float)$rev_non_vat, 2) ?></td>
+                            </tr>
+                            <tr>
+                                <td style="text-align:left;">Output Value-Added Tax (0%)</td>
+                                <td class="text-end" style="text-align:right;">₱0.00</td>
+                            </tr>
+                            <?php endif; ?>
+                        </tbody>
+                        <tfoot>
+                            <tr>
+                                <td style="text-align:left;" class="fw-bold">Total Net Revenue (VAT-Inclusive):</td>
+                                <td class="text-end fw-bold text-success" style="text-align:right;">₱<?= number_format($tot_net, 2) ?></td>
+                            </tr>
+                        </tfoot>
                     </table>
                 </div>
                 <?php

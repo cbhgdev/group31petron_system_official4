@@ -116,6 +116,12 @@ if ($type === 'job_order') {
                         'card_reference' => $jo_mt['card_reference'] ?? '',
                         'items' => $mt_items,
                         'parts_used' => null,
+                        'discount_amount'         => (float)($jo_mt['discount_amount'] ?? $jo_mt['loyalty_discount_amount'] ?? 0),
+                        'loyalty_discount_amount' => (float)($jo_mt['loyalty_discount_amount'] ?? $jo_mt['discount_amount'] ?? 0),
+                        'loyalty_type'            => $jo_mt['loyalty_type'] ?? '',
+                        'loyalty_card_no'         => $jo_mt['loyalty_card_no'] ?? '',
+                        'loyalty_points_earned'   => $jo_mt['loyalty_points_earned'] ?? null,
+                        'loyalty_points_redeemed' => $jo_mt['loyalty_points_redeemed'] ?? null,
                         '_source' => 'merchandise_transactions'
                     ];
                 }
@@ -222,6 +228,12 @@ if ($type === 'job_order') {
                 'station_vat_tin'     => $jo['station_vat_tin'] ?? '',
                 'items'               => $jo_items,
                 'transaction_type'    => 'job_order',
+                'discount_amount'         => (float)($jo['discount_amount']         ?? $jo['loyalty_discount_amount'] ?? 0),
+                'loyalty_discount_amount' => (float)($jo['loyalty_discount_amount'] ?? $jo['discount_amount']         ?? 0),
+                'loyalty_type'            => $jo['loyalty_type']            ?? '',
+                'loyalty_card_no'         => $jo['loyalty_card_no']         ?? '',
+                'loyalty_points_earned'   => $jo['loyalty_points_earned']   ?? null,
+                'loyalty_points_redeemed' => $jo['loyalty_points_redeemed'] ?? null,
                 'job_order'           => [
                     'job_order_id'        => $jo['job_order_id'] ?? $jo['job_order_number'] ?? null,
                     'service_type'        => $jo['service_type'] ?? $jo['job_type'] ?? '',
@@ -526,6 +538,12 @@ if (!$sale && !empty($id)) {
                 'items'               => $items_uf,
                 'job_order'           => $job_order_data,
                 'transaction_type'    => $txn_type,
+                'discount_amount'         => (float)($txn_uf['discount_amount']         ?? $txn_uf['loyalty_discount_amount'] ?? 0),
+                'loyalty_discount_amount' => (float)($txn_uf['loyalty_discount_amount'] ?? $txn_uf['discount_amount']         ?? 0),
+                'loyalty_type'            => $txn_uf['loyalty_type']            ?? '',
+                'loyalty_card_no'         => $txn_uf['loyalty_card_no']         ?? '',
+                'loyalty_points_earned'   => $txn_uf['loyalty_points_earned']   ?? null,
+                'loyalty_points_redeemed' => $txn_uf['loyalty_points_redeemed'] ?? null,
             ];
         }
     } catch (Exception $e) {}
@@ -882,34 +900,44 @@ if ($balance_due_db <= 0 && $pay_status_norm === 'partial') {
 $txn_type_label    = !empty($receipt_cfg['receipt_title']) ? $receipt_cfg['receipt_title'] : 'SALES INVOICE';
 $txn_type_sublabel = 'Official Merchandise & Service Invoice';
 
-// ── Compute subtotal and VAT correctly (100% exact math) ─────────────────────
+// ── Station Tax Config & VAT-Inclusive Calculation ───────────────────────────
+$st_tax_cfg = function_exists('petron_get_station_tax_config') 
+    ? petron_get_station_tax_config($st_id) 
+    : ['is_vat_registered' => true, 'tax_rate' => 0.12, 'tax_type' => 'VAT', 'tax_label' => 'VAT (12%)'];
+
 $total           = (float)($sale['total_amount'] ?? $sale['total'] ?? 0);
 $stored_subtotal = (float)($sale['subtotal_amount'] ?? $sale['subtotal'] ?? 0);
 $stored_vat      = (float)($sale['vat_amount'] ?? 0);
 
-// Check if items sum to a subtotal
-$items_sum = 0;
+// Check if items sum to a gross subtotal
+$items_sum = 0.0;
 if (!empty($sale['items'])) {
     foreach ($sale['items'] as $it) {
         $items_sum += (float)($it['quantity'] ?? 1) * (float)($it['unit_price'] ?? 0);
     }
 }
+$disc_val = (float)($sale['discount_amount'] ?? $sale['loyalty_discount_amount'] ?? 0);
+$gross_subtotal = $items_sum > 0 ? $items_sum : ($total + $disc_val);
 
-if ($stored_subtotal > 0 && $stored_vat > 0 && abs(($stored_subtotal + $stored_vat) - $total) <= 0.05) {
-    $subtotal_display = $stored_subtotal;
-    $vat_display      = $stored_vat;
-} elseif ($items_sum > 0 && abs(($items_sum * 1.12) - $total) <= 0.05) {
-    $subtotal_display = round($items_sum, 2);
-    $vat_display      = round($total - $subtotal_display, 2);
-} elseif ($stored_vat > 0 && $total > $stored_vat) {
-    $subtotal_display = round($total - $stored_vat, 2);
-    $vat_display      = $stored_vat;
+if ($st_tax_cfg['is_vat_registered']) {
+    if ($stored_subtotal > 0 && $stored_vat >= 0 && abs(($stored_subtotal + $stored_vat) - $total) <= 0.05) {
+        $subtotal_display = $stored_subtotal;
+        $vat_display      = $stored_vat;
+    } else {
+        $tax_calc = petron_calculate_taxes($gross_subtotal, $disc_val, $st_id);
+        $subtotal_display = $tax_calc['vatable_sales'];
+        $vat_display      = $tax_calc['vat_amount'];
+    }
+    $vatable     = $subtotal_display;
+    $vat_amt     = $vat_display;
+    $non_vat_amt = 0.00;
 } else {
-    $subtotal_display = $total > 0 ? round($total / 1.12, 2) : 0;
-    $vat_display      = $total > 0 ? round($total - $subtotal_display, 2) : 0;
+    $vatable     = 0.00;
+    $vat_amt     = 0.00;
+    $non_vat_amt = $total;
+    $subtotal_display = $total;
+    $vat_display = 0.00;
 }
-$vatable   = $subtotal_display;
-$vat_amt   = $vat_display;
 $items     = $sale['items'] ?? [];
 $norm_pay_info = function_exists('format_payment_for_record') ? format_payment_for_record($sale) : ['payment_type'=>$pay_method,'provider'=>$sale['ewallet_provider']??''];
 $pm_lc     = strtolower($norm_pay_info['payment_type'] ?? $pay_method);
@@ -1496,14 +1524,25 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
   <!-- ══ TAX BREAKDOWN ═══════════════════════════════════════════════════════ -->
   <?php if ($show_vat): ?>
   <div class="jo-r-lbl">Tax Breakdown</div>
+  <?php if (!empty($st_tax_cfg['is_vat_registered'])): ?>
   <div class="jo-r-row"><span class="jo-r-key">Vatable Sales</span><span class="jo-r-val">&#8369;<?php echo number_format($vatable, 2); ?></span></div>
-  <div class="jo-r-row"><span class="jo-r-key">VAT (12%)</span><span class="jo-r-val">&#8369;<?php echo number_format($vat_amt, 2); ?></span></div>
+  <div class="jo-r-row"><span class="jo-r-key"><?php echo htmlspecialchars($st_tax_cfg['tax_label'] ?? 'VAT (12%)'); ?></span><span class="jo-r-val">&#8369;<?php echo number_format($vat_amt, 2); ?></span></div>
   <div class="jo-r-row"><span class="jo-r-key">Zero-Rated Sales</span><span class="jo-r-val">&#8369;0.00</span></div>
   <div class="jo-r-row"><span class="jo-r-key">VAT-Exempt Sales</span><span class="jo-r-val">&#8369;0.00</span></div>
+  <?php else: ?>
+  <div class="jo-r-row"><span class="jo-r-key">Non-VAT Sales</span><span class="jo-r-val">&#8369;<?php echo number_format($non_vat_amt, 2); ?></span></div>
+  <div class="jo-r-row"><span class="jo-r-key">VAT Amount</span><span class="jo-r-val">&#8369;0.00</span></div>
+  <div class="jo-r-row"><span class="jo-r-key">VAT-Exempt Sales</span><span class="jo-r-val">&#8369;0.00</span></div>
+  <?php endif; ?>
   <?php endif; ?>
 
-  <?php if (!empty($sale['discount_amount']) && (float)$sale['discount_amount'] > 0): ?>
-  <div class="jo-r-row" style="color:#dc2626;font-weight:700;"><span class="jo-r-key">Loyalty Discount</span><span class="jo-r-val">-&#8369;<?php echo number_format((float)$sale['discount_amount'], 2); ?></span></div>
+  <?php 
+    $disc_val = (float)($sale['discount_amount'] ?? $sale['loyalty_discount_amount'] ?? 0);
+    $gross_subtotal = $items_sum > 0 ? $items_sum : ($total + $disc_val);
+  ?>
+  <?php if ($disc_val > 0): ?>
+  <div class="jo-r-row"><span class="jo-r-key">Gross Total</span><span class="jo-r-val">&#8369;<?php echo number_format($gross_subtotal, 2); ?></span></div>
+  <div class="jo-r-row" style="color:#dc2626;font-weight:700;"><span class="jo-r-key">PVC Discount<?php if (!empty($sale['loyalty_points_redeemed'])): ?> (<?php echo (int)$sale['loyalty_points_redeemed']; ?> pts)<?php endif; ?></span><span class="jo-r-val">-&#8369;<?php echo number_format($disc_val, 2); ?></span></div>
   <?php endif; ?>
 
   <div class="jo-r-div2"></div>
@@ -1646,13 +1685,14 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
       <div class="jo-r-row"><span class="jo-r-key">Due Date</span><span class="jo-r-val"><?php echo htmlspecialchars($sale['credit_due_date']); ?></span></div>
       <?php endif; ?>
 
-    <?php elseif (in_array($pm_lc, ['petron loyalty points', 'loyalty points'])): ?>
-      <div class="jo-r-row"><span class="jo-r-key">Amount Deducted</span><span class="jo-r-val">&#8369;<?php echo number_format($total, 2); ?></span></div>
+    <?php elseif (in_array($pm_lc, ['petron value card (pvc points)', 'petron value card', 'pvc points', 'petron loyalty points', 'loyalty points'])): ?>
+      <div class="jo-r-row"><span class="jo-r-key">Points Redeemed</span><span class="jo-r-val"><?php echo number_format((int)($sale['loyalty_points_redeemed'] ?? 0)); ?> pts</span></div>
+      <div class="jo-r-row"><span class="jo-r-key">Loyalty Discount</span><span class="jo-r-val">&#8369;<?php echo number_format((float)($sale['loyalty_discount_amount'] ?? $sale['discount_amount'] ?? 0), 2); ?></span></div>
       <?php if (!empty($sale['loyalty_card_no'])): ?>
-      <div class="jo-r-row"><span class="jo-r-key">Loyalty Card No.</span><span class="jo-r-val"><?php echo htmlspecialchars($sale['loyalty_card_no']); ?></span></div>
+      <div class="jo-r-row"><span class="jo-r-key">PVC Card No.</span><span class="jo-r-val"><?php echo htmlspecialchars($sale['loyalty_card_no']); ?></span></div>
       <?php endif; ?>
-      <?php if (!empty($sale['loyalty_points_redeemed'])): ?>
-      <div class="jo-r-row"><span class="jo-r-key">Points Redeemed</span><span class="jo-r-val"><?php echo number_format((int)$sale['loyalty_points_redeemed']); ?> pts</span></div>
+      <?php if ((float)($sale['balance_due'] ?? 0) > 0.009): ?>
+      <div class="jo-r-row" style="color:#9a3412;font-weight:700;"><span class="jo-r-key">Remaining Balance Due</span><span class="jo-r-val">&#8369;<?php echo number_format((float)$sale['balance_due'], 2); ?></span></div>
       <?php endif; ?>
     <?php endif; ?>
 
@@ -1666,16 +1706,35 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
 
   <div class="jo-r-div"></div>
 
-  <?php if ((!empty($sale['loyalty_type']) && in_array($sale['loyalty_type'], ['Petron Rewards Card', 'Petron Value Card', 'Petron Rewards'], true)) || !empty($sale['loyalty_card_no']) || $sale['loyalty_points_earned'] !== null || !empty($sale['loyalty_points_redeemed'])): ?>
+  <?php
+    $loyalty_balance_after = null;
+    if (!empty($txn_id) && isset($pdo)) {
+        try {
+            $ltStmt = $pdo->prepare("SELECT points_balance_after, points_earned, points_redeemed FROM loyalty_transactions WHERE reference_id = ? LIMIT 1");
+            $ltStmt->execute([$txn_id]);
+            $ltRow = $ltStmt->fetch(PDO::FETCH_ASSOC);
+            if ($ltRow) {
+                $loyalty_balance_after = (int)$ltRow['points_balance_after'];
+                if ($sale['loyalty_points_earned'] === null || $sale['loyalty_points_earned'] <= 0) {
+                    $sale['loyalty_points_earned'] = (int)$ltRow['points_earned'];
+                }
+                if ($sale['loyalty_points_redeemed'] === null || $sale['loyalty_points_redeemed'] <= 0) {
+                    $sale['loyalty_points_redeemed'] = (int)$ltRow['points_redeemed'];
+                }
+            }
+        } catch (Exception $e) {}
+    }
+  ?>
+  <?php if ((!empty($sale['loyalty_type']) && in_array($sale['loyalty_type'], ['Petron Rewards Card', 'Petron Value Card', 'Petron Value Card (PVC)', 'Petron Rewards'], true)) || !empty($sale['loyalty_card_no']) || $sale['loyalty_points_earned'] !== null || !empty($sale['loyalty_points_redeemed']) || $loyalty_balance_after !== null): ?>
   <!-- ══ LOYALTY ══════════════════════════════════════════════════════════════ -->
-  <div class="jo-r-lbl" style="color:#003d7a;">Petron Rewards Card</div>
+  <div class="jo-r-lbl" style="color:#003d7a;">Petron Value Card (PVC)</div>
   <?php if (!empty($sale['loyalty_card_no'])): ?>
   <div class="jo-r-row">
     <span class="jo-r-key">Card No.</span>
     <span class="jo-r-val jo-r-bold"><?php echo htmlspecialchars($sale['loyalty_card_no']); ?></span>
   </div>
   <?php endif; ?>
-  <?php if ($sale['loyalty_points_earned'] !== null): ?>
+  <?php if ($sale['loyalty_points_earned'] !== null && (int)$sale['loyalty_points_earned'] > 0): ?>
   <div class="jo-r-row">
     <span class="jo-r-key">Points Earned</span>
     <span class="jo-r-val" style="color:#16a34a;font-weight:700;">+<?php echo number_format((int)$sale['loyalty_points_earned']); ?> pts</span>
@@ -1685,6 +1744,12 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
   <div class="jo-r-row">
     <span class="jo-r-key">Points Redeemed</span>
     <span class="jo-r-val" style="color:#dc2626;font-weight:700;">-<?php echo number_format((int)$sale['loyalty_points_redeemed']); ?> pts</span>
+  </div>
+  <?php endif; ?>
+  <?php if ($loyalty_balance_after !== null): ?>
+  <div class="jo-r-row">
+    <span class="jo-r-key">Points Balance</span>
+    <span class="jo-r-val jo-r-bold" style="color:#002F70;"><?php echo number_format($loyalty_balance_after); ?> pts</span>
   </div>
   <?php endif; ?>
   <div class="jo-r-div"></div>

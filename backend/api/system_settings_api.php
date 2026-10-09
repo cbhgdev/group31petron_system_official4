@@ -169,6 +169,11 @@ try {
                 'default_orientation'          => 'reports',
                 'show_company_logo_reports'    => 'reports',
                 'show_report_footer'           => 'reports',
+                'tax_type'                     => 'tax',
+                'station_vat_tin'              => 'tax',
+                'tax_rate'                     => 'tax',
+                'is_vat_registered'            => 'tax',
+                'tax_pricing'                  => 'tax',
                 'maintenance_mode'             => 'maintenance',
                 'system_status'                => 'maintenance',
                 'last_system_update'           => 'maintenance',
@@ -202,10 +207,31 @@ try {
                 if ($key === 'default_orientation') {
                     $valStr = (strtolower($valStr) === 'landscape') ? 'Landscape' : 'Portrait';
                 }
-                if (in_array($key, ['enable_system_notifications', 'enable_error_notifications', 'show_company_logo_reports', 'show_report_footer'], true)) {
+                if (in_array($key, ['enable_system_notifications', 'enable_error_notifications', 'show_company_logo_reports', 'show_report_footer', 'is_vat_registered'], true)) {
                     $valStr = ($valStr === '1' || $valStr === 1 || $valStr === true || $valStr === 'true') ? '1' : '0';
                 }
                 upsertSetting($pdo, $key, $valStr, $category, $station_id, $me['id']);
+            }
+
+            // Sync station table tax fields if station-specific
+            if ($station_id > 0) {
+                try {
+                    $stCols = $pdo->query("SHOW COLUMNS FROM stations")->fetchAll(PDO::FETCH_COLUMN);
+                    $stUpdate = [];
+                    $stParams = [];
+                    if (in_array('tax_type', $stCols) && isset($settings['tax_type'])) {
+                        $stUpdate[] = "tax_type = ?";
+                        $stParams[] = strtoupper(trim((string)$settings['tax_type']));
+                    }
+                    if (in_array('vat_tin', $stCols) && isset($settings['station_vat_tin'])) {
+                        $stUpdate[] = "vat_tin = ?";
+                        $stParams[] = trim((string)$settings['station_vat_tin']);
+                    }
+                    if (!empty($stUpdate)) {
+                        $stParams[] = $station_id;
+                        $pdo->prepare("UPDATE stations SET " . implode(', ', $stUpdate) . " WHERE id = ?")->execute($stParams);
+                    }
+                } catch (Exception $eSt) {}
             }
 
             // Ensure maintenance status consistency
@@ -234,7 +260,8 @@ try {
                     'session_timeout', 'min_password_length', 'max_login_attempts',
                     'require_uppercase', 'require_numbers', 'require_special_chars',
                     'banner_duration', 'enable_system_notifications', 'enable_error_notifications',
-                    'default_paper_size', 'default_orientation', 'show_company_logo_reports', 'show_report_footer'
+                    'default_paper_size', 'default_orientation', 'show_company_logo_reports', 'show_report_footer',
+                    'tax_type', 'station_vat_tin', 'tax_rate', 'is_vat_registered', 'tax_pricing'
                 ];
                 foreach ($globalSyncKeys as $sk) {
                     if (isset($settings[$sk])) {
@@ -246,7 +273,7 @@ try {
                         if ($sk === 'banner_duration') $sVal = (string)max(1, min(60, (int)$sVal));
                         if ($sk === 'default_paper_size') $sVal = (strtoupper($sVal) === 'LETTER') ? 'Letter' : 'A4';
                         if ($sk === 'default_orientation') $sVal = (strtolower($sVal) === 'landscape') ? 'Landscape' : 'Portrait';
-                        if (in_array($sk, ['enable_system_notifications', 'enable_error_notifications', 'show_company_logo_reports', 'show_report_footer'], true)) {
+                        if (in_array($sk, ['enable_system_notifications', 'enable_error_notifications', 'show_company_logo_reports', 'show_report_footer', 'is_vat_registered'], true)) {
                             $sVal = ($sVal === '1' || $sVal === 1 || $sVal === true || $sVal === 'true') ? '1' : '0';
                         }
                         $pdo->prepare("UPDATE system_settings SET setting_value = ?, updated_at = NOW(), updated_by = ? WHERE setting_key = ?")->execute([$sVal, $me['id'], $sk]);
@@ -305,6 +332,17 @@ try {
                         $all_settings[$r['setting_key']] = $r['setting_value'];
                     }
                 }
+
+                // If station has tax_type or vat_tin in stations table, prioritize them
+                try {
+                    $stCheck = $pdo->prepare("SELECT tax_type, vat_tin FROM stations WHERE id = ? LIMIT 1");
+                    $stCheck->execute([$station_id]);
+                    $stRow = $stCheck->fetch(PDO::FETCH_ASSOC);
+                    if ($stRow) {
+                        if (!empty($stRow['tax_type'])) $all_settings['tax_type'] = $stRow['tax_type'];
+                        if (!empty($stRow['vat_tin']))  $all_settings['station_vat_tin'] = $stRow['vat_tin'];
+                    }
+                } catch (Exception $eStGet) {}
             }
 
             // System defaults
@@ -337,6 +375,11 @@ try {
                 'default_orientation'          => 'Portrait',
                 'show_company_logo_reports'    => '1',
                 'show_report_footer'           => '1',
+                'tax_type'                     => 'VAT',
+                'station_vat_tin'              => '123-456-789-000',
+                'tax_rate'                     => '12',
+                'is_vat_registered'            => '1',
+                'tax_pricing'                  => 'inclusive',
                 'maintenance_mode'             => '0',
                 'system_status'                => 'Online',
                 'last_system_update'           => '2026-08-06 22:30:00',
@@ -391,6 +434,11 @@ try {
                     ['default_orientation',          'Portrait', 'reports'],
                     ['show_company_logo_reports',    '1', 'reports'],
                     ['show_report_footer',           '1', 'reports'],
+                    ['tax_type',                     'VAT', 'tax'],
+                    ['station_vat_tin',              '123-456-789-000', 'tax'],
+                    ['tax_rate',                     '12', 'tax'],
+                    ['is_vat_registered',            '1', 'tax'],
+                    ['tax_pricing',                  'inclusive', 'tax'],
                     ['maintenance_mode',             '0', 'maintenance'],
                     ['system_status',                'Online', 'maintenance'],
                     ['last_system_update',           '2026-08-06 22:30:00', 'maintenance'],

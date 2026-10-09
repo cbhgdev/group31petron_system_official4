@@ -139,6 +139,144 @@ if (!function_exists('petron_format_currency')) {
     }
 }
 
+// ── STATION TAX CONFIGURATION & VAT-INCLUSIVE CALCULATION HELPERS ──
+if (!function_exists('petron_get_station_tax_config')) {
+    function petron_get_station_tax_config(?int $station_id = null): array {
+        global $pdo;
+        try {
+            if (!isset($pdo) || !$pdo) {
+                require_once __DIR__ . '/../public/db_connect.php';
+            }
+            if ($station_id === null && function_exists('user_station_id')) {
+                $station_id = (int)user_station_id();
+            }
+
+            $station = null;
+            if ($station_id !== null && $station_id > 0) {
+                $stmt = $pdo->prepare("SELECT * FROM stations WHERE id = ? LIMIT 1");
+                $stmt->execute([$station_id]);
+                $station = $stmt->fetch(PDO::FETCH_ASSOC);
+            }
+
+            // Station fields
+            $vat_tin = trim($station['vat_tin'] ?? '');
+            $tax_type = strtoupper(trim($station['tax_type'] ?? ''));
+
+            // System settings override if present
+            $setting_tax_type = petron_get_setting_value('tax_type', $station_id, '');
+            if (!empty($setting_tax_type)) {
+                $tax_type = strtoupper(trim($setting_tax_type));
+            }
+            $setting_vat_tin = petron_get_setting_value('station_vat_tin', $station_id, '');
+            if (!empty($setting_vat_tin)) {
+                $vat_tin = trim($setting_vat_tin);
+            }
+            $setting_tax_rate = petron_get_setting_value('tax_rate', $station_id, '12');
+            $tax_rate_num = is_numeric($setting_tax_rate) ? (float)$setting_tax_rate : 12.0;
+            $tax_rate = $tax_rate_num > 0 ? ($tax_rate_num > 1 ? $tax_rate_num / 100 : $tax_rate_num) : 0.12;
+
+            // Check if station is configured as Non-VAT
+            $is_non_vat = ($tax_type === 'NON-VAT' || $tax_type === 'NON_VAT' || $tax_type === 'EXEMPT');
+            $is_vat_registered = !$is_non_vat;
+
+            return [
+                'station_id'        => $station_id,
+                'is_vat_registered' => $is_vat_registered,
+                'tax_type'          => $is_vat_registered ? 'VAT' : 'NON-VAT',
+                'tax_rate'          => $is_vat_registered ? $tax_rate : 0.0,
+                'tax_percent'       => $is_vat_registered ? ($tax_rate * 100) : 0.0,
+                'vat_tin'           => $vat_tin,
+                'pricing'           => 'inclusive', // Prices are always VAT-inclusive per Petron standard
+                'tax_label'         => $is_vat_registered ? ('VAT (' . ($tax_rate * 100) . '%)') : 'Non-VAT'
+            ];
+        } catch (Throwable $e) {
+            return [
+                'station_id'        => $station_id,
+                'is_vat_registered' => true,
+                'tax_type'          => 'VAT',
+                'tax_rate'          => 0.12,
+                'tax_percent'       => 12.0,
+                'vat_tin'           => '',
+                'pricing'           => 'inclusive',
+                'tax_label'         => 'VAT (12%)'
+            ];
+        }
+    }
+}
+
+if (!function_exists('petron_extract_vat')) {
+    /**
+     * Extracts VAT component and VAT-exclusive amount from a VAT-inclusive amount.
+     * Formula:
+     *   VAT-Exclusive (Vatable Sales) = Gross Amount / (1 + Rate)
+     *   VAT Component = Gross Amount - VAT-Exclusive (or Gross Amount * Rate / (1 + Rate))
+     */
+    function petron_extract_vat(float $inclusive_amount, float $tax_rate = 0.12): array {
+        $inclusive_amount = max(0.0, round($inclusive_amount, 2));
+        if ($inclusive_amount <= 0 || $tax_rate <= 0) {
+            return [
+                'inclusive' => $inclusive_amount,
+                'exclusive' => $inclusive_amount,
+                'vat'       => 0.00
+            ];
+        }
+        $divisor = 1.0 + $tax_rate;
+        $exclusive = round($inclusive_amount / $divisor, 2);
+        $vat = round($inclusive_amount - $exclusive, 2);
+        return [
+            'inclusive' => $inclusive_amount,
+            'exclusive' => $exclusive,
+            'vat'       => $vat
+        ];
+    }
+}
+
+if (!function_exists('petron_calculate_taxes')) {
+    /**
+     * Authoritative tax calculation for merchandise, services, and combined transactions.
+     * Handles VAT-inclusive selling prices, discounts (PVC points, promo), and station tax status.
+     */
+    function petron_calculate_taxes(float $gross_amount, float $discount_amount = 0.0, ?int $station_id = null): array {
+        $config = petron_get_station_tax_config($station_id);
+        $gross_amount = max(0.0, round($gross_amount, 2));
+        $discount_amount = max(0.0, min($gross_amount, round($discount_amount, 2)));
+        $net_amount = max(0.0, round($gross_amount - $discount_amount, 2));
+
+        if ($config['is_vat_registered']) {
+            $rate = $config['tax_rate'];
+            $vat_extracted = petron_extract_vat($net_amount, $rate);
+            $vatable_sales = $vat_extracted['exclusive'];
+            $vat_amount    = $vat_extracted['vat'];
+            $vat_exempt    = 0.00;
+            $zero_rated    = 0.00;
+            $non_vat       = 0.00;
+        } else {
+            $vatable_sales = 0.00;
+            $vat_amount    = 0.00;
+            $vat_exempt    = 0.00;
+            $zero_rated    = 0.00;
+            $non_vat       = $net_amount;
+        }
+
+        return [
+            'gross_amount'     => $gross_amount,
+            'discount_amount'  => $discount_amount,
+            'net_amount'       => $net_amount,
+            'total_amount'     => $net_amount,
+            'subtotal_amount'  => $config['is_vat_registered'] ? $vatable_sales : $net_amount,
+            'vatable_sales'    => $vatable_sales,
+            'vat_amount'       => $vat_amount,
+            'vat_exempt_sales' => $vat_exempt,
+            'zero_rated_sales' => $zero_rated,
+            'non_vat_sales'    => $non_vat,
+            'is_vat'           => $config['is_vat_registered'],
+            'tax_rate'         => $config['tax_rate'],
+            'tax_type'         => $config['tax_type'],
+            'tax_label'        => $config['tax_label']
+        ];
+    }
+}
+
 if (!function_exists('petron_get_security_policy')) {
     function petron_get_security_policy(?int $station_id = null): array {
         global $pdo;
@@ -522,9 +660,8 @@ if (!function_exists('get_allowed_payment_types')) {
             'Cash',
             'Card',
             'E-Wallet',
-            'Petron Fleet Card',
+            'Petron Value Card (PVC Points)',
             'Credit Account',
-            'Petron Loyalty Points',
         ];
     }
 }
@@ -541,7 +678,7 @@ if (!function_exists('get_allowed_ewallet_providers')) {
 if (!function_exists('normalize_payment_type')) {
     /**
      * Standardizes any payment input or legacy record into the canonical taxonomy:
-     * - Payment Types: Cash, Card, E-Wallet, Petron Fleet Card, Credit Account, Petron Loyalty Points
+     * - Payment Types: Cash, Card, E-Wallet, Petron Value Card (PVC Points), Credit Account (and historical Petron Fleet Card)
      * - E-Wallet Providers: GCash, Maya
      */
     function normalize_payment_type(?string $method, ?string $provider = null): array {
@@ -606,7 +743,17 @@ if (!function_exists('normalize_payment_type')) {
             ];
         }
 
-        // Petron Fleet Card
+        // Petron Value Card (PVC Points) / Loyalty Points
+        if (strpos($lowerMethod, 'pvc') !== false || strpos($lowerMethod, 'value card') !== false || strpos($lowerMethod, 'loyalt') !== false || strpos($lowerMethod, 'reward') !== false || strpos($lowerMethod, 'point') !== false) {
+            return [
+                'payment_type' => 'Petron Value Card (PVC Points)',
+                'provider'     => null,
+                'card_type'    => null,
+                'is_ewallet'   => false,
+            ];
+        }
+
+        // Petron Fleet Card (historical records preserved)
         if (strpos($lowerMethod, 'fleet') !== false) {
             return [
                 'payment_type' => 'Petron Fleet Card',
@@ -620,16 +767,6 @@ if (!function_exists('normalize_payment_type')) {
         if (strpos($lowerMethod, 'credit') !== false || strpos($lowerMethod, 'utang') !== false || strpos($lowerMethod, 'receivable') !== false) {
             return [
                 'payment_type' => 'Credit Account',
-                'provider'     => null,
-                'card_type'    => null,
-                'is_ewallet'   => false,
-            ];
-        }
-
-        // Petron Loyalty Points
-        if (strpos($lowerMethod, 'loyalt') !== false || strpos($lowerMethod, 'reward') !== false || strpos($lowerMethod, 'point') !== false) {
-            return [
-                'payment_type' => 'Petron Loyalty Points',
                 'provider'     => null,
                 'card_type'    => null,
                 'is_ewallet'   => false,
@@ -666,11 +803,17 @@ if (!function_exists('format_payment_for_record')) {
         $provider = $norm['provider'] ?? ($row['ewallet_provider'] ?? null);
         $ref = $row['ewallet_reference'] ?? $row['card_reference'] ?? $row['fleet_card_number'] ?? $row['ref_no'] ?? null;
         $amt = (float)($row['total_amount'] ?? $row['amount_paid'] ?? $row['total'] ?? $row['amount'] ?? 0);
+        $pointsRedeemed = (float)($row['loyalty_points_redeemed'] ?? $row['points_redeemed'] ?? 0);
+        $loyaltyDiscount = (float)($row['loyalty_discount_amount'] ?? $row['loyalty_discount'] ?? 0);
         $sym = function_exists('petron_currency_symbol') ? petron_currency_symbol() : '₱';
 
         $lines = ["Payment Type: {$type}"];
         if ($type === 'E-Wallet' && !empty($provider)) {
             $lines[] = "Provider: {$provider}";
+        }
+        if ($pointsRedeemed > 0 || $loyaltyDiscount > 0) {
+            $lines[] = "Points Redeemed: " . number_format($pointsRedeemed, 0);
+            $lines[] = "Loyalty Discount: {$sym}" . number_format($loyaltyDiscount, 2);
         }
         $lines[] = "Amount: {$sym}" . number_format($amt, 2);
         if (!empty($ref) && $ref !== 'N/A') {
@@ -683,6 +826,8 @@ if (!function_exists('format_payment_for_record')) {
             'reference_no'     => $ref,
             'amount'           => $amt,
             'amount_formatted' => $sym . number_format($amt, 2),
+            'points_redeemed'  => $pointsRedeemed,
+            'loyalty_discount' => $loyaltyDiscount,
             'display_text'     => implode("\n", $lines),
             'display_inline'   => ($type === 'E-Wallet' && $provider) ? "{$type} ({$provider})" : $type,
         ];

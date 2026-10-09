@@ -289,9 +289,40 @@ $has_jo = !empty($job_order);
 $pay_method = $pay_method ?? 'Cash';
 $pm_lc = strtolower($pay_method);
 $pay_status_norm = $pay_status_norm ?? 'paid';
+
+$st_id = (int)($sale['station_id'] ?? $jo['station_id'] ?? $txn['station_id'] ?? 0);
+$st_tax_cfg = function_exists('petron_get_station_tax_config') 
+    ? petron_get_station_tax_config($st_id) 
+    : ['is_vat_registered' => true, 'tax_rate' => 0.12, 'tax_type' => 'VAT', 'tax_label' => 'VAT (12%)'];
+
 $total = (float) ($total ?? 0);
-$vatable = (float) ($vatable ?? round($total / 1.12, 2));
-$vat_amt = (float) ($vat_amt ?? round($total - $vatable, 2));
+$items_sum = 0.0;
+if (!empty($items)) {
+    foreach ($items as $it) {
+        $items_sum += (float)($it['quantity'] ?? $it['qty'] ?? 1) * (float)($it['unit_price'] ?? $it['price'] ?? 0);
+    }
+}
+$disc_val = (float)($sale['discount_amount'] ?? $sale['loyalty_discount_amount'] ?? 0);
+$gross_subtotal = $items_sum > 0 ? $items_sum : ($total + $disc_val);
+
+if (!empty($st_tax_cfg['is_vat_registered'])) {
+    $stored_subtotal = (float)($sale['subtotal_amount'] ?? 0);
+    $stored_vat      = (float)($sale['vat_amount'] ?? 0);
+    if ($stored_subtotal > 0 && $stored_vat >= 0 && abs(($stored_subtotal + $stored_vat) - $total) <= 0.05) {
+        $vatable = $stored_subtotal;
+        $vat_amt = $stored_vat;
+    } else {
+        $tax_calc = function_exists('petron_calculate_taxes') ? petron_calculate_taxes($gross_subtotal, $disc_val, $st_id) : ['vatable_sales' => round($total / 1.12, 2), 'vat_amount' => round($total - ($total / 1.12), 2)];
+        $vatable = $tax_calc['vatable_sales'];
+        $vat_amt = $tax_calc['vat_amount'];
+    }
+    $non_vat_amt = 0.00;
+} else {
+    $vatable = 0.00;
+    $vat_amt = 0.00;
+    $non_vat_amt = $total;
+}
+
 $amount_paid_db = (float) ($amount_paid_db ?? 0);
 $balance_due_db = (float) ($balance_due_db ?? 0);
 $tendered = (float) ($tendered ?? 0);
@@ -378,6 +409,22 @@ if ($pay_status_norm === 'partial') {
     $payment_rows .= rp_row('Amount Charged', rp_money($total));
 }
 
+if (in_array($pm_lc, ['petron value card (pvc points)', 'petron value card', 'pvc points', 'petron loyalty points', 'loyalty points'])) {
+    if (!empty($sale['loyalty_points_redeemed'])) {
+        $payment_rows .= rp_row('Points Redeemed', number_format((int)$sale['loyalty_points_redeemed']) . ' pts', true);
+    }
+    $discVal = (float)($sale['loyalty_discount_amount'] ?? $sale['discount_amount'] ?? 0);
+    if ($discVal > 0) {
+        $payment_rows .= rp_row('Loyalty Discount', rp_money($discVal), true);
+    }
+    if (!empty($sale['loyalty_card_no'])) {
+        $payment_rows .= rp_row('PVC Card No.', rp_e($sale['loyalty_card_no']), true);
+    }
+    if ($balance_due_db > 0.009) {
+        $payment_rows .= rp_row('Remaining Balance', rp_money($balance_due_db), true, 'warn');
+    }
+}
+
 if (in_array($pm_lc, ['fleet card', 'petron fleet card'])) {
     if (!empty($sale['fleet_card_number'])) {
         $payment_rows .= rp_row('Fleet Card No.', rp_e($sale['fleet_card_number']));
@@ -403,15 +450,18 @@ if (in_array($pm_lc, ['fleet card', 'petron fleet card'])) {
 }
 
 $loyalty_pdf_rows = '';
-if ((!empty($sale['loyalty_type']) && in_array($sale['loyalty_type'], ['Petron Rewards Card', 'Petron Value Card', 'Petron Rewards'], true)) || !empty($sale['loyalty_card_no']) || $sale['loyalty_points_earned'] !== null || !empty($sale['loyalty_points_redeemed'])) {
+if ((!empty($sale['loyalty_type']) && in_array($sale['loyalty_type'], ['Petron Rewards Card', 'Petron Value Card', 'Petron Value Card (PVC)', 'Petron Rewards'], true)) || !empty($sale['loyalty_card_no']) || $sale['loyalty_points_earned'] !== null || !empty($sale['loyalty_points_redeemed']) || !empty($loyalty_balance_after)) {
     if (!empty($sale['loyalty_card_no'])) {
         $loyalty_pdf_rows .= rp_row('Card No.', rp_e($sale['loyalty_card_no']), true);
     }
-    if ($sale['loyalty_points_earned'] !== null) {
+    if ($sale['loyalty_points_earned'] !== null && (int)$sale['loyalty_points_earned'] > 0) {
         $loyalty_pdf_rows .= rp_row('Points Earned', '+' . number_format((int)$sale['loyalty_points_earned']) . ' pts', true);
     }
     if (!empty($sale['loyalty_points_redeemed']) && (int)$sale['loyalty_points_redeemed'] > 0) {
         $loyalty_pdf_rows .= rp_row('Points Redeemed', '-' . number_format((int)$sale['loyalty_points_redeemed']) . ' pts', true);
+    }
+    if (isset($loyalty_balance_after) && $loyalty_balance_after !== null) {
+        $loyalty_pdf_rows .= rp_row('Points Balance', number_format($loyalty_balance_after) . ' pts', true);
     }
 }
 
@@ -512,12 +562,17 @@ table { width: 100%; border-collapse: collapse; }
   . ($show_vat ? '<div class="dash"></div>
   <div class="label">Tax Breakdown</div>
   <table>'
-    . rp_row('Vatable Sales', rp_money($vatable))
-    . rp_row('VAT (12%)', rp_money($vat_amt))
-    . rp_row('Zero-Rated Sales', rp_money(0))
-    . rp_row('VAT-Exempt Sales', rp_money(0))
-    . (!empty($sale['discount_amount']) && (float)$sale['discount_amount'] > 0 ? rp_row('Loyalty Discount', '-' . rp_money($sale['discount_amount']), true, 'warn') : '')
-  . '</table>' : (!empty($sale['discount_amount']) && (float)$sale['discount_amount'] > 0 ? '<table>' . rp_row('Loyalty Discount', '-' . rp_money($sale['discount_amount']), true, 'warn') . '</table>' : ''))
+    . (!empty($st_tax_cfg['is_vat_registered'])
+        ? (rp_row('Vatable Sales', rp_money($vatable))
+          . rp_row($st_tax_cfg['tax_label'] ?? 'VAT (12%)', rp_money($vat_amt))
+          . rp_row('Zero-Rated Sales', rp_money(0))
+          . rp_row('VAT-Exempt Sales', rp_money(0)))
+        : (rp_row('Non-VAT Sales', rp_money($non_vat_amt))
+          . rp_row('VAT Amount', rp_money(0))
+          . rp_row('VAT-Exempt Sales', rp_money(0))))
+    . ($disc_val > 0 ? rp_row('Gross Total', rp_money($gross_subtotal)) : '')
+    . ($disc_val > 0 ? rp_row('PVC Discount' . (!empty($sale['loyalty_points_redeemed']) ? ' (' . (int)$sale['loyalty_points_redeemed'] . ' pts)' : ''), '-' . rp_money($disc_val), true, 'warn') : '')
+  . '</table>' : ($disc_val > 0 ? '<table>' . rp_row('Gross Total', rp_money($gross_subtotal)) . rp_row('PVC Discount' . (!empty($sale['loyalty_points_redeemed']) ? ' (' . (int)$sale['loyalty_points_redeemed'] . ' pts)' : ''), '-' . rp_money($disc_val), true, 'warn') . '</table>' : ''))
 
   . '<div class="double"></div>
   <table><tr class="grand"><td>GRAND TOTAL</td><td class="val">' . rp_money($total) . '</td></tr></table>'
@@ -525,7 +580,7 @@ table { width: 100%; border-collapse: collapse; }
   <div class="label">Totals & Payment</div>
   <table>' . $payment_rows . '</table>' : '')
   . ($loyalty_pdf_rows ? '<div class="dash"></div>
-  <div class="label">Petron Rewards Card</div>
+  <div class="label">Petron Value Card (PVC)</div>
   <table>' . $loyalty_pdf_rows . '</table>' : '')
   . '<div class="dash"></div>'
   . ($show_qr && $qr_png !== '' ? '<div class="qr"><div class="qr-label">Scan to Verify</div><img src="var:receipt_qr" alt="QR"><div class="foot-meta">' . rp_e($txn_id) . '</div></div><div class="dash"></div>' : '') . '
