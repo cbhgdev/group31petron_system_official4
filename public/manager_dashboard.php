@@ -231,7 +231,10 @@ $total_available_fuel = 0.0;
 $fi_raw    = [];
 $fi_lookup = [];
 try {
-    $s = $pdo->prepare("SELECT id, fuel_type, current_level, current_stock, capacity, price_per_liter, status, reorder_level, COALESCE(ugt_no,'') AS ugt_no FROM fuel_inventory WHERE station_id = ? AND LOWER(COALESCE(status,'active')) = 'active' ORDER BY CAST(REGEXP_REPLACE(COALESCE(ugt_no,'0'), '[^0-9]', '') AS UNSIGNED) ASC, id ASC");
+    if (function_exists('ensure_fuel_inventory_synced')) {
+        ensure_fuel_inventory_synced($pdo, (int)$station_id);
+    }
+    $s = $pdo->prepare("SELECT id, fuel_type, current_level, current_stock, capacity, price_per_liter, status, reorder_level, COALESCE(ugt_no,'') AS ugt_no FROM fuel_inventory WHERE station_id = ? AND LOWER(COALESCE(status,'active')) NOT IN ('archived', 'deleted', 'inactive') ORDER BY CAST(REGEXP_REPLACE(COALESCE(ugt_no,'0'), '[^0-9]', '') AS UNSIGNED) ASC, id ASC");
     $s->execute([$station_id]);
     $fi_raw = $s->fetchAll(PDO::FETCH_ASSOC);
     foreach ($fi_raw as $row) {
@@ -333,62 +336,40 @@ $normal_fuel_count = max(0, count($fuel_tanks) - $low_fuel_count - $crit_fuel_co
 // Merchandise Inventory Counts & Valuation — Exact matching query from manager_inventory_merchandise.php
 $merch_inv_stats = [];
 try {
+    if (function_exists('ensure_station_inventory_synced')) {
+        ensure_station_inventory_synced($pdo, (int)$station_id);
+    }
     $stmt = $pdo->prepare("
         SELECT
-            ip.id,
-            ip.product_name                              AS product_name,
-            COALESCE(ip.category,'Merchandise')          AS category,
-            COALESCE(ip.unit_price, 0)                   AS price,
-            COALESCE(ip.unit_cost, 0)                    AS unit_cost,
-            ip.sku,
-            COALESCE(ip.brand,'Petron Corporation')      AS supplier,
-            COALESCE(ip.status,'active')                 AS product_status,
-            COALESCE(ip.min_stock, 0)                    AS min_stock,
-            COALESCE(ip.max_stock, 0)                    AS max_stock,
-            COALESCE(si.stock_level, ip.stock, 0)        AS stock_level,
-            COALESCE(si.capacity, ip.max_stock, 480)     AS capacity,
-            COALESCE(si.reorder_level, ip.min_stock, 24) AS reorder_level,
+            COALESCE(ip.id, p.id, si.product_id)         AS id,
+            COALESCE(ip.product_name, p.name, 'Unknown Product') AS product_name,
+            COALESCE(ip.category, pc.name, 'Merchandise') AS category,
+            COALESCE(si.price, ip.unit_price, p.price, 0) AS price,
+            COALESCE(si.cost, ip.unit_cost, p.cost, 0)   AS unit_cost,
+            COALESCE(ip.sku, p.sku, CONCAT('P', LPAD(si.product_id,4,'0'))) AS sku,
+            COALESCE(ip.brand, 'Petron Corporation')     AS supplier,
+            COALESCE(si.status, ip.status, p.status, 'active') AS product_status,
+            COALESCE(ip.min_stock, p.min_stock_level, 0) AS min_stock,
+            COALESCE(ip.max_stock, p.max_stock_level, 0) AS max_stock,
+            COALESCE(si.stock_level, 0)                  AS stock_level,
+            COALESCE(si.capacity, ip.max_stock, p.capacity, 480) AS capacity,
+            COALESCE(si.reorder_level, ip.min_stock, p.min_stock_level, 24) AS reorder_level,
             COALESCE(si.critical_level, 10)              AS critical_level,
-            COALESCE(si.unit, ip.size, 'pcs')            AS unit,
-            COALESCE(si.last_updated, ip.updated_at, ip.created_at) AS last_updated,
+            COALESCE(si.unit, ip.size, p.unit, 'pcs')    AS unit,
+            COALESCE(si.last_updated, NOW())             AS last_updated,
             si.physical_count,
             si.variance
         FROM station_inventory si
-        JOIN inventory_products ip ON ip.id = si.product_id
-        WHERE si.station_id = ?
-          AND LOWER(COALESCE(ip.category,'')) NOT IN ('fuel', 'fuel products')
-
-        UNION
-
-        SELECT
-            p.id,
-            p.name                                       AS product_name,
-            COALESCE(pc.name,'General')                  AS category,
-            COALESCE(si2.price, p.price, 0)              AS price,
-            COALESCE(p.cost, si2.cost, 0)                AS unit_cost,
-            COALESCE(NULLIF(p.sku,''), CONCAT('P', LPAD(p.id,4,'0'))) AS sku,
-            'Petron Corporation'                         AS supplier,
-            COALESCE(NULLIF(si2.status,''), NULLIF(p.status,''), 'active') AS product_status,
-            COALESCE(p.min_stock_level, 0)               AS min_stock,
-            COALESCE(p.max_stock_level, 0)               AS max_stock,
-            COALESCE(si2.stock_level, p.current_stock, 0) AS stock_level,
-            COALESCE(NULLIF(si2.capacity,0), NULLIF(p.capacity,0), NULLIF(p.max_stock_level,0), 480) AS capacity,
-            COALESCE(NULLIF(si2.reorder_level,0), NULLIF(p.min_stock_level,0), 24) AS reorder_level,
-            COALESCE(NULLIF(si2.critical_level,0), 10)   AS critical_level,
-            COALESCE(NULLIF(p.unit,''), NULLIF(si2.unit,''), 'pcs') AS unit,
-            COALESCE(si2.last_updated, p.updated_at, p.created_at) AS last_updated,
-            si2.physical_count,
-            si2.variance
-        FROM products p
+        LEFT JOIN inventory_products ip ON ip.id = si.product_id
+        LEFT JOIN products p ON p.id = si.product_id
         LEFT JOIN product_categories pc ON pc.id = p.category_id
-        LEFT JOIN station_inventory si2 ON si2.product_id = p.id AND si2.station_id = ?
-        WHERE LOWER(COALESCE(pc.name,'')) NOT IN ('fuel','fuel products','services','service')
-          AND LOWER(COALESCE(p.status,'active')) NOT IN ('deleted','archived')
-          AND p.id NOT IN (SELECT id FROM inventory_products WHERE LOWER(COALESCE(category,'')) NOT IN ('fuel', 'fuel products'))
-
+        WHERE si.station_id = ?
+          AND (LOWER(COALESCE(ip.category, pc.name, '')) NOT IN ('fuel', 'fuel products', 'services', 'service') OR (ip.category IS NULL AND pc.name IS NULL))
+          AND LOWER(COALESCE(ip.status, 'active')) NOT IN ('inactive', 'discontinued')
+          AND LOWER(COALESCE(si.status, 'active')) NOT IN ('inactive', 'disabled', 'archived')
         ORDER BY category, product_name
     ");
-    $stmt->execute([$station_id, $station_id]);
+    $stmt->execute([$station_id]);
     $merch_inv_stats = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 

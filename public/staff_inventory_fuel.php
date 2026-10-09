@@ -1224,10 +1224,10 @@ body.sidebar-collapsed .modal-overlay,
     <div style="font-size:14.5px; color:#475569; padding-left:44px; line-height:1.5;" id="fsrBannerText">Your fuel stock request is now pending manager approval.</div>
 </div>
 
-<!-- ══ Dashboard Cards (4 Cards ONLY) ══ -->
-<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-bottom:14px;">
+<!-- ══ Dashboard Cards (5 Cards) ══ -->
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:14px;">
     <!-- Card 1: Total Fuel Available -->
-    <div style="background:#fff; border-radius:8px; padding:12px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.06); display:flex; align-items:center; justify-content:space-between; border:1.5px solid #cbd5e1;">
+    <div onclick="filterStaffFuelByCard('')" style="background:#fff; border-radius:8px; padding:12px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.06); display:flex; align-items:center; justify-content:space-between; border:1.5px solid #cbd5e1; cursor:pointer;" title="Click to view all fuel tanks">
         <div>
             <div style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px;">Total Fuel Available (L)</div>
             <div style="font-size:20px; font-weight:700; color:#0284c7;"><?= number_format($total_fuel_available, 2) ?> L</div>
@@ -1258,6 +1258,14 @@ body.sidebar-collapsed .modal-overlay,
         </div>
         <div style="background:#d1fae5; color:#059669; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0;"><i class="fas fa-leaf"></i></div>
     </div>
+    <!-- Card 5: Low Fuel Tanks -->
+    <div onclick="filterStaffFuelByCard('low')" style="background:#fff; border-radius:8px; padding:12px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.06); display:flex; align-items:center; justify-content:space-between; border:1.5px solid #fed7aa; cursor:pointer;" title="Click to filter Low Fuel Tanks">
+        <div>
+            <div style="font-size:11px; font-weight:700; color:#ea580c; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px;">Low Fuel Tanks</div>
+            <div style="font-size:20px; font-weight:700; color:#ea580c;"><?= number_format($total_low_fuel_tanks) ?></div>
+        </div>
+        <div style="background:#fff7ed; color:#ea580c; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:15px; flex-shrink:0;"><i class="fas fa-exclamation-triangle"></i></div>
+    </div>
 </div>
 
 <!-- ══ Search & Filter Bar ══ -->
@@ -1278,7 +1286,9 @@ body.sidebar-collapsed .modal-overlay,
         <option value="">All Statuses</option>
         <option value="normal">Normal</option>
         <option value="low">Low Fuel</option>
+        <option value="critical">Critical Fuel</option>
         <option value="out of stock">Out of Stock</option>
+        <option value="deactivated">Deactivated</option>
     </select>
     <div class="fuel-filter-actions">
         <button type="submit" class="flt-btn flt-btn-search" style="height:36px; font-size:12px; font-weight:600; padding:0 14px;"><i class="fas fa-search"></i> Filter</button>
@@ -1925,7 +1935,23 @@ function filterFuelTable() {
 
         if (search && rFuelType.indexOf(search) === -1 && rUgtNo.indexOf(search) === -1 && rTankNum.indexOf(search) === -1) match = false;
         if (fuelType && rFuelType.indexOf(fuelType) === -1) match = false;
-        if (status && rStatus.trim() !== status.trim()) match = false;
+        if (status) {
+            var s = status.trim().toLowerCase();
+            var rs = rStatus.trim().toLowerCase();
+            if (s === 'normal') {
+                if (rs !== 'normal') match = false;
+            } else if (s === 'low') {
+                if (rs !== 'low') match = false;
+            } else if (s === 'critical') {
+                if (rs !== 'critical') match = false;
+            } else if (s === 'out of stock' || s === 'out') {
+                if (rs !== 'out of stock' && rs !== 'out') match = false;
+            } else if (s === 'deactivated') {
+                if (rs !== 'deactivated') match = false;
+            } else if (rs.indexOf(s) === -1) {
+                match = false;
+            }
+        }
 
         row.classList.toggle('search-hidden', !match);
         row.style.display = match ? '' : 'none';
@@ -1938,6 +1964,16 @@ function filterFuelTable() {
     }
 
     refreshFuelPagination();
+}
+
+function filterStaffFuelByCard(st) {
+    var sel = document.getElementById('sf');
+    if (sel) {
+        sel.value = st;
+        filterFuelTable();
+        var el = document.getElementById('fuelTable');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
 }
 
 function applyFuelInventoryFilters(e) {

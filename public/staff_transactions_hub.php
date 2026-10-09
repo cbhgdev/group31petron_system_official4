@@ -74,14 +74,25 @@ loyalty_ensure_tables($pdo);
 
 $points_per_amount = 100.00;
 $redemption_value  = 1.00;
+$minimum_redeem_points = 1;
+$loyalty_program_name = 'Petron Rewards Card';
+$loyalty_programs_list = [];
 try {
-    $progStmt = $pdo->query("SELECT * FROM loyalty_programs WHERE status = 'active' ORDER BY id ASC LIMIT 1");
-    $prog = $progStmt->fetch(PDO::FETCH_ASSOC);
-    if ($prog) {
+    $allProgsStmt = $pdo->query("SELECT * FROM loyalty_programs WHERE status = 'active' ORDER BY id ASC");
+    $loyalty_programs_list = $allProgsStmt->fetchAll(PDO::FETCH_ASSOC);
+    if (!empty($loyalty_programs_list)) {
+        $prog = $loyalty_programs_list[0];
         $points_per_amount = floatval($prog['points_per_amount'] ?? 100.00) ?: 100.00;
         $redemption_value  = floatval($prog['redemption_value'] ?? 1.00) ?: 1.00;
+        $minimum_redeem_points = intval($prog['minimum_redeem_points'] ?? 1);
+        $loyalty_program_name = $prog['program_name'] ?? $prog['name'] ?? 'Petron Rewards Card';
     }
 } catch (Exception $e) {}
+if (empty($loyalty_programs_list)) {
+    $loyalty_programs_list = [
+        ['id' => 1, 'program_name' => 'Petron Rewards Card', 'points_per_amount' => 100.00, 'minimum_redeem_points' => 1, 'redemption_value' => 1.00, 'status' => 'active']
+    ];
+}
 
 // Active sub-section: merchandise | history | fuel | fuel_history
 $section = $_GET['section'] ?? 'merchandise';
@@ -260,10 +271,11 @@ try {
             {$customerContactExpr} AS contact_number,
             {$customerCreditLimitExpr} AS credit_limit,
             {$customerBalanceExpr} AS balance,
-            {$customerPointsExpr} AS points,
+            COALESCE(la.points_balance, {$customerPointsExpr}, 0) AS points,
             {$customerIdExpr} AS customer_id,
             {$customerIdNumberExpr} AS id_number,
-            {$customerLoyaltyCardExpr} AS loyalty_card_no,
+            COALESCE(NULLIF(la.card_number,''), {$customerLoyaltyCardExpr}, {$customerIdExpr}, {$customerIdNumberExpr}, '') AS loyalty_card_no,
+            COALESCE(la.status, 'active') AS loyalty_status,
             COALESCE(NULLIF(cv.vehicle_type,''), {$customerVehicleTypeExpr}) AS vehicle_type,
             COALESCE(NULLIF(cv.brand,''), {$customerMakeExpr}) AS vehicle_brand,
             COALESCE(NULLIF(cv.model,''), {$customerModelExpr}) AS vehicle_model,
@@ -272,6 +284,7 @@ try {
             COALESCE(NULLIF(cv.engine_no,''), {$customerEngineExpr}) AS engine_number,
             COALESCE(NULLIF(cv.chassis_no,''), {$customerChassisExpr}) AS chassis_number
         FROM customers c
+        LEFT JOIN loyalty_accounts la ON la.customer_id = c.id AND la.program_id = 1
         LEFT JOIN (
             SELECT cv1.* FROM customer_vehicles cv1
             INNER JOIN (
@@ -6830,7 +6843,7 @@ setTimeout(function() {
                             </div>
                             <div class="txn-field">
                                 <label style="font-size:11px;font-weight:700;color:#374151;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:6px;">
-                                    Labor Charge
+                                    Tip
                                     <span style="font-size:10px;font-weight:400;color:#64748b;text-transform:none;">(Optional, separate)</span>
                                 </label>
                                 <div class="txn-currency-group">
@@ -8165,7 +8178,6 @@ setTimeout(function() {
                             <option value="E-Wallet">E-Wallet</option>
                             <option value="Petron Fleet Card">Petron Fleet Card</option>
                             <option value="Credit Account">Credit Account</option>
-                            <option value="Petron Loyalty Points">Petron Loyalty Points</option>
                         </select>
                     </div>
 
@@ -8252,44 +8264,71 @@ setTimeout(function() {
                         </div>
                     </div>
 
-                    <!-- Petron Loyalty Points fields -->
-                    <div id="loyaltyPaymentFields" style="display:none;margin-bottom:8px;">
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Amount Paid (₱)</label>
-                                <input type="number" id="lpAmount" class="txn-input" style="font-size:12px;padding:7px 10px;"
-                                       step="0.01" min="0" placeholder="₱0.00"
-                                       oninput="onPaymentAmountInput('lpAmount')">
-                            </div>
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Points to Redeem</label>
-                                <input type="number" id="lpPoints" class="txn-input" style="font-size:12px;padding:7px 10px;" min="0" placeholder="Pts" oninput="if(typeof syncLpPoints === 'function') syncLpPoints();">
-                            </div>
-                        </div>
-                    </div>
-
                     <!-- Petron Fleet Card fields -->
                     <div id="fleetCardFields" style="display:none;margin-bottom:8px;">
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                             <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Amount Paid</label>
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Amount Paid <span style="color:#dc2626;">*</span></label>
                                 <input type="number" id="fcAmount" class="txn-input" style="font-size:12px;padding:7px 10px;"
                                        step="0.01" min="0" placeholder="₱0.00"
-                                       oninput="onPaymentAmountInput('fcAmount')">
+                                       oninput="onPaymentAmountInput('fcAmount'); if(typeof calcFleetRewards === 'function') calcFleetRewards();">
                             </div>
                             <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Fleet Card Number</label>
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Fleet Card Number <span style="color:#dc2626;">*</span></label>
                                 <input type="text" id="fcNumber" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="Card #">
                             </div>
                         </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                             <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Company Name</label>
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Fleet Account / Company <span style="color:#dc2626;">*</span></label>
                                 <input type="text" id="fcCompanyName" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="Company Name">
                             </div>
                             <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Auth No. (Opt)</label>
-                                <input type="text" id="fcAuthNumber" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="Auth #">
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Transaction Reference / Auth No.</label>
+                                <input type="text" id="fcAuthNumber" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="Auth / Ref #">
+                            </div>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                            <div class="txn-field">
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Vehicle / Plate Number (Opt)</label>
+                                <input type="text" id="fcPlateNumber" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="e.g. ABC 1234">
+                            </div>
+                            <div class="txn-field">
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Odometer Reading (Opt)</label>
+                                <input type="text" id="fcOdometer" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="e.g. 45000 km">
+                            </div>
+                        </div>
+
+                        <!-- Fleet Card Rewards Box (Separate Section) -->
+                        <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;margin-top:6px;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                                <span style="font-size:10.5px;font-weight:700;color:#002F70;text-transform:uppercase;letter-spacing:0.3px;display:flex;align-items:center;gap:5px;">
+                                    <i class="fas fa-award" style="color:#f59e0b;"></i> Fleet Card Rewards Info
+                                </span>
+                                <span style="font-size:9.5px;color:#64748b;background:#e2e8f0;padding:2px 6px;border-radius:4px;font-weight:600;">Fleet Program</span>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;">
+                                <div class="txn-field">
+                                    <label style="font-size:9.5px;font-weight:600;color:#475569;">Rewards Balance</label>
+                                    <input type="number" id="fcRewardsBalance" class="txn-input" style="font-size:11.5px;padding:5px 8px;background:#fff;font-weight:600;" value="0" min="0" oninput="if(typeof calcFleetRewards === 'function') calcFleetRewards();" placeholder="0">
+                                </div>
+                                <div class="txn-field">
+                                    <label style="font-size:9.5px;font-weight:600;color:#475569;">Points Earned</label>
+                                    <input type="number" id="fcPointsEarned" class="txn-input" style="font-size:11.5px;padding:5px 8px;background:#f0fdf4;font-weight:700;color:#16a34a;" readonly value="0">
+                                </div>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px;">
+                                <div class="txn-field">
+                                    <label style="font-size:9.5px;font-weight:600;color:#475569;">Points Redeemed (Opt)</label>
+                                    <input type="number" id="fcPointsRedeemed" class="txn-input" style="font-size:11.5px;padding:5px 8px;" min="0" value="0" oninput="if(typeof calcFleetRewards === 'function') calcFleetRewards();" placeholder="0">
+                                </div>
+                                <div class="txn-field">
+                                    <label style="font-size:9.5px;font-weight:600;color:#475569;">Remaining Points</label>
+                                    <input type="number" id="fcPointsAfter" class="txn-input" style="font-size:11.5px;padding:5px 8px;background:#eff6ff;font-weight:700;color:#1d4ed8;" readonly value="0">
+                                </div>
+                            </div>
+                            <div style="font-size:9px;color:#64748b;line-height:1.3;margin-top:4px;border-top:1px dashed #e2e8f0;padding-top:4px;">
+                                <i class="fas fa-info-circle" style="color:#3b82f6;"></i> <em>Note: Fleet Card points are locally recorded/test points for demonstration and fleet customer records. Official live fleet integration is not active.</em>
                             </div>
                         </div>
                     </div>
@@ -8371,40 +8410,98 @@ setTimeout(function() {
 
                     <!-- Loyalty Program Section -->
                     <div class="txn-field" style="margin-top:10px; margin-bottom:8px; border-top:1.5px solid #e2e8f0; padding-top:10px;">
-                        <label style="font-size:10px;font-weight:700;color:#002F70;text-transform:uppercase;letter-spacing:0.5px;">Loyalty Program</label>
-                        <select id="loyaltyProgram" class="txn-select" style="font-size:12px;padding:7px 10px;margin-top:4px;" onchange="onLoyaltyChange()">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                            <label style="font-size:10px;font-weight:700;color:#002F70;text-transform:uppercase;letter-spacing:0.5px;margin:0;">
+                                <i class="fas fa-award" style="color:#002F70;margin-right:4px;"></i>Consumer Loyalty Program
+                            </label>
+                            <span id="loyaltyEligibilityBadge" style="display:none;font-size:10px;font-weight:700;padding:2px 7px;border-radius:12px;background:#f1f5f9;color:#475569;">
+                                Not Verified
+                            </span>
+                        </div>
+                        <select id="loyaltyProgram" class="txn-select" style="font-size:12px;padding:7px 10px;" onchange="onLoyaltyChange()">
                             <option value="No Loyalty">No Loyalty</option>
-                            <option value="Petron Rewards Card">Petron Rewards Card</option>
+                            <?php foreach ($loyalty_programs_list as $lp): ?>
+                                <option value="<?= htmlspecialchars($lp['program_name'] ?? $lp['name'] ?? 'Petron Rewards Card') ?>"
+                                        data-id="<?= (int)$lp['id'] ?>"
+                                        data-points-per-amount="<?= (float)($lp['points_per_amount'] ?? 100.00) ?>"
+                                        data-min-points="<?= (int)($lp['minimum_redeem_points'] ?? 1) ?>"
+                                        data-redemption-value="<?= (float)($lp['redemption_value'] ?? 1.00) ?>">
+                                    <?= htmlspecialchars($lp['program_name'] ?? $lp['name'] ?? 'Petron Rewards Card') ?>
+                                </option>
+                            <?php endforeach; ?>
                         </select>
+                        <div id="fleetCardLoyaltyNotice" style="display:none;margin-top:6px;padding:6px 8px;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;font-size:10px;color:#92400e;line-height:1.3;">
+                            <i class="fas fa-info-circle"></i> <strong>Note:</strong> Purchases paid using <em>Petron Fleet Card</em> earn Fleet Card rewards and are excluded from earning Petron Value Card / Rewards points.
+                        </div>
                     </div>
 
-                    <!-- Loyalty Fields (hidden by default, shown when Petron Rewards Card is selected) -->
-                    <div id="loyaltyFields" style="display:none;margin-bottom:8px;">
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Loyalty Card No.</label>
-                                <input type="text" id="loyaltyCardNo" class="txn-input" style="font-size:12px;padding:7px 10px;background:#f8fafc;font-weight:600;color:#1e293b;" readonly placeholder="Card #">
+                    <!-- Loyalty Fields (hidden by default, shown when Loyalty Program is selected) -->
+                    <div id="loyaltyFields" style="display:none;margin-bottom:8px;background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:8px;padding:10px;">
+                        <!-- Loyalty Card & Account Status Header -->
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #e2e8f0;">
+                            <div style="font-size:11px;font-weight:700;color:#1e293b;display:flex;align-items:center;gap:5px;">
+                                <i class="fas fa-id-card" style="color:#002F70;"></i>
+                                <span id="loyaltyCardDisplay">Card: None</span>
                             </div>
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Current Points Balance</label>
-                                <input type="number" id="loyaltyPointsBalance" class="txn-input" style="font-size:12px;padding:7px 10px;background:#f8fafc;font-weight:700;color:#002F70;" readonly value="0">
+                            <input type="hidden" id="loyaltyCardNo" value="">
+                            <div id="loyaltyAccountStatus" style="font-size:10px;font-weight:700;color:#16a34a;display:flex;align-items:center;gap:4px;">
+                                <i class="fas fa-check-circle"></i> Linked Account
                             </div>
                         </div>
+
+                        <!-- Row 1: Available Points & Points Earned -->
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                             <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Points Earned</label>
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Available Points</label>
+                                <input type="number" id="loyaltyPointsBalance" class="txn-input" style="font-size:12px;padding:7px 10px;background:#ffffff;font-weight:700;color:#002F70;" readonly value="0">
+                            </div>
+                            <div class="txn-field">
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Points Earned (Net)</label>
                                 <input type="number" id="loyaltyPointsEarned" class="txn-input" style="font-size:12px;padding:7px 10px;background:#f0fdf4;font-weight:700;color:#16a34a;" readonly value="0">
                             </div>
-                            <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">Redeem Points (Optional)</label>
-                                <input type="number" id="loyaltyPointsRedeemed" class="txn-input" style="font-size:12px;padding:7px 10px;" min="0" value="0" oninput="calcLoyaltyPoints()">
+                        </div>
+
+                        <!-- Row 2: Apply Points Redemption Toggle -->
+                        <div style="background:#ffffff;border:1.5px solid #cbd5e1;border-radius:6px;padding:8px 10px;margin-bottom:8px;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;">
+                                <label for="loyaltyApplyRedemption" style="font-size:11px;font-weight:700;color:#0f172a;cursor:pointer;display:flex;align-items:center;gap:6px;margin:0;user-select:none;">
+                                    <input type="checkbox" id="loyaltyApplyRedemption" style="width:16px;height:16px;cursor:pointer;accent-color:#002F70;" onchange="calcLoyaltyPoints()">
+                                    <span>Apply Points Redemption</span>
+                                </label>
+                                <span id="loyaltyRateBadge" style="font-size:10px;font-weight:700;background:#eff6ff;color:#1d4ed8;padding:2px 6px;border-radius:4px;border:1px solid #bfdbfe;">
+                                    1 pt = ₱<?= number_format($redemption_value, 2) ?>
+                                </span>
+                            </div>
+                            <div id="loyaltyRedeemHint" style="font-size:10px;color:#64748b;margin-top:3px;line-height:1.3;">
+                                Enable to automatically compute and redeem eligible available points.
                             </div>
                         </div>
-                        <div class="txn-field">
-                            <label style="font-size:10px;font-weight:600;color:#475569;">Points After Transaction</label>
-                            <input type="number" id="loyaltyPointsAfter" class="txn-input" style="font-size:12px;padding:7px 10px;background:#eff6ff;font-weight:700;color:#1d4ed8;" readonly value="0">
-                            <div id="loyaltyErrorMsg" style="font-size:10.5px;color:#dc2626;font-weight:600;margin-top:2px;display:none;"></div>
+
+                        <!-- Row 3: Points Redeemed (Auto) & Remaining Points (Auto) -->
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                            <div class="txn-field">
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Points Redeemed <span style="font-size:9px;color:#64748b;">(Auto)</span></label>
+                                <input type="number" id="loyaltyPointsRedeemed" class="txn-input" style="font-size:12px;padding:7px 10px;background:#f8fafc;font-weight:700;color:#b91c1c;" readonly value="0">
+                            </div>
+                            <div class="txn-field">
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Remaining Points <span style="font-size:9px;color:#64748b;">(Auto)</span></label>
+                                <input type="number" id="loyaltyPointsRemaining" class="txn-input" style="font-size:12px;padding:7px 10px;background:#f8fafc;font-weight:700;color:#002F70;" readonly value="0">
+                            </div>
                         </div>
+
+                        <!-- Row 4: Loyalty Discount & Points After Txn -->
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px;">
+                            <div class="txn-field">
+                                <label style="font-size:10px;font-weight:600;color:#dc2626;">Loyalty Discount</label>
+                                <input type="text" id="loyaltyDiscountAmount" class="txn-input" style="font-size:12px;padding:7px 10px;background:#fef2f2;font-weight:700;color:#dc2626;" readonly value="₱0.00">
+                            </div>
+                            <div class="txn-field">
+                                <label style="font-size:10px;font-weight:600;color:#475569;">Points After Txn</label>
+                                <input type="number" id="loyaltyPointsAfter" class="txn-input" style="font-size:12px;padding:7px 10px;background:#eff6ff;font-weight:700;color:#1d4ed8;" readonly value="0">
+                            </div>
+                        </div>
+
+                        <div id="loyaltyErrorMsg" style="font-size:10.5px;color:#dc2626;font-weight:600;margin-top:4px;display:none;"></div>
                     </div>
 
                 </div><!-- /cart-panel-top -->
@@ -8439,6 +8536,10 @@ setTimeout(function() {
                     <div class="cart-total-row">
                         <span>VAT (12%)</span>
                         <span class="calc-val" id="cartVat">₱0.00</span>
+                    </div>
+                    <div class="cart-total-row" id="cartLoyaltyDiscountRow" style="display:none;color:#dc2626;">
+                        <span>Loyalty Discount</span>
+                        <span class="calc-val" id="cartLoyaltyDiscount" style="font-weight:700;color:#dc2626;">-₱0.00</span>
                     </div>
                     <div class="cart-total-row grand">
                         <span>Grand Total</span>
@@ -8979,97 +9080,344 @@ setTimeout(function() {
         let selectedProduct = null;
         const pointsPerAmount = <?= (float)$points_per_amount ?>;
         const redemptionValue  = <?= (float)$redemption_value ?>;
+        const minimumRedeemPoints = <?= (int)$minimum_redeem_points ?>;
         const selectedCustomerIds = { jo: null, merch: null };
+
+        function getLoyaltyProgramConfig() {
+            const progSelect = document.getElementById('loyaltyProgram');
+            const selOpt = (progSelect && progSelect.selectedIndex >= 0) ? progSelect.options[progSelect.selectedIndex] : null;
+            const pPerAmt = selOpt && selOpt.dataset.pointsPerAmount ? parseFloat(selOpt.dataset.pointsPerAmount) : pointsPerAmount;
+            const rVal = selOpt && selOpt.dataset.redemptionValue ? parseFloat(selOpt.dataset.redemptionValue) : redemptionValue;
+            const minPts = selOpt && selOpt.dataset.minPoints ? parseInt(selOpt.dataset.minPoints, 10) : minimumRedeemPoints;
+            return {
+                name: progSelect ? progSelect.value : 'No Loyalty',
+                pointsPerAmount: (pPerAmt > 0) ? pPerAmt : 100.00,
+                redemptionValue: (rVal > 0) ? rVal : 1.00,
+                minPoints: (minPts >= 0) ? minPts : 1
+            };
+        }
+
+        window.getGrossTotal = function getGrossTotal() {
+            const currentCart = Array.isArray(window.cart) ? window.cart : (typeof cart !== 'undefined' && Array.isArray(cart) ? cart : []);
+            const subtotal = currentCart.reduce((s, i) => s + (parseFloat(i.quantity) || 0) * (parseFloat(i.unit_price) || 0), 0);
+            return Math.round(subtotal * 1.12 * 100) / 100;
+        };
+
+        window.getLoyaltyDiscount = function getLoyaltyDiscount(grossTotal) {
+            const payMethod = document.getElementById('paymentMethod')?.value || '';
+            const program = document.getElementById('loyaltyProgram')?.value || 'No Loyalty';
+            const applyCheckbox = document.getElementById('loyaltyApplyRedemption');
+            if (program === 'No Loyalty' || payMethod === 'Petron Fleet Card' || !applyCheckbox || !applyCheckbox.checked) return 0;
+            
+            const balance = parseInt(document.getElementById('loyaltyPointsBalance')?.value || '0', 10) || 0;
+            const config = getLoyaltyProgramConfig();
+            if (balance < config.minPoints) return 0;
+
+            const gross = (typeof grossTotal === 'number' && grossTotal >= 0) ? grossTotal : getGrossTotal();
+            if (gross <= 0) return 0;
+
+            const maxPointsNeeded = Math.ceil(gross / config.redemptionValue);
+            const validPoints = Math.min(balance, maxPointsNeeded);
+            const discount = Math.min(gross, Math.round(validPoints * config.redemptionValue * 100) / 100);
+            return discount;
+        };
+
+        window.getGrandTotal = function getGrandTotal() {
+            const gross = getGrossTotal();
+            const discount = getLoyaltyDiscount(gross);
+            return Math.max(0, Math.round((gross - discount) * 100) / 100);
+        };
+
+        window.applyCustomerLoyalty = function applyCustomerLoyalty(customer) {
+            if (!customer) return;
+            const loyaltyDropdown = document.getElementById('loyaltyProgram');
+            const loyaltyCardNoInput = document.getElementById('loyaltyCardNo');
+            const loyaltyCardDisplay = document.getElementById('loyaltyCardDisplay');
+            const loyaltyPointsBalanceEl = document.getElementById('loyaltyPointsBalance');
+            const loyaltyAccountStatus = document.getElementById('loyaltyAccountStatus');
+            const eligibilityBadge = document.getElementById('loyaltyEligibilityBadge');
+            const applyCheckbox = document.getElementById('loyaltyApplyRedemption');
+
+            const cardVal = customer.loyalty_card_no || customer.customer_id || customer.id_number || '';
+            const pts = parseInt(customer.points || 0, 10) || 0;
+            const hasLoyaltyCard = (cardVal && String(cardVal).trim() !== '') || pts > 0;
+            const isAccountActive = (customer.loyalty_status || 'active').toLowerCase() === 'active';
+
+            const payMethod = document.getElementById('paymentMethod')?.value || '';
+            if (payMethod !== 'Petron Fleet Card') {
+                if (hasLoyaltyCard) {
+                    if (loyaltyDropdown) {
+                        if (loyaltyDropdown.value === 'No Loyalty' && loyaltyDropdown.options.length > 1) {
+                            loyaltyDropdown.selectedIndex = 1;
+                        }
+                    }
+                    if (loyaltyCardNoInput) loyaltyCardNoInput.value = cardVal;
+                    if (loyaltyCardDisplay) loyaltyCardDisplay.textContent = 'Card: ' + (cardVal || 'Linked Account');
+                    if (loyaltyPointsBalanceEl) loyaltyPointsBalanceEl.value = pts;
+
+                    const config = getLoyaltyProgramConfig();
+                    const isEligible = isAccountActive && pts >= config.minPoints;
+
+                    if (loyaltyAccountStatus) {
+                        loyaltyAccountStatus.innerHTML = isAccountActive 
+                            ? '<i class="fas fa-check-circle" style="color:#16a34a;"></i> <span style="color:#16a34a;">Active Account</span>' 
+                            : '<i class="fas fa-times-circle" style="color:#dc2626;"></i> <span style="color:#dc2626;">Inactive</span>';
+                    }
+                    if (eligibilityBadge) {
+                        eligibilityBadge.style.display = 'inline-block';
+                        if (isEligible) {
+                            eligibilityBadge.style.background = '#dcfce7';
+                            eligibilityBadge.style.color = '#166534';
+                            eligibilityBadge.textContent = 'Eligible (' + pts + ' pts)';
+                        } else if (pts < config.minPoints) {
+                            eligibilityBadge.style.background = '#fef3c7';
+                            eligibilityBadge.style.color = '#92400e';
+                            eligibilityBadge.textContent = 'Min ' + config.minPoints + ' pt to redeem';
+                        } else {
+                            eligibilityBadge.style.background = '#fee2e2';
+                            eligibilityBadge.style.color = '#991b1b';
+                            eligibilityBadge.textContent = 'Ineligible';
+                        }
+                    }
+
+                    if (applyCheckbox) {
+                        applyCheckbox.disabled = !isEligible;
+                        if (!isEligible) applyCheckbox.checked = false;
+                    }
+                    onLoyaltyChange();
+                } else {
+                    if (loyaltyDropdown) loyaltyDropdown.value = 'No Loyalty';
+                    if (loyaltyCardNoInput) loyaltyCardNoInput.value = '';
+                    if (loyaltyCardDisplay) loyaltyCardDisplay.textContent = 'Card: None';
+                    if (loyaltyPointsBalanceEl) loyaltyPointsBalanceEl.value = 0;
+                    if (eligibilityBadge) {
+                        eligibilityBadge.style.display = 'inline-block';
+                        eligibilityBadge.style.background = '#f1f5f9';
+                        eligibilityBadge.style.color = '#64748b';
+                        eligibilityBadge.textContent = 'No Loyalty Account';
+                    }
+                    if (applyCheckbox) {
+                        applyCheckbox.checked = false;
+                        applyCheckbox.disabled = true;
+                    }
+                    onLoyaltyChange();
+                }
+            }
+        };
 
         window.onLoyaltyChange = function onLoyaltyChange() {
             const program = document.getElementById('loyaltyProgram')?.value || 'No Loyalty';
             const fieldsWrap = document.getElementById('loyaltyFields');
             const cardNoInput = document.getElementById('loyaltyCardNo');
+            const cardDisplay = document.getElementById('loyaltyCardDisplay');
             const balanceInput = document.getElementById('loyaltyPointsBalance');
+            const discountInput = document.getElementById('loyaltyDiscountAmount');
+            const discRow = document.getElementById('cartLoyaltyDiscountRow');
+            const discVal = document.getElementById('cartLoyaltyDiscount');
+            const applyCheckbox = document.getElementById('loyaltyApplyRedemption');
+            const eligibilityBadge = document.getElementById('loyaltyEligibilityBadge');
 
             if (fieldsWrap) {
                 if (program !== 'No Loyalty') {
                     fieldsWrap.style.display = 'block';
-                    updateLoyaltyPointsEarned(getGrandTotal());
+                    if (eligibilityBadge && eligibilityBadge.textContent.trim() === 'Not Verified') {
+                        eligibilityBadge.style.display = 'inline-block';
+                    }
+                    calcLoyaltyPoints();
                 } else {
                     fieldsWrap.style.display = 'none';
                     if (cardNoInput) cardNoInput.value = '';
+                    if (cardDisplay) cardDisplay.textContent = 'Card: None';
                     if (balanceInput) balanceInput.value = '0';
+                    if (applyCheckbox) {
+                        applyCheckbox.checked = false;
+                        applyCheckbox.disabled = true;
+                    }
+                    if (eligibilityBadge) eligibilityBadge.style.display = 'none';
                     const pointsEarned = document.getElementById('loyaltyPointsEarned');
                     const pointsRedeemed = document.getElementById('loyaltyPointsRedeemed');
+                    const pointsRemaining = document.getElementById('loyaltyPointsRemaining');
                     const pointsAfter = document.getElementById('loyaltyPointsAfter');
                     if (pointsEarned) pointsEarned.value = '0';
                     if (pointsRedeemed) pointsRedeemed.value = '0';
+                    if (pointsRemaining) pointsRemaining.value = '0';
                     if (pointsAfter) pointsAfter.value = '0';
+                    if (discountInput) discountInput.value = '₱0.00';
+                    if (discRow) discRow.style.display = 'none';
+                    if (discVal) discVal.textContent = '-₱0.00';
                     calcLoyaltyPoints();
                 }
             }
-        }
+        };
 
         function updateLoyaltyPointsEarned(grand) {
+            const payMethod = document.getElementById('paymentMethod')?.value || '';
             const program = document.getElementById('loyaltyProgram')?.value || 'No Loyalty';
             const pointsEarnedInput = document.getElementById('loyaltyPointsEarned');
-            if (program !== 'No Loyalty' && pointsEarnedInput) {
-                // Points Earned = Math.floor(eligibleTotal / pointsPerAmount)
-                const pts = Math.floor((grand || 0) / pointsPerAmount);
-                pointsEarnedInput.value = Math.max(0, pts);
+            const config = getLoyaltyProgramConfig();
+            if (payMethod === 'Petron Fleet Card' || program === 'No Loyalty') {
+                if (pointsEarnedInput) pointsEarnedInput.value = 0;
             } else if (pointsEarnedInput) {
-                pointsEarnedInput.value = 0;
+                const netAmount = (typeof grand === 'number' && grand >= 0) ? grand : getGrandTotal();
+                const pts = Math.floor(netAmount / config.pointsPerAmount);
+                pointsEarnedInput.value = Math.max(0, pts);
             }
             calcLoyaltyPoints();
         }
 
         window.calcLoyaltyPoints = function calcLoyaltyPoints() {
+            const payMethod = document.getElementById('paymentMethod')?.value || '';
             const program = document.getElementById('loyaltyProgram')?.value || 'No Loyalty';
             const balanceInput = document.getElementById('loyaltyPointsBalance');
             const earnedInput = document.getElementById('loyaltyPointsEarned');
             const redeemedInput = document.getElementById('loyaltyPointsRedeemed');
+            const remainingInput = document.getElementById('loyaltyPointsRemaining');
             const afterInput = document.getElementById('loyaltyPointsAfter');
+            const discountInput = document.getElementById('loyaltyDiscountAmount');
+            const discRow = document.getElementById('cartLoyaltyDiscountRow');
+            const discVal = document.getElementById('cartLoyaltyDiscount');
             const errorEl = document.getElementById('loyaltyErrorMsg');
+            const grandEl = document.getElementById('cartGrandTotal');
+            const applyCheckbox = document.getElementById('loyaltyApplyRedemption');
+            const rateBadge = document.getElementById('loyaltyRateBadge');
+            const hintEl = document.getElementById('loyaltyRedeemHint');
+            const eligibilityBadge = document.getElementById('loyaltyEligibilityBadge');
 
-            if (program === 'No Loyalty') {
+            const gross = getGrossTotal();
+            const config = getLoyaltyProgramConfig();
+
+            if (rateBadge) {
+                rateBadge.textContent = `1 pt = ₱${fmtNum(config.redemptionValue)}`;
+            }
+
+            if (program === 'No Loyalty' || payMethod === 'Petron Fleet Card') {
+                if (redeemedInput) redeemedInput.value = 0;
+                if (remainingInput) remainingInput.value = 0;
+                if (earnedInput) earnedInput.value = 0;
                 if (afterInput) afterInput.value = 0;
+                if (discountInput) discountInput.value = '₱0.00';
+                if (discRow) discRow.style.display = 'none';
                 if (errorEl) errorEl.style.display = 'none';
+                if (grandEl) grandEl.textContent = '₱' + fmtNum(gross);
+                if (eligibilityBadge && program === 'No Loyalty') eligibilityBadge.style.display = 'none';
+                if (applyCheckbox) {
+                    applyCheckbox.checked = false;
+                    applyCheckbox.disabled = true;
+                }
+                if (typeof computeChange === 'function') computeChange();
+                if (typeof onPaymentAmountInput === 'function') onPaymentAmountInput();
+                if (typeof updatePaymentStatusBadge === 'function') updatePaymentStatusBadge();
                 return;
             }
 
             const currentBalance = parseInt(balanceInput?.value || '0', 10) || 0;
-            const pointsEarned = parseInt(earnedInput?.value || '0', 10) || 0;
-            let pointsRedeemed = parseInt(redeemedInput?.value || '0', 10) || 0;
-            if (pointsRedeemed < 0) {
+            const isEligible = currentBalance >= config.minPoints;
+
+            if (applyCheckbox) {
+                applyCheckbox.disabled = !isEligible || gross <= 0;
+                if (!isEligible || gross <= 0) {
+                    applyCheckbox.checked = false;
+                }
+            }
+
+            let pointsRedeemed = 0;
+            let discount = 0;
+
+            if (applyCheckbox && applyCheckbox.checked && isEligible && gross > 0) {
+                const maxPointsNeeded = Math.ceil(gross / config.redemptionValue);
+                pointsRedeemed = Math.min(currentBalance, maxPointsNeeded);
+                discount = Math.min(gross, Math.round(pointsRedeemed * config.redemptionValue * 100) / 100);
+                if (hintEl) {
+                    hintEl.textContent = `Redeeming ${pointsRedeemed} pts for ₱${fmtNum(discount)} discount.`;
+                    hintEl.style.color = '#15803d';
+                }
+            } else {
                 pointsRedeemed = 0;
+                discount = 0;
+                if (hintEl) {
+                    hintEl.textContent = isEligible 
+                        ? `Enable to automatically redeem up to ${currentBalance} available points.`
+                        : `Minimum ${config.minPoints} point required to redeem. Current balance: ${currentBalance} pts.`;
+                    hintEl.style.color = '#64748b';
+                }
+            }
+
+            const remainingPoints = Math.max(0, currentBalance - pointsRedeemed);
+            const netGrand = Math.max(0, Math.round((gross - discount) * 100) / 100);
+
+            if (redeemedInput) redeemedInput.value = pointsRedeemed;
+            if (remainingInput) remainingInput.value = remainingPoints;
+            if (discountInput) discountInput.value = '₱' + fmtNum(discount);
+
+            if (discRow && discVal) {
+                if (discount > 0) {
+                    discRow.style.display = 'flex';
+                    discVal.textContent = '-₱' + fmtNum(discount);
+                } else {
+                    discRow.style.display = 'none';
+                    discVal.textContent = '-₱0.00';
+                }
+            }
+            if (grandEl) grandEl.textContent = '₱' + fmtNum(netGrand);
+
+            // Points Earned = Math.floor(netGrand / pointsPerAmount) (₱100 eligible purchase = 1 point)
+            const pointsEarned = (payMethod === 'Petron Fleet Card') ? 0 : Math.floor(netGrand / config.pointsPerAmount);
+            if (earnedInput) earnedInput.value = Math.max(0, pointsEarned);
+
+            // Points After = Remaining Points + Points Earned
+            const pointsAfter = remainingPoints + pointsEarned;
+            if (afterInput) afterInput.value = Math.max(0, pointsAfter);
+
+            if (errorEl) errorEl.style.display = 'none';
+
+            // Update eligibility badge
+            if (eligibilityBadge) {
+                eligibilityBadge.style.display = 'inline-block';
+                if (isEligible) {
+                    eligibilityBadge.style.background = '#dcfce7';
+                    eligibilityBadge.style.color = '#166534';
+                    eligibilityBadge.textContent = 'Eligible (' + currentBalance + ' pts)';
+                } else {
+                    eligibilityBadge.style.background = '#fef3c7';
+                    eligibilityBadge.style.color = '#92400e';
+                    eligibilityBadge.textContent = 'Min ' + config.minPoints + ' pt to redeem';
+                }
+            }
+
+            // Enable / disable checkout button based on validity
+            const checkoutBtn = document.getElementById('checkoutBtn');
+            if (checkoutBtn && typeof updateCheckoutBtn === 'function') {
+                updateCheckoutBtn();
+            }
+
+            if (typeof computeChange === 'function') computeChange();
+            if (typeof onPaymentAmountInput === 'function') onPaymentAmountInput();
+            if (typeof updatePaymentStatusBadge === 'function') updatePaymentStatusBadge();
+        };
+
+        window.calcFleetRewards = function calcFleetRewards() {
+            const fcAmountInput = document.getElementById('fcAmount');
+            const balanceInput = document.getElementById('fcRewardsBalance');
+            const earnedInput = document.getElementById('fcPointsEarned');
+            const redeemedInput = document.getElementById('fcPointsRedeemed');
+            const afterInput = document.getElementById('fcPointsAfter');
+
+            const amount = parseFloat(fcAmountInput?.value || 0) || 0;
+            const currentBalance = parseInt(balanceInput?.value || 0, 10) || 0;
+            const ptsEarned = (amount > 0 && typeof pointsPerAmount !== 'undefined' && pointsPerAmount > 0)
+                ? Math.floor(amount / pointsPerAmount)
+                : 0;
+            if (earnedInput) earnedInput.value = ptsEarned;
+
+            let ptsRedeemed = parseInt(redeemedInput?.value || 0, 10) || 0;
+            if (ptsRedeemed < 0) {
+                ptsRedeemed = 0;
                 if (redeemedInput) redeemedInput.value = 0;
             }
 
-            let isValid = true;
-            if (pointsRedeemed > currentBalance) {
-                isValid = false;
-                if (errorEl) {
-                    errorEl.textContent = `Insufficient points. Available points: ${currentBalance}.`;
-                    errorEl.style.display = 'block';
-                }
-            } else {
-                if (errorEl) errorEl.style.display = 'none';
-            }
-
-            // Disable / Enable checkout / submit button
-            const submitBtn = document.querySelector('.cart-pay-btn') || document.getElementById('submitTxnBtn');
-            if (submitBtn) {
-                if (!isValid) {
-                    submitBtn.disabled = true;
-                    submitBtn.style.opacity = '0.5';
-                    submitBtn.style.cursor = 'not-allowed';
-                } else {
-                    submitBtn.disabled = false;
-                    submitBtn.style.opacity = '1';
-                    submitBtn.style.cursor = 'pointer';
-                }
-            }
-
-            // Formula: New Points Balance = Previous Balance + Points Earned - Points Redeemed
-            const pointsAfter = currentBalance + pointsEarned - pointsRedeemed;
-            if (afterInput) afterInput.value = Math.max(0, pointsAfter);
-        }
+            const remaining = Math.max(0, currentBalance + ptsEarned - ptsRedeemed);
+            if (afterInput) afterInput.value = remaining;
+        };
 
         document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('loyaltyCardNo')?.addEventListener('input', function() {
@@ -9645,7 +9993,7 @@ setTimeout(function() {
         // ── Filter service types dropdown ─────────────────────────────────────
         function getSelectedServiceNames() {
             return cart
-                .filter(i => i.item_type === 'service' && i.category !== 'Labor' && i.product_name !== 'Labor Charge')
+                .filter(i => i.item_type === 'service' && i.category !== 'Labor' && i.category !== 'Tip' && i.product_name !== 'Labor Charge' && i.product_name !== 'Tip')
                 .map(i => i.product_name);
         }
 
@@ -9965,18 +10313,19 @@ setTimeout(function() {
                 }
             });
 
-            // ── 1b. Add labor charge as separate line item (if > 0) ───────────
+            // ── 1b. Add tip as separate line item (if > 0) ───────────────────
             if (laborCharge > 0) {
-                const laborLabel = 'Labor Charge';
-                const existingLabor = cart.find(i => i.item_type === 'service' && (i.product_name === laborLabel || i.category === 'Labor'));
+                const laborLabel = 'Tip';
+                const existingLabor = cart.find(i => i.item_type === 'service' && (i.product_name === laborLabel || i.product_name === 'Labor Charge' || i.category === 'Labor' || i.category === 'Tip'));
                 if (existingLabor) {
                     existingLabor.product_name = laborLabel;
+                    existingLabor.category = 'Tip';
                     existingLabor.unit_price = laborCharge;
                 } else {
                     cart.push({
                         item_type:    'service',
                         product_name: laborLabel,
-                        category:     'Labor',
+                        category:     'Tip',
                         size_variant: '',
                         product_id:   null,
                         quantity:     1,
@@ -9984,7 +10333,7 @@ setTimeout(function() {
                     });
                 }
             } else {
-                cart = cart.filter(i => i.category !== 'Labor' && i.product_name !== 'Labor Charge');
+                cart = cart.filter(i => i.category !== 'Labor' && i.category !== 'Tip' && i.product_name !== 'Labor Charge' && i.product_name !== 'Tip');
             }
 
             // ── 2. Add suggested parts as merchandise items ───────────────────
@@ -10254,10 +10603,12 @@ setTimeout(function() {
 
         function onJoLaborChargeInput() {
             const laborCharge = parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) || 0;
-            const laborLabel = 'Labor Charge';
-            const existingLabor = cart.find(i => i.item_type === 'service' && (i.product_name === laborLabel || i.category === 'Labor'));
+            const laborLabel = 'Tip';
+            const existingLabor = cart.find(i => i.item_type === 'service' && (i.product_name === laborLabel || i.product_name === 'Labor Charge' || i.category === 'Labor' || i.category === 'Tip'));
             if (laborCharge > 0) {
                 if (existingLabor) {
+                    existingLabor.product_name = laborLabel;
+                    existingLabor.category = 'Tip';
                     existingLabor.unit_price = laborCharge;
                 } else {
                     const hasServiceInCart = cart.some(i => i.item_type === 'service');
@@ -10265,7 +10616,7 @@ setTimeout(function() {
                         cart.push({
                             item_type:    'service',
                             product_name: laborLabel,
-                            category:     'Labor',
+                            category:     'Tip',
                             size_variant: '',
                             product_id:   null,
                             quantity:     1,
@@ -10274,7 +10625,7 @@ setTimeout(function() {
                     }
                 }
             } else if (existingLabor) {
-                cart = cart.filter(i => i.category !== 'Labor' && i.product_name !== laborLabel);
+                cart = cart.filter(i => i.category !== 'Labor' && i.category !== 'Tip' && i.product_name !== 'Labor Charge' && i.product_name !== 'Tip');
             }
             renderCart();
         }
@@ -10297,6 +10648,8 @@ setTimeout(function() {
                 'chassis_number' => $customer['chassis_number'] ?? '',
                 'points' => (int)($customer['points'] ?? 0),
                 'customer_id' => $customer['customer_id'] ?? '',
+                'loyalty_card_no' => $customer['loyalty_card_no'] ?? $customer['customer_id'] ?? $customer['id_number'] ?? '',
+                'loyalty_status' => $customer['loyalty_status'] ?? 'active',
                 'id_number' => $customer['id_number'] ?? ''
             ];
         }, $customers)) ?>;
@@ -10581,6 +10934,24 @@ setTimeout(function() {
             });
             const banner = document.getElementById(prefix + 'CustomerLockedBanner');
             if (banner) banner.style.display = 'none';
+
+            // Reset loyalty fields when customer is unlinked
+            const loyaltyProgram = document.getElementById('loyaltyProgram');
+            if (loyaltyProgram) loyaltyProgram.value = 'No Loyalty';
+            const loyaltyCardNo = document.getElementById('loyaltyCardNo');
+            if (loyaltyCardNo) loyaltyCardNo.value = '';
+            const loyaltyCardDisplay = document.getElementById('loyaltyCardDisplay');
+            if (loyaltyCardDisplay) loyaltyCardDisplay.textContent = 'Card: None';
+            const loyaltyPointsBalance = document.getElementById('loyaltyPointsBalance');
+            if (loyaltyPointsBalance) loyaltyPointsBalance.value = 0;
+            const applyCheckbox = document.getElementById('loyaltyApplyRedemption');
+            if (applyCheckbox) {
+                applyCheckbox.checked = false;
+                applyCheckbox.disabled = true;
+            }
+            const eligibilityBadge = document.getElementById('loyaltyEligibilityBadge');
+            if (eligibilityBadge) eligibilityBadge.style.display = 'none';
+            if (typeof onLoyaltyChange === 'function') onLoyaltyChange();
         }
 
         // Full reset — clears all fields (used by reset button only)
@@ -10830,24 +11201,7 @@ setTimeout(function() {
             if (chassisNumber) chassisNumber.value = customer.chassis_number || '';
             
             // Auto-switch loyalty dropdown based on Customer Master Data
-            const loyaltyDropdown = document.getElementById('loyaltyProgram');
-            const loyaltyCardNoInput = document.getElementById('loyaltyCardNo');
-            const loyaltyPointsBalanceEl = document.getElementById('loyaltyPointsBalance');
-            const hasLoyaltyCard = customer.loyalty_card_no && customer.loyalty_card_no.trim() !== '';
-
-            if (hasLoyaltyCard) {
-                // Customer has a card — switch to Petron Rewards Card, show fields, fill values
-                if (loyaltyDropdown) loyaltyDropdown.value = 'Petron Rewards Card';
-                if (loyaltyCardNoInput) loyaltyCardNoInput.value = customer.loyalty_card_no;
-                if (loyaltyPointsBalanceEl) loyaltyPointsBalanceEl.value = customer.points || 0;
-                onLoyaltyChange(); // shows loyaltyFields and recalculates points
-            } else {
-                // No card — keep No Loyalty, hide fields
-                if (loyaltyDropdown) loyaltyDropdown.value = 'No Loyalty';
-                if (loyaltyCardNoInput) loyaltyCardNoInput.value = '';
-                if (loyaltyPointsBalanceEl) loyaltyPointsBalanceEl.value = 0;
-                onLoyaltyChange(); // hides loyaltyFields
-            }
+            applyCustomerLoyalty(customer);
 
             // Hide search results and clear search input
             const resultsDiv = document.getElementById(prefix + 'CustomerResults');
@@ -10994,12 +11348,7 @@ setTimeout(function() {
             if (banner) banner.style.display = 'flex';
             
             // Automatically fill loyalty fields if customer matches
-            const loyaltyCardNoInput = document.getElementById('loyaltyCardNo');
-            if (loyaltyCardNoInput) {
-                const cardVal = customer.customer_id || customer.id_number || '';
-                loyaltyCardNoInput.value = cardVal;
-                loyaltyCardNoInput.dispatchEvent(new Event('input'));
-            }
+            applyCustomerLoyalty(customer);
 
             // Hide the first name dropdown
             const resultsDiv = document.getElementById(prefix + 'FirstNameResults');
@@ -12383,12 +12732,6 @@ setTimeout(function() {
             const dcRefNumber = document.getElementById('dcRefNumber');
             if (dcRefNumber) dcRefNumber.value = '';
 
-            // Loyalty Points
-            const lpAmount = document.getElementById('lpAmount');
-            if (lpAmount) lpAmount.value = '';
-            const lpPoints = document.getElementById('lpPoints');
-            if (lpPoints) lpPoints.value = '';
-
             // E-Wallet
             const ewAmount = document.getElementById('ewAmount');
             if (ewAmount) ewAmount.value = '';
@@ -12404,6 +12747,18 @@ setTimeout(function() {
             if (fcCompanyName) fcCompanyName.value = '';
             const fcAuthNumber = document.getElementById('fcAuthNumber');
             if (fcAuthNumber) fcAuthNumber.value = '';
+            const fcPlateNumber = document.getElementById('fcPlateNumber');
+            if (fcPlateNumber) fcPlateNumber.value = '';
+            const fcOdometer = document.getElementById('fcOdometer');
+            if (fcOdometer) fcOdometer.value = '';
+            const fcRewardsBalance = document.getElementById('fcRewardsBalance');
+            if (fcRewardsBalance) fcRewardsBalance.value = '0';
+            const fcPointsEarned = document.getElementById('fcPointsEarned');
+            if (fcPointsEarned) fcPointsEarned.value = '0';
+            const fcPointsRedeemed = document.getElementById('fcPointsRedeemed');
+            if (fcPointsRedeemed) fcPointsRedeemed.value = '0';
+            const fcPointsAfter = document.getElementById('fcPointsAfter');
+            if (fcPointsAfter) fcPointsAfter.value = '0';
 
             // E-Fuel Card
             const efAmount = document.getElementById('efAmount');
@@ -12427,6 +12782,33 @@ setTimeout(function() {
 
             const generalBalanceDue = document.getElementById('generalBalanceDue');
             if (generalBalanceDue) generalBalanceDue.value = '';
+
+            // Loyalty Program
+            const loyaltyProgram = document.getElementById('loyaltyProgram');
+            if (loyaltyProgram) loyaltyProgram.value = 'No Loyalty';
+            const loyaltyCardNo = document.getElementById('loyaltyCardNo');
+            if (loyaltyCardNo) loyaltyCardNo.value = '';
+            const loyaltyCardDisplay = document.getElementById('loyaltyCardDisplay');
+            if (loyaltyCardDisplay) loyaltyCardDisplay.textContent = 'Card: None';
+            const loyaltyPointsBalance = document.getElementById('loyaltyPointsBalance');
+            if (loyaltyPointsBalance) loyaltyPointsBalance.value = 0;
+            const loyaltyPointsEarned = document.getElementById('loyaltyPointsEarned');
+            if (loyaltyPointsEarned) loyaltyPointsEarned.value = 0;
+            const loyaltyApplyRedemption = document.getElementById('loyaltyApplyRedemption');
+            if (loyaltyApplyRedemption) {
+                loyaltyApplyRedemption.checked = false;
+                loyaltyApplyRedemption.disabled = true;
+            }
+            const loyaltyPointsRedeemed = document.getElementById('loyaltyPointsRedeemed');
+            if (loyaltyPointsRedeemed) loyaltyPointsRedeemed.value = 0;
+            const loyaltyPointsRemaining = document.getElementById('loyaltyPointsRemaining');
+            if (loyaltyPointsRemaining) loyaltyPointsRemaining.value = 0;
+            const loyaltyDiscountAmount = document.getElementById('loyaltyDiscountAmount');
+            if (loyaltyDiscountAmount) loyaltyDiscountAmount.value = '₱0.00';
+            const loyaltyPointsAfter = document.getElementById('loyaltyPointsAfter');
+            if (loyaltyPointsAfter) loyaltyPointsAfter.value = 0;
+            const loyaltyEligibilityBadge = document.getElementById('loyaltyEligibilityBadge');
+            if (loyaltyEligibilityBadge) loyaltyEligibilityBadge.style.display = 'none';
         }
 
         // ── Reset ALL — clears Job Order + Merchandise forms + cart ──────────
@@ -12553,8 +12935,9 @@ setTimeout(function() {
 
             body.innerHTML = cart.map((item, idx) => {
                 const subtotal = item.quantity * item.unit_price;
-                const icon = item.item_type === 'service' ? 'fa-wrench' : 'fa-box';
-                const color = item.item_type === 'service' ? '#b45309' : '#28a745';
+                const isTip = (item.product_name === 'Tip' || item.category === 'Tip' || item.product_name === 'Labor Charge');
+                const icon = isTip ? 'fa-hand-holding-usd' : (item.item_type === 'service' ? 'fa-wrench' : 'fa-box');
+                const color = isTip ? '#16a34a' : (item.item_type === 'service' ? '#b45309' : '#28a745');
                 return `<div class="cart-item-row" style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #f1f5f9;">
                     <i class="fas ${icon}" style="color:${color};font-size:13px;flex-shrink:0;"></i>
                     <div style="flex:1;min-width:0;">
@@ -12605,7 +12988,7 @@ setTimeout(function() {
         function cartRemove(idx) {
             const item = cart[idx];
             cart.splice(idx, 1);
-            if (item && item.item_type === 'service' && item.category !== 'Labor' && item.product_name !== 'Labor Charge') {
+            if (item && item.item_type === 'service' && item.category !== 'Labor' && item.category !== 'Tip' && item.product_name !== 'Labor Charge' && item.product_name !== 'Tip') {
                 if (typeof updateServiceSelectionState === 'function') updateServiceSelectionState();
                 hideServiceDropdown();
             } else {
@@ -12620,18 +13003,37 @@ setTimeout(function() {
             const s = document.getElementById('cartSubtotal');
             const v = document.getElementById('cartVat');
             const g = document.getElementById('cartGrandTotal');
+            const discRow = document.getElementById('cartLoyaltyDiscountRow');
+            const discVal = document.getElementById('cartLoyaltyDiscount');
+            const discInput = document.getElementById('loyaltyDiscountAmount');
+
+            const grossAmount = (typeof grand === 'number' && grand >= 0) ? grand : (subtotal + vat);
+            const discount = (typeof getLoyaltyDiscount === 'function') ? getLoyaltyDiscount(grossAmount) : 0;
+            const netGrand = Math.max(0, Math.round((grossAmount - discount) * 100) / 100);
+
             if (s) s.textContent = '₱' + fmtNum(subtotal);
             if (v) v.textContent = '₱' + fmtNum(vat);
-            if (g) g.textContent = '₱' + fmtNum(grand);
+            if (discRow && discVal) {
+                if (discount > 0) {
+                    discRow.style.display = 'flex';
+                    discVal.textContent = '-₱' + fmtNum(discount);
+                } else {
+                    discRow.style.display = 'none';
+                    discVal.textContent = '-₱0.00';
+                }
+            }
+            if (discInput) discInput.value = '₱' + fmtNum(discount);
+            if (g) g.textContent = '₱' + fmtNum(netGrand);
+
             const method = document.getElementById('paymentMethod')?.value || 'Cash';
             if (method === 'Cash') {
                 const at = document.getElementById('amountTendered');
                 if (at && (!at.value || parseFloat(at.value) === 0)) {
-                    at.value = grand > 0 ? grand.toFixed(2) : '';
+                    at.value = netGrand > 0 ? netGrand.toFixed(2) : '';
                 }
             }
             computeChange();
-            updateLoyaltyPointsEarned(grand);
+            updateLoyaltyPointsEarned(netGrand);
         }
 
         function fmtNum(n) {
@@ -12642,23 +13044,12 @@ setTimeout(function() {
             return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
         }
 
-        // ── Loyalty points sync helper ─────────────────────────────────────────
-        window.syncLpPoints = function syncLpPoints() {
-            const lpPointsInput = document.getElementById('lpPoints');
-            const lpAmountInput = document.getElementById('lpAmount');
-            if (lpPointsInput && lpAmountInput) {
-                const pts = parseFloat(lpPointsInput.value) || 0;
-                lpAmountInput.value = pts > 0 ? pts.toFixed(2) : '';
-                onPaymentAmountInput('lpAmount');
-            }
-        };
-
         // ── Payment panel ─────────────────────────────────────────────────────
         window.onPaymentChange = function onPaymentChange() {
             const method = document.getElementById('paymentMethod')?.value || '';
             const isCard = (method === 'Card' || method === 'Credit Card' || method === 'Debit Card');
             const isEwallet = (method === 'E-Wallet' || method === 'GCash' || method === 'Maya');
-            const isLoyalty = (method === 'Petron Loyalty Points');
+            const isFleet = (method === 'Petron Fleet Card');
 
             const containers = {
                 'cashFields':           method === 'Cash',
@@ -12666,10 +13057,9 @@ setTimeout(function() {
                 'creditCardFields':     false,
                 'debitCardFields':      false,
                 'ewalletFields':        isEwallet,
-                'fleetCardFields':      method === 'Petron Fleet Card',
+                'fleetCardFields':      isFleet,
                 'efuelCardFields':      false,
-                'creditAccountFields':  method === 'Credit Account',
-                'loyaltyPaymentFields': isLoyalty
+                'creditAccountFields':  method === 'Credit Account'
             };
             for (const [id, show] of Object.entries(containers)) {
                 const el = document.getElementById(id);
@@ -12681,16 +13071,41 @@ setTimeout(function() {
                 if (prov) prov.value = method;
             }
 
-            if (isLoyalty) {
-                const lpSel = document.getElementById('loyaltyProgram');
-                if (lpSel && lpSel.value === 'No Loyalty') {
-                    lpSel.value = 'Petron Rewards Card';
-                    if (typeof onLoyaltyChange === 'function') onLoyaltyChange();
+            // Fleet Card loyalty notice & consumer loyalty exclusion
+            const fleetNotice = document.getElementById('fleetCardLoyaltyNotice');
+            const loyaltySelect = document.getElementById('loyaltyProgram');
+            if (isFleet) {
+                if (fleetNotice) fleetNotice.style.display = 'block';
+                if (loyaltySelect) {
+                    loyaltySelect.value = 'No Loyalty';
+                    loyaltySelect.disabled = true;
+                    loyaltySelect.style.background = '#f1f5f9';
+                    loyaltySelect.style.cursor = 'not-allowed';
+                }
+                if (typeof onLoyaltyChange === 'function') onLoyaltyChange();
+
+                // Auto-sync plate & odometer from Job Order if available and empty in Fleet Card
+                const joPlate = document.getElementById('joVehiclePlate')?.value || '';
+                const fcPlate = document.getElementById('fcPlateNumber');
+                if (joPlate && fcPlate && !fcPlate.value) {
+                    fcPlate.value = joPlate;
+                }
+                const joOdo = document.getElementById('joOdometerReading')?.value || document.getElementById('joOdometer')?.value || '';
+                const fcOdo = document.getElementById('fcOdometer');
+                if (joOdo && fcOdo && !fcOdo.value) {
+                    fcOdo.value = joOdo;
+                }
+            } else {
+                if (fleetNotice) fleetNotice.style.display = 'none';
+                if (loyaltySelect) {
+                    loyaltySelect.disabled = false;
+                    loyaltySelect.style.background = '';
+                    loyaltySelect.style.cursor = '';
                 }
             }
 
             const generalBalanceWrap = document.getElementById('generalBalanceWrap');
-            const needsBalance = ['Card','Credit Card','Debit Card','E-Wallet','GCash','Maya','Petron Fleet Card','Petron Loyalty Points'].includes(method);
+            const needsBalance = ['Card','Credit Card','Debit Card','E-Wallet','GCash','Maya','Petron Fleet Card'].includes(method);
             if (generalBalanceWrap) generalBalanceWrap.style.display = needsBalance ? 'block' : 'none';
 
             const grand = getGrandTotal();
@@ -12698,7 +13113,7 @@ setTimeout(function() {
                 'Cash': 'amountTendered',
                 'Card': 'cardAmount', 'Credit Card': 'cardAmount', 'Debit Card': 'cardAmount',
                 'E-Wallet': 'ewAmount', 'GCash': 'ewAmount', 'Maya': 'ewAmount',
-                'Petron Fleet Card': 'fcAmount', 'Petron Loyalty Points': 'lpAmount'
+                'Petron Fleet Card': 'fcAmount'
             };
             const fillId = prefillMap[method];
             if (fillId) {
@@ -12706,16 +13121,8 @@ setTimeout(function() {
                 if (inp && (!inp.value || parseFloat(inp.value) === 0)) inp.value = grand > 0 ? grand.toFixed(2) : '';
             }
 
-            if (isLoyalty) {
-                const lpPts = document.getElementById('lpPoints');
-                if (lpPts && (!lpPts.value || parseInt(lpPts.value, 10) === 0)) {
-                    lpPts.value = grand > 0 ? Math.ceil(grand) : '';
-                }
-                const lpr = document.getElementById('loyaltyPointsRedeemed');
-                if (lpr && (!lpr.value || parseInt(lpr.value, 10) === 0)) {
-                    lpr.value = grand > 0 ? Math.ceil(grand) : 0;
-                    if (typeof calcLoyaltyPoints === 'function') calcLoyaltyPoints();
-                }
+            if (isFleet && typeof calcFleetRewards === 'function') {
+                calcFleetRewards();
             }
 
             computeChange();
@@ -12750,8 +13157,7 @@ setTimeout(function() {
                 'E-Wallet': 'ewAmount',
                 'GCash': 'ewAmount',
                 'Maya': 'ewAmount',
-                'Petron Fleet Card': 'fcAmount',
-                'Petron Loyalty Points': 'lpAmount'
+                'Petron Fleet Card': 'fcAmount'
             };
             const id = idMap[method];
             let val = id ? parseFloat(document.getElementById(id)?.value || 0) : 0;
@@ -12860,11 +13266,6 @@ setTimeout(function() {
             if (sub)  { sub.textContent = subText; }
         }
 
-        function getGrandTotal() {
-            const subtotal = cart.reduce((s, i) => s + i.quantity * i.unit_price, 0);
-            return subtotal * 1.12;
-        }
-
         function updateCheckoutBtn() {
             const btn    = document.getElementById('checkoutBtn');
             const method = document.getElementById('paymentMethod')?.value || '';
@@ -12894,6 +13295,7 @@ setTimeout(function() {
             try {
                 if (cart.length === 0) {
                     showTxnAlert('Cart is empty.', 'warning');
+                    _resetSubmitBtn();
                     return;
                 }
 
@@ -12904,6 +13306,8 @@ setTimeout(function() {
                 return;
             }
 
+            const gross = getGrossTotal();
+            const loyaltyDiscount = getLoyaltyDiscount(gross);
             const grand = getGrandTotal();
             const hasService = cart.some(i => i.item_type === 'service');
             const activeCustomerPrefix = hasService ? 'jo' : 'merch';
@@ -12919,7 +13323,7 @@ setTimeout(function() {
                 contactNumber = (document.getElementById('merchContactNumber')?.value || '').trim();
                 if (!firstName) { showTxnAlert('Please enter the customer\'s first name.', 'warning'); _resetSubmitBtn(); return; }
             }
-            let selectedCustomerId = selectedCustomerIds[activeCustomerPrefix] || null;
+            let selectedCustomerId = selectedCustomerIds.jo || selectedCustomerIds.merch || null;
             const fullName = [firstName, lastName].filter(Boolean).join(' ') || firstName || 'Walk-in Customer';
 
             if (method === 'Credit Account') {
@@ -12933,7 +13337,7 @@ setTimeout(function() {
             const loyaltyPointsBalance = parseInt(document.getElementById('loyaltyPointsBalance')?.value || 0) || 0;
             const loyaltyPointsEarned = parseInt(document.getElementById('loyaltyPointsEarned')?.value || 0) || 0;
             const loyaltyPointsRedeemed = parseInt(document.getElementById('loyaltyPointsRedeemed')?.value || 0) || 0;
-            const hasLoyaltyCard = loyaltyProgram !== 'No Loyalty' && loyaltyCardNo !== '';
+            const hasLoyaltyCard = loyaltyProgram !== 'No Loyalty' && (loyaltyCardNo !== '' || selectedCustomerId !== null);
 
             if (loyaltyProgram !== 'No Loyalty' && loyaltyPointsRedeemed > loyaltyPointsBalance) {
                 showTxnAlert(`Cannot redeem more points than current balance (${loyaltyPointsBalance} pts).`, 'warning');
@@ -12988,12 +13392,10 @@ setTimeout(function() {
             const isEwallet       = method === 'E-Wallet' || method === 'GCash' || method === 'Maya';
             const isFleet         = method === 'Petron Fleet Card';
             const isCredit        = method === 'Credit Account';
-            const isLoyaltyPoints = method === 'Petron Loyalty Points';
 
             // Canonical top-level payment method
             const canonicalPaymentMethod = isCard ? 'Card'
                                          : isEwallet ? 'E-Wallet'
-                                         : isLoyaltyPoints ? 'Petron Loyalty Points'
                                          : method;
 
             const ewProviderVal = isEwallet ? (
@@ -13015,24 +13417,25 @@ setTimeout(function() {
 
             const subtotal = cart.reduce((s, i) => s + i.quantity * i.unit_price, 0);
             const vat = subtotal * 0.12;
-            // grand total is already declared as const grand = getGrandTotal() above
 
             const payload = {
-                action:              'create_transaction',
-                subtotal:            parseFloat(subtotal.toFixed(2)),
-                vat_amount:          parseFloat(vat.toFixed(2)),
-                total_amount:        parseFloat(grand.toFixed(2)),
-                customer_id:         selectedCustomerId,
-                customer_first_name: firstName || null,
-                customer_last_name:  lastName  || null,
-                customer_contact:    contactNumber || null,
-                customer_name:       fullName,
-                payment_method:      canonicalPaymentMethod,
-                amount_paid:         amountPaid > 0 ? amountPaid : (method === 'Cash' ? grand : null),
-                amount_tendered:     method === 'Cash' ? (amountPaid > 0 ? amountPaid : grand) : null,
-                change_amount:       method === 'Cash' && amountPaid >= grand ? parseFloat((amountPaid - grand).toFixed(2)) : null,
-                balance_due:         balanceDue > 0 ? parseFloat(balanceDue.toFixed(2)) : null,
-                payment_status:      paymentStatus,
+                action:                  'create_transaction',
+                subtotal:                parseFloat(subtotal.toFixed(2)),
+                vat_amount:              parseFloat(vat.toFixed(2)),
+                discount_amount:         parseFloat(loyaltyDiscount.toFixed(2)),
+                loyalty_discount_amount: parseFloat(loyaltyDiscount.toFixed(2)),
+                total_amount:            parseFloat(grand.toFixed(2)),
+                customer_id:             selectedCustomerId,
+                customer_first_name:     firstName || null,
+                customer_last_name:      lastName  || null,
+                customer_contact:        contactNumber || null,
+                customer_name:           fullName,
+                payment_method:          canonicalPaymentMethod,
+                amount_paid:             amountPaid > 0 ? amountPaid : (method === 'Cash' ? grand : null),
+                amount_tendered:         method === 'Cash' ? (amountPaid > 0 ? amountPaid : grand) : null,
+                change_amount:           method === 'Cash' && amountPaid >= grand ? parseFloat((amountPaid - grand).toFixed(2)) : null,
+                balance_due:             balanceDue > 0 ? parseFloat(balanceDue.toFixed(2)) : null,
+                payment_status:          paymentStatus,
 
                 card_type:           cardNetworkVal || cardSubTypeVal,
                 card_sub_type:       cardSubTypeVal,
@@ -13045,6 +13448,10 @@ setTimeout(function() {
                 fleet_card_number:   isFleet ? (document.getElementById('fcNumber')?.value || null) : null,
                 fleet_company_name:  isFleet ? (document.getElementById('fcCompanyName')?.value || null) : null,
                 fleet_auth_number:   isFleet ? (document.getElementById('fcAuthNumber')?.value || null) : null,
+                fleet_vehicle_plate: isFleet ? (document.getElementById('fcPlateNumber')?.value || null) : null,
+                fleet_odometer:      isFleet ? (document.getElementById('fcOdometer')?.value || null) : null,
+                fleet_points_earned: isFleet ? (parseInt(document.getElementById('fcPointsEarned')?.value || 0, 10) || null) : null,
+                fleet_points_redeemed: isFleet ? (parseInt(document.getElementById('fcPointsRedeemed')?.value || 0, 10) || null) : null,
 
                 credit_customer_id:    isCredit ? (parseInt(document.getElementById('creditCustomer')?.value) || null) : null,
                 credit_company_name:   isCredit ? (document.getElementById('creditCompanyName')?.value || null) : null,
@@ -13052,10 +13459,10 @@ setTimeout(function() {
                 credit_po_number:      isCredit ? (document.getElementById('creditPoNumber')?.value || null) : null,
                 credit_due_date:       isCredit ? (document.getElementById('creditDueDate')?.value || null) : null,
                 
-                loyalty_type:            isLoyaltyPoints ? 'Petron Rewards Card' : (loyaltyProgram !== 'No Loyalty' ? loyaltyProgram : null),
-                loyalty_card_no:         hasLoyaltyCard ? loyaltyCardNo : null,
-                loyalty_points_earned:   hasLoyaltyCard ? loyaltyPointsEarned : null,
-                loyalty_points_redeemed: isLoyaltyPoints ? (parseInt(document.getElementById('lpPoints')?.value || 0, 10) || loyaltyPointsRedeemed || null) : (hasLoyaltyCard ? loyaltyPointsRedeemed : null),
+                loyalty_type:            (!isFleet && loyaltyProgram !== 'No Loyalty') ? loyaltyProgram : null,
+                loyalty_card_no:         (!isFleet && hasLoyaltyCard) ? loyaltyCardNo : null,
+                loyalty_points_earned:   (!isFleet && hasLoyaltyCard) ? loyaltyPointsEarned : null,
+                loyalty_points_redeemed: (!isFleet && hasLoyaltyCard) ? loyaltyPointsRedeemed : null,
 
                 items: cart.map(i => ({
                     item_type:    i.item_type,
@@ -13079,6 +13486,14 @@ setTimeout(function() {
 
                 if (data.success) {
                     const txnId = data.transaction_id || data.merch_transaction_id;
+
+                    // Update in-memory customer points balance so UI stays fresh
+                    if (selectedCustomerId && loyaltyProgram !== 'No Loyalty' && Array.isArray(customerData)) {
+                        const matchedCust = customerData.find(c => c.id == selectedCustomerId);
+                        if (matchedCust) {
+                            matchedCust.points = Math.max(0, loyaltyPointsBalance + loyaltyPointsEarned - loyaltyPointsRedeemed);
+                        }
+                    }
 
                     // Automatically open / print the official receipt (for BOTH Job Orders & Merchandise transactions)
                     if (txnId) {
@@ -13421,17 +13836,17 @@ setTimeout(function() {
             </div>
             <div class="txn-card-body" style="padding:0;">
                 
-                <div style="width:100%; overflow-x:hidden; border-radius:0 0 8px 8px;">
-                <table class="txn-table report-table no-min-width print-table" id="joUnifiedTable" style="width:100%; border-collapse:collapse; table-layout:fixed;">
+                <div style="width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:0 0 8px 8px;">
+                <table class="txn-table report-table print-table" id="joUnifiedTable" style="width:100%; min-width:1080px; border-collapse:collapse; table-layout:fixed;">
                     <colgroup>
-                        <col style="width:10%;"><!-- JO # / OR NO. -->
-                        <col style="width:16%;"><!-- CUSTOMER & VEHICLE -->
-                        <col style="width:16%;"><!-- SERVICE & MECHANIC -->
-                        <col style="width:8%;"><!-- FEES BREAKDOWN -->
-                        <col style="width:7%;"><!-- PAYMENT -->
-                        <col style="width:12%;"><!-- SCHEDULE & DATE -->
-                        <col style="width:13%;"><!-- STATUS -->
-                        <col style="width:18%;"><!-- ACTIONS -->
+                        <col style="width:9%;"><!-- JO # / OR NO. -->
+                        <col style="width:20%;"><!-- CUSTOMER & VEHICLE -->
+                        <col style="width:14%;"><!-- SERVICE & MECHANIC -->
+                        <col style="width:12%;"><!-- FEES BREAKDOWN -->
+                        <col style="width:8.5%;"><!-- PAYMENT -->
+                        <col style="width:11.5%;"><!-- SCHEDULE & DATE -->
+                        <col style="width:10%;"><!-- STATUS -->
+                        <col style="width:15%;"><!-- ACTIONS -->
                     </colgroup>
                     <thead style="background:#002F70;">
                         <tr style="background:#002F70;">
@@ -13624,11 +14039,13 @@ setTimeout(function() {
                                 <?= htmlspecialchars($job['customer_name'] ?? '—') ?>
                             </div>
                             <?php if (!empty($job['vehicle_plate']) || !empty($job['vehicle_type'])): ?>
-                            <div style="display:inline-flex;align-items:center;gap:4px;background:#f1f5f9;border:1px solid #cbd5e1;color:#1e293b;padding:2px 7px;border-radius:4px;font-size:11.5px;font-weight:700;margin-top:4px;white-space:nowrap;max-width:100%;">
-                                <i class="fas fa-car" style="color:#2563eb;font-size:10px;flex-shrink:0;"></i>
-                                <span><?= htmlspecialchars($job['vehicle_plate'] ?? '—') ?></span>
+                            <div style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px 6px;background:#f1f5f9;border:1px solid #cbd5e1;color:#1e293b;padding:3px 7px;border-radius:4px;font-size:11.5px;font-weight:700;margin-top:4px;max-width:100%;box-sizing:border-box;line-height:1.35;">
+                                <span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
+                                    <i class="fas fa-car" style="color:#2563eb;font-size:10px;flex-shrink:0;"></i>
+                                    <span><?= htmlspecialchars($job['vehicle_plate'] ?? '—') ?></span>
+                                </span>
                                 <?php if (!empty($job['vehicle_type'])): ?>
-                                    <span style="color:#64748b;font-weight:600;">• <?= htmlspecialchars($job['vehicle_type']) ?></span>
+                                    <span style="color:#64748b;font-weight:600;word-break:break-word;">• <?= htmlspecialchars($job['vehicle_type']) ?></span>
                                 <?php endif; ?>
                             </div>
                             <?php endif; ?>
@@ -13647,11 +14064,11 @@ setTimeout(function() {
 
                         <!-- 4. FEES BREAKDOWN -->
                         <td style="padding:11px 8px;vertical-align:middle;box-sizing:border-box;">
-                            <div style="color:#334155;font-size:12.5px;white-space:nowrap;">Svc: <strong style="color:#002F70;font-weight:800;font-size:13.5px;">₱<?= number_format((float)($job['service_fee'] ?? $job['estimated_cost'] ?? $job['total_cost'] ?? 0), 2) ?></strong></div>
+                            <div style="color:#334155;font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;">Svc: <strong style="color:#002F70;font-weight:800;font-size:13px;">₱<?= number_format((float)($job['service_fee'] ?? $job['estimated_cost'] ?? $job['total_cost'] ?? 0), 2) ?></strong></div>
                             <?php
                             $labor_val = (float)($job['actual_labor_cost'] ?? $job['estimated_labor_cost'] ?? 0);
                             ?>
-                            <div style="color:#334155;font-size:12px;margin-top:2px;white-space:nowrap;">Labor: <strong style="color:<?= $labor_val > 0 ? '#16a34a' : '#94a3b8' ?>;font-weight:800;font-size:12.5px;"><?= $labor_val > 0 ? '₱' . number_format($labor_val, 2) : '—' ?></strong></div>
+                            <div style="color:#334155;font-size:11.5px;margin-top:3px;white-space:nowrap;font-variant-numeric:tabular-nums;">Tip: <strong style="color:<?= $labor_val > 0 ? '#16a34a' : '#94a3b8' ?>;font-weight:800;font-size:12px;"><?= $labor_val > 0 ? '₱' . number_format($labor_val, 2) : '—' ?></strong></div>
                         </td>
 
                         <!-- 5. PAYMENT -->
@@ -15419,8 +15836,8 @@ setTimeout(function() {
             if (!_activeJoDataForReq) return;
             var field = document.getElementById('reqAdjCorrectionField').value;
             var curVal = '—';
-            if (field === 'Labor Fee') {
-                curVal = _activeJoDataForReq.labor_fee ? ('₱' + parseFloat(_activeJoDataForReq.labor_fee).toFixed(2)) : '₱100.00';
+            if (field === 'Tip (Mechanic)' || field === 'Tip' || field === 'Labor Fee') {
+                curVal = _activeJoDataForReq.labor_fee ? ('₱' + parseFloat(_activeJoDataForReq.labor_fee).toFixed(2)) : '₱0.00';
             } else if (field === 'Service Fee') {
                 curVal = _activeJoDataForReq.total ? ('₱' + parseFloat(_activeJoDataForReq.total).toFixed(2)) : '₱0.00';
             } else if (field === 'Service Type') {
@@ -16378,7 +16795,7 @@ setTimeout(function() {
                  <div style="margin-bottom:14px;">
                    <label style="display:block;font-size:12px;font-weight:700;color:#374151;margin-bottom:6px;">What needs to be corrected? <span style="color:#ef4444;">*</span></label>
                    <select id="reqAdjCorrectionField" name="correction_field" required onchange="onReqAdjFieldChange()" style="width:100%;padding:9px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;color:#1e293b;background:#fff;outline:none;box-sizing:border-box;">
-                     <option value="Labor Fee">Labor Fee</option>
+                     <option value="Tip (Mechanic)">Tip (Mechanic)</option>
                      <option value="Service Fee">Service Fee</option>
                      <option value="Service Type">Service Type</option>
                      <option value="Merchandise / Item">Merchandise / Item</option>

@@ -992,16 +992,21 @@ body, html { overflow-x:hidden !important; }
 </style>
 
 <div class="main-content">
-<div class="int-head">
+<div class="int-head" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
   <div>
     <h1><i class="fas fa-gas-pump"></i> Fuel Inventory Management</h1>
+  </div>
+  <div style="display:flex; align-items:center; gap:10px;">
+    <a href="manager_stock_request_review.php?open_po=1&type=fuel" class="btn-forward" style="background:#002F6C!important;color:#fff!important;border-radius:8px!important;padding:9px 18px!important;font-weight:700!important;font-size:13.5px!important;display:inline-flex!important;align-items:center!important;gap:8px!important;text-decoration:none!important;box-shadow:0 3px 8px rgba(0,47,108,0.25)!important;">
+      <i class="fas fa-plus-circle"></i> Create Fuel PO
+    </a>
   </div>
 </div>
 
 <!-- â•â• Dashboard Cards (5 Cards) â•â• -->
 <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:16px; margin-bottom:24px;">
     <!-- Card 1: Total Fuel Available -->
-    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:16px 20px; box-shadow:0 1px 3px rgba(0,0,0,0.05); display:flex; align-items:center; justify-content:space-between;">
+    <div onclick="filterAdminFuelByCard('')" style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:16px 20px; box-shadow:0 1px 3px rgba(0,0,0,0.05); display:flex; align-items:center; justify-content:space-between; cursor:pointer;" title="Click to view all fuel tanks">
         <div>
             <div style="font-size:15.5px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.3px;">Total Fuel Available (L)</div>
             <div style="font-size:20px; font-weight:800; color:#002F70; margin-top:4px;"><?= number_format($total_fuel_available, 2) ?> L</div>
@@ -1017,7 +1022,7 @@ body, html { overflow-x:hidden !important; }
         <div style="background:#f1f5f9; color:#475569; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:15px;"><i class="fas fa-database"></i></div>
     </div>
     <!-- Card 3: Low Fuel Tanks -->
-    <div style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:16px 20px; box-shadow:0 1px 3px rgba(0,0,0,0.05); display:flex; align-items:center; justify-content:space-between;">
+    <div onclick="filterAdminFuelByCard('low')" style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:16px 20px; box-shadow:0 1px 3px rgba(0,0,0,0.05); display:flex; align-items:center; justify-content:space-between; cursor:pointer;" title="Click to filter Low Fuel Tanks">
         <div>
             <div style="font-size:15.5px; font-weight:700; color:#ea580c; text-transform:uppercase; letter-spacing:.3px;">Low Fuel Tanks</div>
             <div style="font-size:20px; font-weight:800; color:#ea580c; margin-top:4px;"><?= number_format($total_low_fuel_tanks) ?></div>
@@ -2209,9 +2214,19 @@ function filterFuelTable() {
         if (search && rTankNum.indexOf(search) === -1 && rUgtNo.indexOf(search) === -1 && rFuelType.indexOf(search) === -1) match = false;
         if (fuelType && rFuelType.indexOf(fuelType) === -1) match = false;
         if (status) {
-            if (status === 'normal' && rStatus !== 'normal') match = false;
-            else if (status === 'low' && rStatus !== 'low') match = false;
-            else if (status === 'out of stock' && rStatus !== 'out of stock') match = false;
+            if (status === 'normal') {
+                if (rStatus !== 'normal') match = false;
+            } else if (status === 'low') {
+                if (rStatus !== 'low') match = false;
+            } else if (status === 'critical') {
+                if (rStatus !== 'critical') match = false;
+            } else if (status === 'out of stock' || status === 'out') {
+                if (rStatus !== 'out of stock' && rStatus !== 'out') match = false;
+            } else if (status === 'deactivated') {
+                if (rStatus !== 'deactivated') match = false;
+            } else if (rStatus.indexOf(status) === -1) {
+                match = false;
+            }
         }
 
         if (match) {
@@ -2224,6 +2239,16 @@ function filterFuelTable() {
     });
     adminFuelInvState.page = 1;
     adminFuelInvRender();
+}
+
+function filterAdminFuelByCard(st) {
+    var sel = document.getElementById('fuelStatusFilter') || document.getElementById('sf');
+    if (sel) {
+        sel.value = st;
+        filterFuelTable();
+        var el = document.getElementById('adminFuelInvTable');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
 }
 
 function filterDeliveriesTable() {

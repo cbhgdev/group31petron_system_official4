@@ -9,7 +9,7 @@ $role       = role_key($me['role'] ?? '');
 $station_id = (int)user_station_id();
 
 if ($role === 'admin') {
-    header('Location: admin_procurement_reports.php?section=po');
+    header('Location: manager_stock_request_review.php');
     exit;
 }
 

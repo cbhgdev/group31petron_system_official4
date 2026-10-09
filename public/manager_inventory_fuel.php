@@ -1321,7 +1321,7 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
 <!-- â•â• Summary Cards (6 Cards) â•â• -->
 <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px;">
     <!-- Total Fuel Available -->
-    <div style="background:#fff;border-radius:8px;padding:16px 20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);display:flex;align-items:center;justify-content:space-between;border:1px solid #e2e8f0;">
+    <div onclick="filterFuelByCard('')" style="background:#fff;border-radius:8px;padding:16px 20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);display:flex;align-items:center;justify-content:space-between;border:1px solid #e2e8f0;cursor:pointer;" title="Click to view all fuel tanks">
         <div>
             <div style="font-size:14px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.3px;">Total Fuel Available</div>
             <div style="font-size:24px;font-weight:800;color:#002F70;margin-top:4px;"><?= number_format($total_fuel_volume, 0) ?> L</div>
@@ -1353,7 +1353,7 @@ td:nth-child(11), th:nth-child(11), td:nth-child(12), th:nth-child(12) {
         <div style="background:#f8fafc;color:#64748b;width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;"><i class="fas fa-leaf"></i></div>
     </div>
     <!-- Low Fuel Types -->
-    <div style="background:#fff;border-radius:8px;padding:16px 20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);display:flex;align-items:center;justify-content:space-between;border:1px solid #fed7aa;">
+    <div onclick="filterFuelByCard('low')" style="background:#fff;border-radius:8px;padding:16px 20px;box-shadow:0 1px 3px rgba(0,0,0,0.05);display:flex;align-items:center;justify-content:space-between;border:1px solid #fed7aa;cursor:pointer;" title="Click to filter Low Fuel">
         <div>
             <div style="font-size:14px;font-weight:700;color:#ea580c;text-transform:uppercase;letter-spacing:.3px;">Low Fuel Types</div>
             <div style="font-size:24px;font-weight:800;color:#ea580c;margin-top:4px;"><?= number_format($low_fuel_types) ?></div>
@@ -2077,16 +2077,18 @@ function filterFuelTable() {
             match = false;
         }
         
-        // Status filter logic (Low, Critical, Out of Stock all group together; Deactivated is direct match)
+        // Status filter logic (strictly match specific status)
         if (status) {
             if (status === 'normal') {
                 if (rStatus !== 'normal') match = false;
             } else if (status === 'deactivated') {
                 if (rStatus !== 'deactivated') match = false;
-            } else if (status === 'low' || status === 'critical' || status === 'out of stock' || status.indexOf('low') !== -1 || status.indexOf('critical') !== -1 || status.indexOf('out') !== -1) {
-                if (rStatus !== 'low' && rStatus !== 'critical' && rStatus !== 'out of stock') {
-                    match = false;
-                }
+            } else if (status === 'out of stock' || status === 'out') {
+                if (rStatus !== 'out of stock' && rStatus !== 'out') match = false;
+            } else if (status === 'critical') {
+                if (rStatus !== 'critical') match = false;
+            } else if (status === 'low') {
+                if (rStatus !== 'low') match = false;
             } else if (rStatus.indexOf(status) === -1) {
                 match = false;
             }
@@ -2119,6 +2121,16 @@ function resetFuelFilters() {
         }
     });
     filterFuelTable();
+}
+
+function filterFuelByCard(st) {
+    var sel = document.getElementById('fuelStatusFilter');
+    if (sel) {
+        sel.value = st;
+        filterFuelTable();
+        var el = document.getElementById('mgrFuelTable');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
 }
 
 function filterDelTable() {

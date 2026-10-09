@@ -407,13 +407,10 @@ function filter_menu_by_permissions($menu_items, $user_role) {
                 continue;
             }
 
-            // Staff Fuel Management: Provide Meter Reading & Fuel Transactions sub-items
+            // Staff Fuel Management: Single direct link with NO sub sidebar navigation
             if ($user_role === 'staff' && ($item['id'] ?? '') === 'fuel') {
-                $filtered_item['href'] = 'staff_transactions_hub.php?section=fuel';
-                $filtered_item['sub_items'] = [
-                    ['id'=>'fuel_sales',              'label'=>'Meter Reading',     'href'=>'staff_transactions_hub.php?section=fuel',                      'ico'=>'fas fa-tachometer-alt', 'permissions'=>['encode_fuel','manage_fuel'], 'desc'=>'Record pump meter readings and shift sales.'],
-                    ['id'=>'staff_fuel_transactions', 'label'=>'Fuel Transactions', 'href'=>'staff_transactions_hub.php?section=fuel&fuel_tab=readings', 'ico'=>'fas fa-history',        'permissions'=>['encode_fuel','manage_fuel'], 'desc'=>'View today\'s encoded meter readings and history.'],
-                ];
+                $filtered_item['href']      = 'staff_transactions_hub.php?section=fuel';
+                $filtered_item['sub_items'] = [];
                 $filtered_menu[] = $filtered_item;
                 continue;
             }

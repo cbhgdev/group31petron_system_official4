@@ -997,9 +997,6 @@ body.modal-open .main {
                         if ($exp_status === 'expired') {
                             $display_status = 'EXPIRED';
                             $display_color = '#dc3545';
-                        } elseif ($has_variance) {
-                            $display_status = 'VARIANCE DETECTED';
-                            $display_color = '#fd7e14';
                         } else {
                             $display_status = $it['status'];
                             $display_color = $it['color'];
@@ -1019,7 +1016,8 @@ body.modal-open .main {
                         data-brand="<?php echo strtolower(htmlspecialchars($it['brand'])); ?>"
                         data-unit="<?php echo strtolower(htmlspecialchars($it['unit'])); ?>"
                         data-status="<?php echo $exp_status === 'expired' ? 'expired' : htmlspecialchars($it['status_key']); ?>"
-                        data-filter-status="<?php echo $exp_status === 'expired' ? 'expired' : ($has_variance ? 'variance detected' : htmlspecialchars($it['status_key'])); ?>"
+                        data-filter-status="<?php echo $exp_status === 'expired' ? 'expired' : htmlspecialchars($it['status_key']); ?>"
+                        data-has-variance="<?php echo $has_variance ? 'true' : 'false'; ?>"
                         data-stock="<?php echo $it['stock']; ?>"
                         data-updated="<?php echo htmlspecialchars($it['last_updated']); ?>"
                         data-idx="<?php echo htmlspecialchars(json_encode(array_merge($it, ['exp_status' => $exp_status, 'exp_date' => $exp_date]))); ?>">
@@ -1077,7 +1075,7 @@ body.modal-open .main {
                         </td>
 
                         <!-- 5. STATUS -->
-                        <td style="padding:9px 6px;max-width:0;overflow:hidden;box-sizing:border-box;vertical-align:middle;text-align:center;">
+                        <td style="padding:9px 6px;max-width:0;overflow:visible;box-sizing:border-box;vertical-align:middle;text-align:center;">
                             <?php if ($exp_status === 'expired'): ?>
                                 <span class="inv-stock-badge" style="background:#dc354520;color:#dc3545;border:1.5px solid #dc354560;padding:4px 9px;border-radius:6px;font-size:11px;font-weight:800;text-transform:uppercase;white-space:nowrap;display:inline-block;">
                                     <i class="fas fa-ban" style="font-size:9.5px;margin-right:2px;"></i> EXPIRED
@@ -1086,6 +1084,13 @@ body.modal-open .main {
                                 <span class="inv-stock-badge" style="background:<?= $display_color ?>20;color:<?= $display_color ?>;border:1.5px solid <?= $display_color ?>50;padding:4px 9px;border-radius:6px;font-size:11px;font-weight:800;text-transform:uppercase;white-space:nowrap;display:inline-block;">
                                     <?= htmlspecialchars($display_status) ?>
                                 </span>
+                            <?php endif; ?>
+                            <?php if ($has_variance && $exp_status !== 'expired'): ?>
+                                <div style="margin-top:3px;">
+                                    <span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:800;display:inline-flex;align-items:center;gap:3px;text-transform:uppercase;letter-spacing:0.3px;">
+                                        <i class="fas fa-balance-scale" style="font-size:9px;color:#d97706;"></i> VARIANCE
+                                    </span>
+                                </div>
                             <?php endif; ?>
                         </td>
 
@@ -1402,13 +1407,17 @@ function applyFilters() {
             if (stat === 'available' || stat === 'ok') {
                 matchS = (rstat === 'ok' || rstat === 'available' || rfilter === 'available') && rfilter !== 'expired' && rstat !== 'expired';
             } else if (stat === 'low') {
-                matchS = (rstat === 'low' || rstat === 'critical');
+                matchS = (rstat === 'low' || rstat === 'critical' || rfilter === 'low' || rfilter === 'critical');
+            } else if (stat === 'critical') {
+                matchS = (rstat === 'critical' || rfilter === 'critical');
             } else if (stat === 'out' || stat === 'out of stock') {
-                matchS = (rstat === 'out');
+                matchS = (rstat === 'out' || rstat === 'out of stock' || rfilter === 'out' || rfilter === 'out of stock');
             } else if (stat === 'expired') {
                 matchS = (rstat === 'expired' || rfilter === 'expired');
+            } else if (stat === 'variance' || stat === 'variance detected') {
+                matchS = (r.dataset.hasVariance === 'true');
             } else if (stat === 'warning') {
-                matchS = (rstat === 'low' || rstat === 'critical' || rstat === 'out' || rstat === 'expired' || rfilter === 'expired');
+                matchS = (rstat === 'low' || rstat === 'critical' || rstat === 'out' || rstat === 'out of stock' || rstat === 'expired' || rfilter === 'expired');
             } else {
                 matchS = (rstat === stat || rfilter === stat);
             }

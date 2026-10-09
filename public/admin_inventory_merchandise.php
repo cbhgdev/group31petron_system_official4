@@ -1116,10 +1116,16 @@ foreach ($all_items as &$item) {
     // Global KPIs (unfiltered)
     $kpi_total_products++;
     $kpi_total_stock += $stock;
-    if ($computed_status === 'expired') $kpi_expired_stock++;
-    elseif ($computed_status === 'low') $kpi_low_stock++;
-    elseif ($computed_status === 'critical') $kpi_critical_stock++;
-    elseif ($computed_status === 'out') $kpi_out_of_stock++;
+    if ($computed_status === 'expired') {
+        $kpi_expired_stock++;
+    } elseif ($computed_status === 'out') {
+        $kpi_out_of_stock++;
+    } elseif ($computed_status === 'low' || $computed_status === 'critical') {
+        $kpi_low_stock++;
+        if ($computed_status === 'critical') $kpi_critical_stock++;
+    } else {
+        $kpi_available_stock++;
+    }
     $kpi_total_value += ($stock * $price);
 
     // Apply Filters
@@ -1132,7 +1138,7 @@ foreach ($all_items as &$item) {
             if ($s_lower === 'expired') {
                 $status_match = ($computed_status === 'expired' || $exp_status === 'expired');
             } elseif (in_array($s_lower, ['low', 'low stock'], true)) {
-                $status_match = ($computed_status === 'low');
+                $status_match = in_array($computed_status, ['low', 'critical'], true);
             } elseif (in_array($s_lower, ['critical', 'critical stock'], true)) {
                 $status_match = ($computed_status === 'critical');
             } elseif (in_array($s_lower, ['out', 'out of stock'], true)) {
@@ -1140,7 +1146,7 @@ foreach ($all_items as &$item) {
             } elseif (in_array($s_lower, ['variance', 'variance detected'], true)) {
                 $status_match = $has_variance;
             } elseif ($s_lower === 'available') {
-                $status_match = ($computed_status === 'available' && !$has_variance && $exp_status !== 'expired');
+                $status_match = ($computed_status === 'available' && $exp_status !== 'expired');
             }
             $name_match = (strpos(strtolower($item['name'] ?? ''), $s_lower) !== false);
             $sku_match  = (strpos(strtolower($item['sku'] ?? ''), $s_lower) !== false);
@@ -1180,12 +1186,23 @@ foreach ($all_items as &$item) {
         }
     }
 
-    // 6. Status Filter — Low Stock, Critical Stock, Out of Stock all show the same combined stock alert view
+    // 6. Status Filter — Exact, clean status separation
     if ($status_filter !== 'all' && $status_filter !== '') {
         $sf_lower = strtolower($status_filter);
-        if (in_array($sf_lower, ['warning', 'low', 'low stock', 'critical', 'critical stock', 'out', 'out of stock'], true)) {
-            // Any stock-alert filter shows ALL low + critical + out of stock items together
+        if ($sf_lower === 'warning') {
             if (!in_array($computed_status, ['low', 'critical', 'out'], true)) {
+                continue;
+            }
+        } elseif (in_array($sf_lower, ['low', 'low stock'], true)) {
+            if (!in_array($computed_status, ['low', 'critical'], true)) {
+                continue;
+            }
+        } elseif (in_array($sf_lower, ['critical', 'critical stock'], true)) {
+            if ($computed_status !== 'critical') {
+                continue;
+            }
+        } elseif (in_array($sf_lower, ['out', 'out of stock'], true)) {
+            if ($computed_status !== 'out') {
                 continue;
             }
         } elseif ($sf_lower === 'expired') {
@@ -1197,7 +1214,7 @@ foreach ($all_items as &$item) {
                 continue;
             }
         } elseif ($sf_lower === 'available') {
-            if ($computed_status !== 'available' || $has_variance || $exp_status === 'expired') {
+            if ($computed_status !== 'available' || $exp_status === 'expired') {
                 continue;
             }
         } elseif ($sf_lower === 'inactive') {
@@ -2576,9 +2593,14 @@ input.filter-input:focus {
 
 <div class="main-content">
 <!-- Page Header -->
-<div class="int-head">
+<div class="int-head" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
     <div>
         <h1><i class="fas fa-boxes"></i> Merchandise Inventory Management</h1>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+        <a href="manager_stock_request_review.php?open_po=1&type=merch" class="btn-forward" style="background:#002F6C!important;color:#fff!important;border-radius:8px!important;padding:9px 18px!important;font-weight:700!important;font-size:13.5px!important;display:inline-flex!important;align-items:center!important;gap:8px!important;text-decoration:none!important;box-shadow:0 3px 8px rgba(0,47,108,0.25)!important;">
+            <i class="fas fa-plus-circle"></i> Create Purchase Order
+        </a>
     </div>
 </div>
 
@@ -2864,11 +2886,6 @@ window.openAdminAdjustModal = function(item) {
                             $st = 'AVAILABLE'; $sc = '#28a745'; $si_cls = 'available';
                         }
 
-                        if ($has_variance) {
-                            $st = 'VARIANCE DETECTED'; $sc = '#fd7e14';
-                            $si_cls = 'variance detected';
-                        }
-
                         $timestamp_date = '—';
                         $timestamp_time = '';
                         if (!empty($item['last_updated'])) {
@@ -2956,10 +2973,23 @@ window.openAdminAdjustModal = function(item) {
                         </td>
 
                         <!-- 5. STATUS -->
-                        <td style="padding:9px 6px;max-width:0;overflow:hidden;box-sizing:border-box;vertical-align:middle;text-align:center;">
-                            <span class="inv-stock-badge" style="background:<?= $sc ?>20;color:<?= $sc ?>;border:1.5px solid <?= $sc ?>50;padding:4px 9px;border-radius:6px;font-size:11px;font-weight:800;text-transform:uppercase;white-space:nowrap;display:inline-block;">
-                                <?= htmlspecialchars($st) ?>
-                            </span>
+                        <td style="padding:9px 6px;max-width:0;overflow:visible;box-sizing:border-box;vertical-align:middle;text-align:center;">
+                            <?php if ($exp_status === 'expired'): ?>
+                                <span class="inv-stock-badge" style="background:#dc354520;color:#dc3545;border:1.5px solid #dc354560;padding:4px 9px;border-radius:6px;font-size:11px;font-weight:800;text-transform:uppercase;white-space:nowrap;display:inline-block;">
+                                    <i class="fas fa-ban" style="font-size:9.5px;margin-right:2px;"></i> EXPIRED
+                                </span>
+                            <?php else: ?>
+                                <span class="inv-stock-badge" style="background:<?= $sc ?>20;color:<?= $sc ?>;border:1.5px solid <?= $sc ?>50;padding:4px 9px;border-radius:6px;font-size:11px;font-weight:800;text-transform:uppercase;white-space:nowrap;display:inline-block;">
+                                    <?= htmlspecialchars($st) ?>
+                                </span>
+                            <?php endif; ?>
+                            <?php if ($has_variance && $exp_status !== 'expired'): ?>
+                                <div style="margin-top:3px;">
+                                    <span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:800;display:inline-flex;align-items:center;gap:3px;text-transform:uppercase;letter-spacing:0.3px;">
+                                        <i class="fas fa-balance-scale" style="font-size:9px;color:#d97706;"></i> VARIANCE
+                                    </span>
+                                </div>
+                            <?php endif; ?>
                         </td>
 
                         <!-- 6. LAST UPDATED -->

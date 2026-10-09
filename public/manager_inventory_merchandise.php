@@ -2081,13 +2081,13 @@ body { overflow-x: hidden; }
         <div class="txn-kpi-val">-<?= number_format($stock_deducted_today) ?></div>
     </div>
     <!-- Low Stock -->
-    <div onclick="filterMgrByCard('warning')" class="txn-kpi-card orange" style="cursor:pointer;" title="Click to filter low stock items">
+    <div onclick="filterMgrByCard('low')" class="txn-kpi-card orange" style="cursor:pointer;" title="Click to filter low stock items">
         <div class="txn-kpi-lbl"><i class="fas fa-exclamation-triangle" style="color:#d97706;margin-right:4px;"></i> Low Stock</div>
-        <div class="txn-kpi-val"><?= number_format($summary_alert_low) ?></div>
+        <div class="txn-kpi-val"><?= number_format($summary_low) ?></div>
     </div>
 
     <!-- Out of Stock -->
-    <div onclick="filterMgrByCard('warning')" class="txn-kpi-card dark-danger" style="cursor:pointer;" title="Click to filter out of stock items">
+    <div onclick="filterMgrByCard('out of stock')" class="txn-kpi-card dark-danger" style="cursor:pointer;" title="Click to filter out of stock items">
         <div class="txn-kpi-lbl"><i class="fas fa-times-circle" style="color:#991b1b;margin-right:4px;"></i> Out of Stock</div>
         <div class="txn-kpi-val"><?= number_format($summary_out) ?></div>
     </div>
@@ -2213,12 +2213,7 @@ body { overflow-x: hidden; }
                     $st = 'AVAILABLE'; $sc = '#28a745'; $si_cls = 'available';
                 }
 
-                // If has variance and not expired, show it in status but keep underlying status in data-stock-status
-                $stock_status_class = $si_cls; // Preserve original status for filtering
-                if ($has_variance && $exp_status !== 'expired') {
-                    $st = 'VARIANCE DETECTED'; $sc = '#fd7e14'; // Warning color (Orange)
-                    $si_cls = 'variance detected';
-                }
+                $stock_status_class = $si_cls;
 
                 $timestamp = '—';
                 if (!empty($item['last_updated'])) {
@@ -2234,7 +2229,7 @@ body { overflow-x: hidden; }
                 data-cat="<?php echo strtolower(htmlspecialchars($item['category_name'] ?? '')); ?>"
                 data-has-variance="<?php echo $has_variance ? 'true' : 'false'; ?>"
                 data-inv-status="<?php echo $exp_status === 'expired' ? 'expired' : $si_cls; ?>"
-                data-stock-status="<?php echo $exp_status === 'expired' ? 'expired' : $stock_status_class; ?>">
+                data-stock-status="<?php echo $exp_status === 'expired' ? 'expired' : $si_cls; ?>">
                 
                 <!-- 1. ITEM IDENTIFIERS -->
                 <td style="padding:9px 8px;max-width:0;overflow:hidden;box-sizing:border-box;vertical-align:middle;">
@@ -2309,6 +2304,13 @@ body { overflow-x: hidden; }
                         <span class="inv-stock-badge" style="background:<?= $sc ?>20;color:<?= $sc ?>;border:1.5px solid <?= $sc ?>50;padding:4px 9px;border-radius:6px;font-size:11px;font-weight:800;text-transform:uppercase;white-space:nowrap;display:inline-block;">
                             <?= htmlspecialchars($st) ?>
                         </span>
+                    <?php endif; ?>
+                    <?php if ($has_variance && $exp_status !== 'expired'): ?>
+                        <div style="margin-top:3px;">
+                            <span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:800;display:inline-flex;align-items:center;gap:3px;text-transform:uppercase;letter-spacing:0.3px;">
+                                <i class="fas fa-balance-scale" style="font-size:9px;color:#d97706;"></i> VARIANCE
+                            </span>
+                        </div>
                     <?php endif; ?>
                 </td>
 
@@ -3773,37 +3775,55 @@ function filterInvTable() {
 
         var matchesCat = !cat || rCat === cat;
 
-        // WARNING TIERS: low, critical, out-of-stock are all connected
-        var WARNING_STATUSES = ['low', 'critical', 'out of stock', 'out'];
-        var isWarning = (WARNING_STATUSES.indexOf(rInv) !== -1 || WARNING_STATUSES.indexOf(rStockStatus) !== -1);
+        var isOut = (rInv === 'out of stock' || rInv === 'out' || rStockStatus === 'out of stock' || rStockStatus === 'out');
+        var isCrit = (rInv === 'critical' || rStockStatus === 'critical');
+        var isLow = (rInv === 'low' || rStockStatus === 'low');
+        var isLowOrCrit = isLow || isCrit;
+        var isExpired = (rInv === 'expired' || rStockStatus === 'expired');
+        var isAvailable = (rInv === 'available' || rStockStatus === 'available') && !isExpired;
+        var hasVariance = (r.dataset.hasVariance === 'true' || rInv === 'variance detected');
+        var isWarning = isLowOrCrit || isOut || isExpired;
 
-        // Status filter matching — Low Stock, Critical Stock, Out of Stock all show the same combined stock alert view
+        // Status filter matching — distinct matching per selected status
         var matchesStock = false;
         if (!stFlt) {
             matchesStock = true;
-        } else if (stFlt === 'warning' || stFlt === 'low' || stFlt === 'critical' || stFlt === 'out of stock' || stFlt === 'out') {
-            // Any stock-alert filter shows ALL low + critical + out of stock items together
+        } else if (stFlt === 'warning') {
             matchesStock = isWarning;
-        } else if (stFlt === 'variance detected') {
-            matchesStock = (rInv === 'variance detected');
+        } else if (stFlt === 'low') {
+            matchesStock = isLowOrCrit;
+        } else if (stFlt === 'critical') {
+            matchesStock = isCrit;
+        } else if (stFlt === 'out of stock' || stFlt === 'out') {
+            matchesStock = isOut;
+        } else if (stFlt === 'variance detected' || stFlt === 'variance') {
+            matchesStock = hasVariance;
         } else if (stFlt === 'expired') {
-            matchesStock = (rInv === 'expired' || rStockStatus === 'expired');
+            matchesStock = isExpired;
         } else if (stFlt === 'available') {
-            matchesStock = (rInv === 'available' || rStockStatus === 'available') && rInv !== 'expired' && rStockStatus !== 'expired';
+            matchesStock = isAvailable;
         } else {
-            matchesStock = (rInv === stFlt || (rInv !== 'variance detected' && rStockStatus === stFlt));
+            matchesStock = (rInv === stFlt || rStockStatus === stFlt);
         }
 
-        // Search text matching (status keywords expand to all warnings)
+        // Search text matching (status keywords match exact status category)
         var matchesSrch = false;
         if (!srch) {
             matchesSrch = true;
-        } else if (['low', 'low stock', 'out', 'out of stock', 'critical', 'critical stock', 'warning'].indexOf(srch) !== -1) {
+        } else if (srch === 'low' || srch === 'low stock') {
+            matchesSrch = isLowOrCrit;
+        } else if (srch === 'critical' || srch === 'critical stock') {
+            matchesSrch = isCrit;
+        } else if (srch === 'out' || srch === 'out of stock') {
+            matchesSrch = isOut;
+        } else if (srch === 'warning') {
             matchesSrch = isWarning;
         } else if (srch === 'expired') {
-            matchesSrch = (rInv === 'expired' || rStockStatus === 'expired');
+            matchesSrch = isExpired;
         } else if (srch === 'available') {
-            matchesSrch = (rInv === 'available' || rStockStatus === 'available') && rInv !== 'expired' && rStockStatus !== 'expired';
+            matchesSrch = isAvailable;
+        } else if (srch === 'variance' || srch === 'variance detected') {
+            matchesSrch = hasVariance;
         } else {
             matchesSrch = rName.includes(srch) || rSku.includes(srch) || rCat.includes(srch);
         }

@@ -16,7 +16,7 @@ function getAdminSidebar($current_page = 'transactions') {
         'purchase_orders' => [
             'icon' => 'fas fa-file-invoice-dollar',
             'title' => 'Purchase Orders',
-            'url' => 'admin_purchase_orders.php',
+            'url' => 'manager_stock_request_review.php',
             'description' => 'Validate and finalize POs to suppliers'
         ],
         'merchandise_deliveries_oversight' => [

@@ -322,7 +322,10 @@ $total_job_order_revenue = (float) adm_value($pdo, "
 $fi_raw    = [];
 $fi_lookup = [];
 try {
-    $s = $pdo->prepare("SELECT id, fuel_type, current_level, current_stock, capacity, price_per_liter, status, reorder_level, COALESCE(ugt_no,'') AS ugt_no FROM fuel_inventory WHERE station_id = ? AND LOWER(COALESCE(status,'active')) = 'active' ORDER BY CAST(REGEXP_REPLACE(COALESCE(ugt_no,'0'), '[^0-9]', '') AS UNSIGNED) ASC, id ASC");
+    if (function_exists('ensure_fuel_inventory_synced')) {
+        ensure_fuel_inventory_synced($pdo, (int)$station_id);
+    }
+    $s = $pdo->prepare("SELECT id, fuel_type, current_level, current_stock, capacity, price_per_liter, status, reorder_level, COALESCE(ugt_no,'') AS ugt_no FROM fuel_inventory WHERE station_id = ? AND LOWER(COALESCE(status,'active')) NOT IN ('archived', 'deleted', 'inactive') ORDER BY CAST(REGEXP_REPLACE(COALESCE(ugt_no,'0'), '[^0-9]', '') AS UNSIGNED) ASC, id ASC");
     $s->execute([$station_id]);
     $fi_raw = $s->fetchAll(PDO::FETCH_ASSOC);
     foreach ($fi_raw as $row) {
@@ -565,6 +568,9 @@ function adm_shift_badge_class(string $status): string {
 // ── 4. MERCHANDISE INVENTORY (For this station) ─────────────────────────
 $merch_inv_stats = [];
 try {
+    if (function_exists('ensure_station_inventory_synced')) {
+        ensure_station_inventory_synced($pdo, (int)$station_id);
+    }
     $stmt = $pdo->prepare("
         SELECT
             COALESCE(ip.id, p.id, si.product_id)         AS id,
@@ -591,6 +597,8 @@ try {
         LEFT JOIN product_categories pc ON pc.id = p.category_id
         WHERE si.station_id = ?
           AND (LOWER(COALESCE(ip.category, pc.name, '')) NOT IN ('fuel', 'fuel products', 'services', 'service') OR (ip.category IS NULL AND pc.name IS NULL))
+          AND LOWER(COALESCE(ip.status, 'active')) NOT IN ('inactive', 'discontinued')
+          AND LOWER(COALESCE(si.status, 'active')) NOT IN ('inactive', 'disabled', 'archived')
         ORDER BY category, product_name
     ");
     $stmt->execute([$station_id]);

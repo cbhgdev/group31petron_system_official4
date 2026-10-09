@@ -378,6 +378,43 @@ if ($pay_status_norm === 'partial') {
     $payment_rows .= rp_row('Amount Charged', rp_money($total));
 }
 
+if (in_array($pm_lc, ['fleet card', 'petron fleet card'])) {
+    if (!empty($sale['fleet_card_number'])) {
+        $payment_rows .= rp_row('Fleet Card No.', rp_e($sale['fleet_card_number']));
+    }
+    if (!empty($sale['fleet_company_name'])) {
+        $payment_rows .= rp_row('Company Name', rp_e($sale['fleet_company_name']));
+    }
+    if (!empty($sale['fleet_vehicle_plate'])) {
+        $payment_rows .= rp_row('Vehicle Plate', rp_e($sale['fleet_vehicle_plate']));
+    }
+    if (!empty($sale['fleet_odometer'])) {
+        $payment_rows .= rp_row('Odometer', rp_e($sale['fleet_odometer']));
+    }
+    if (!empty($sale['fleet_auth_number'])) {
+        $payment_rows .= rp_row('Auth / Ref No.', rp_e($sale['fleet_auth_number']));
+    }
+    if (isset($sale['fleet_points_earned']) && $sale['fleet_points_earned'] !== null) {
+        $payment_rows .= rp_row('Fleet Pts Earned', '+' . number_format((int)$sale['fleet_points_earned']) . ' pts', true);
+    }
+    if (!empty($sale['fleet_points_redeemed']) && (int)$sale['fleet_points_redeemed'] > 0) {
+        $payment_rows .= rp_row('Fleet Pts Redeemed', '-' . number_format((int)$sale['fleet_points_redeemed']) . ' pts', true);
+    }
+}
+
+$loyalty_pdf_rows = '';
+if ((!empty($sale['loyalty_type']) && in_array($sale['loyalty_type'], ['Petron Rewards Card', 'Petron Value Card', 'Petron Rewards'], true)) || !empty($sale['loyalty_card_no']) || $sale['loyalty_points_earned'] !== null || !empty($sale['loyalty_points_redeemed'])) {
+    if (!empty($sale['loyalty_card_no'])) {
+        $loyalty_pdf_rows .= rp_row('Card No.', rp_e($sale['loyalty_card_no']), true);
+    }
+    if ($sale['loyalty_points_earned'] !== null) {
+        $loyalty_pdf_rows .= rp_row('Points Earned', '+' . number_format((int)$sale['loyalty_points_earned']) . ' pts', true);
+    }
+    if (!empty($sale['loyalty_points_redeemed']) && (int)$sale['loyalty_points_redeemed'] > 0) {
+        $loyalty_pdf_rows .= rp_row('Points Redeemed', '-' . number_format((int)$sale['loyalty_points_redeemed']) . ' pts', true);
+    }
+}
+
 $footer_note = 'This document is valid as an official service record.';
 if ($pay_status_norm === 'partial') {
     $footer_note = 'This receipt reflects a partial payment. Balance due: ' . rp_money($balance_due_db);
@@ -479,13 +516,17 @@ table { width: 100%; border-collapse: collapse; }
     . rp_row('VAT (12%)', rp_money($vat_amt))
     . rp_row('Zero-Rated Sales', rp_money(0))
     . rp_row('VAT-Exempt Sales', rp_money(0))
-  . '</table>' : '')
+    . (!empty($sale['discount_amount']) && (float)$sale['discount_amount'] > 0 ? rp_row('Loyalty Discount', '-' . rp_money($sale['discount_amount']), true, 'warn') : '')
+  . '</table>' : (!empty($sale['discount_amount']) && (float)$sale['discount_amount'] > 0 ? '<table>' . rp_row('Loyalty Discount', '-' . rp_money($sale['discount_amount']), true, 'warn') . '</table>' : ''))
 
   . '<div class="double"></div>
   <table><tr class="grand"><td>GRAND TOTAL</td><td class="val">' . rp_money($total) . '</td></tr></table>'
   . ($show_payment_details ? '<div class="dash"></div>
   <div class="label">Totals & Payment</div>
   <table>' . $payment_rows . '</table>' : '')
+  . ($loyalty_pdf_rows ? '<div class="dash"></div>
+  <div class="label">Petron Rewards Card</div>
+  <table>' . $loyalty_pdf_rows . '</table>' : '')
   . '<div class="dash"></div>'
   . ($show_qr && $qr_png !== '' ? '<div class="qr"><div class="qr-label">Scan to Verify</div><img src="var:receipt_qr" alt="QR"><div class="foot-meta">' . rp_e($txn_id) . '</div></div><div class="dash"></div>' : '') . '
 

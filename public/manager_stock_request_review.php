@@ -175,6 +175,12 @@ function manager_notify_users(PDO $pdo, array $user_ids, string $title, string $
 }
 
 manager_procurement_prepare_schema($pdo);
+if (function_exists('ensure_station_inventory_synced')) {
+    ensure_station_inventory_synced($pdo, $station_id);
+}
+if (function_exists('ensure_fuel_inventory_synced')) {
+    ensure_fuel_inventory_synced($pdo, $station_id);
+}
 
 // Handle AJAX Catalog Fetch for Direct PO Creation
 if (isset($_GET['action']) && $_GET['action'] === 'get_direct_po_catalog') {
@@ -199,6 +205,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_direct_po_catalog') {
             LEFT JOIN product_categories pc ON pc.id = p.category_id
             WHERE si.station_id = ?
               AND (LOWER(COALESCE(ip.category, pc.name, '')) NOT IN ('fuel', 'fuel products', 'services', 'service') OR (ip.category IS NULL AND pc.name IS NULL))
+              AND LOWER(COALESCE(ip.status, 'active')) NOT IN ('inactive', 'discontinued')
+              AND LOWER(COALESCE(si.status, 'active')) NOT IN ('inactive', 'disabled', 'archived')
             ORDER BY category, product_name
         ");
         $stmt->execute([$station_id]);
@@ -212,7 +220,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_direct_po_catalog') {
             FROM fuel_inventory fi
             LEFT JOIN fuel_types ft ON fi.fuel_type_id = ft.id
             WHERE fi.station_id = ?
-            ORDER BY fi.fuel_type_id ASC
+              AND LOWER(COALESCE(fi.status, 'active')) NOT IN ('archived', 'deleted', 'inactive')
+            ORDER BY CAST(REGEXP_REPLACE(COALESCE(fi.ugt_no,'0'), '[^0-9]', '') AS UNSIGNED) ASC, fi.id ASC
         ");
         $stmt2->execute([$station_id]);
         $fuel = $stmt2->fetchAll(PDO::FETCH_ASSOC);
@@ -799,7 +808,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pr_number_direct = 'PR-' . date('Y') . '-' . str_pad((int)$max_pr + 1, 4, '0', STR_PAD_LEFT);
             } catch (Exception $e2) { /* use random fallback */ }
 
-            $po_notes = "Direct PO created by Manager\n"
+            $po_notes = "Direct PO created by " . ucfirst($role) . "\n"
                 . "Source PR: " . $pr_number_direct . "\n"
                 . "Expected Delivery: " . $expected_delivery . "\n"
                 . "Remarks: " . ($remarks !== '' ? $remarks : 'None');
@@ -845,7 +854,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $pdo,
                     $staff_ids,
                     'New Purchase Order Issued',
-                    "Purchase Order {$po_number} has been directly issued by Manager. Total items: {$total_qty}.",
+                    "Purchase Order {$po_number} has been directly issued by " . ucfirst($role) . ". Total items: {$total_qty}.",
                     'manager_stock_request_review.php'
                 );
             }
@@ -875,6 +884,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $expected_delivery = trim($_POST['expected_delivery'] ?? '') ?: date('Y-m-d', strtotime('+3 days'));
         $remarks = trim($_POST['remarks'] ?? '');
         $fuel_type_ids = $_POST['fuel_type_ids'] ?? [];
+        $fi_ids = $_POST['fi_ids'] ?? [];
+        $ugt_nos = $_POST['ugt_nos'] ?? [];
         $volumes = $_POST['volumes'] ?? [];
         $unit_costs = $_POST['unit_costs'] ?? [];
 
@@ -882,12 +893,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->beginTransaction();
             $items_to_insert = [];
 
-            foreach ($fuel_type_ids as $idx => $ft_id_raw) {
-                $ft_id = (int)$ft_id_raw;
-                if ($ft_id <= 0) continue;
-
-                $liters = (float)($volumes[$idx] ?? 0);
+            foreach ($volumes as $idx => $vol_raw) {
+                $liters = (float)$vol_raw;
                 if ($liters <= 0) continue;
+
+                $ft_id  = (int)($fuel_type_ids[$idx] ?? 0);
+                $fi_id  = (int)($fi_ids[$idx] ?? 0);
+                $ugt_no = trim($ugt_nos[$idx] ?? '');
+
+                if ($ft_id <= 0 && $fi_id > 0) {
+                    $s_fi = $pdo->prepare("SELECT fuel_type_id, fuel_type, ugt_no FROM fuel_inventory WHERE id = ? LIMIT 1");
+                    $s_fi->execute([$fi_id]);
+                    $fi_data = $s_fi->fetch(PDO::FETCH_ASSOC);
+                    if ($fi_data) {
+                        $ft_id = (int)$fi_data['fuel_type_id'];
+                        if (empty($ugt_no)) $ugt_no = $fi_data['ugt_no'];
+                    }
+                }
+                if ($ft_id <= 0) continue;
 
                 $unit_cost = (float)($unit_costs[$idx] ?? 0);
                 if ($unit_cost <= 0) {
@@ -901,10 +924,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $items_to_insert[] = [
                     'fuel_type_id' => $ft_id,
-                    'fuel_type' => $fuel_name,
-                    'liters' => $liters,
-                    'unit_cost' => $unit_cost,
-                    'total' => round($liters * $unit_cost, 2)
+                    'fuel_type'    => $fuel_name,
+                    'liters'       => $liters,
+                    'unit_cost'    => $unit_cost,
+                    'ugt_no'       => $ugt_no,
+                    'total'        => round($liters * $unit_cost, 2)
                 ];
             }
 
@@ -921,10 +945,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pr_number_direct_fuel = 'PR-' . date('Y') . '-' . str_pad((int)$max_fpr + 1, 4, '0', STR_PAD_LEFT);
             } catch (Exception $e2) { /* use random fallback */ }
 
-            $po_notes = "Direct Fuel PO created by Manager\n"
-                . "Source PR: " . $pr_number_direct_fuel . "\n"
-                . "Expected Delivery: " . $expected_delivery . "\n"
-                . "Remarks: " . ($remarks !== '' ? $remarks : 'None');
             $line_count = count($items_to_insert);
             $line_index = 1;
 
@@ -932,6 +952,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $line_po_number = $line_count > 1
                     ? $po_number . '-' . str_pad($line_index, 2, '0', STR_PAD_LEFT)
                     : $po_number;
+
+                $tank_str = !empty($item['ugt_no']) ? " | Tank: {$item['ugt_no']}" : "";
+                $po_notes = "Direct Fuel PO created by " . ucfirst($role) . "\n"
+                    . "Source PR: " . $pr_number_direct_fuel . "\n"
+                    . "Expected Delivery: " . $expected_delivery . "\n"
+                    . "Remarks: " . ($remarks !== '' ? $remarks : 'None') . $tank_str;
 
                 $stmt_ins = $pdo->prepare("
                     INSERT INTO fuel_purchase_orders (
@@ -961,7 +987,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $pdo,
                     $staff_ids,
                     'New Fuel Purchase Order Issued',
-                    "Fuel Purchase Order {$po_number} has been directly issued by Manager.",
+                    "Fuel Purchase Order {$po_number} has been directly issued by " . ucfirst($role) . ".",
                     'manager_stock_request_review.php'
                 );
             }
@@ -1287,6 +1313,8 @@ try {
         LEFT JOIN product_categories pc ON pc.id = p.category_id
         WHERE si.station_id = ?
           AND (LOWER(COALESCE(ip.category, pc.name, '')) NOT IN ('fuel', 'fuel products', 'services', 'service') OR (ip.category IS NULL AND pc.name IS NULL))
+          AND LOWER(COALESCE(ip.status, 'active')) NOT IN ('inactive', 'discontinued')
+          AND LOWER(COALESCE(si.status, 'active')) NOT IN ('inactive', 'disabled', 'archived')
         ORDER BY category, product_name
     ");
     $stmt->execute([$station_id]);
@@ -1305,7 +1333,8 @@ try {
         FROM fuel_inventory fi
         LEFT JOIN fuel_types ft ON fi.fuel_type_id = ft.id
         WHERE fi.station_id = ?
-        ORDER BY fi.fuel_type_id ASC
+          AND LOWER(COALESCE(fi.status, 'active')) NOT IN ('archived', 'deleted', 'inactive')
+        ORDER BY CAST(REGEXP_REPLACE(COALESCE(fi.ugt_no,'0'), '[^0-9]', '') AS UNSIGNED) ASC, fi.id ASC
     ");
     $stmt->execute([$station_id]);
     $direct_fuel_types = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -3334,6 +3363,16 @@ document.addEventListener('DOMContentLoaded', function() {
     msrRender('merch');
     msrRender('fuel');
     msrRender('hist');
+
+    try {
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('create_po') || urlParams.has('open_po') || urlParams.get('action') === 'create_po') {
+            const tab = (urlParams.get('type') === 'fuel' || urlParams.get('create_po') === 'fuel') ? 'fuel' : 'merch';
+            setTimeout(function() {
+                openDirectPoModal(tab);
+            }, 100);
+        }
+    } catch (e) {}
 });
 
 // ==========================================
@@ -3412,8 +3451,16 @@ function autoPopulateLowStockRows() {
         let capacity   = parseFloat(p.capacity || 480);
         if (capacity <= 0) capacity = 480;
         const suggestQty = Math.max(1, Math.ceil(capacity - stock)); // suggest enough to fill to capacity
-        const statusLabel = stock <= 0 ? '⚠ OUT OF STOCK' : '↓ LOW STOCK';
-        const statusColor = stock <= 0 ? '#dc2626' : '#d97706';
+        let statusLabel = '↓ LOW STOCK';
+        let statusColor = '#d97706';
+        const critLevel = parseFloat(p.critical_level || 10);
+        if (stock <= 0) {
+            statusLabel = '⚠ OUT OF STOCK';
+            statusColor = '#dc2626';
+        } else if (stock <= critLevel) {
+            statusLabel = '🔥 CRITICAL STOCK';
+            statusColor = '#dc2626';
+        }
 
         const tr = document.createElement('tr');
         tr.style.borderBottom = '1px solid #f1f5f9';
@@ -3717,7 +3764,9 @@ function autoPopulateLowStockFuelRows() {
         const tr = document.createElement('tr');
         tr.style.borderBottom = '1px solid #f1f5f9';
         tr.innerHTML = `
-            <input type="hidden" name="fuel_type_ids[]" value="${ft.fuel_type_id}">
+            <input type="hidden" name="fuel_type_ids[]" value="${ft.fuel_type_id}" class="direct-fuel-ftid-input">
+            <input type="hidden" name="fi_ids[]" value="${ft.fi_id}">
+            <input type="hidden" name="ugt_nos[]" value="${ft.ugt_no || ''}">
             <td style="padding: 10px 12px;">
                 <div style="font-weight: 700; color: #002F6C; word-break: break-word; font-size: 13px;">${ft.fuel_type || ''}</div>
                 <div style="font-size: 11px; color: #64748b; margin-top: 3px; display: flex; align-items: center; gap: 8px;">
@@ -3762,14 +3811,16 @@ function addDirectFuelRow() {
     directFuelCatalog.forEach(function(ft) {
         const cur = parseFloat(ft.current_level || 0);
         const cap = parseFloat(ft.capacity || 0);
-        optionsHtml += `<option value="${ft.fuel_type_id}">${ft.fuel_type} (${ft.ugt_no || 'UGT'}) [Level: ${cur.toLocaleString()} / ${cap.toLocaleString()} L]</option>`;
+        optionsHtml += `<option value="${ft.fi_id}">${ft.fuel_type} (${ft.ugt_no || 'UGT'}) [Level: ${cur.toLocaleString()} / ${cap.toLocaleString()} L]</option>`;
     });
 
     const tr = document.createElement('tr');
     tr.style.borderBottom = '1px solid #f1f5f9';
     tr.innerHTML = `
+        <input type="hidden" name="fuel_type_ids[]" value="" class="direct-fuel-ftid-input">
+        <input type="hidden" name="ugt_nos[]" value="" class="direct-fuel-ugt-input">
         <td style="padding: 10px 12px;">
-            <select name="fuel_type_ids[]" onchange="onDirectFuelSelect(this)" style="width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px;" required>
+            <select name="fi_ids[]" onchange="onDirectFuelSelect(this)" style="width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px;" required>
                 ${optionsHtml}
             </select>
         </td>
@@ -3802,24 +3853,30 @@ function removeDirectFuelRow(btn) {
 }
 
 function onDirectFuelSelect(selectElem) {
-    const ftId = parseInt(selectElem.value, 10);
+    const fiId = parseInt(selectElem.value, 10);
     const tr = selectElem.closest('tr');
     if (!tr) return;
 
-    const levelCell = tr.querySelector('.direct-fuel-level-cell');
-    const costInput = tr.querySelector('.direct-fuel-cost');
-    const volInput  = tr.querySelector('.direct-fuel-vol');
+    const levelCell  = tr.querySelector('.direct-fuel-level-cell');
+    const costInput  = tr.querySelector('.direct-fuel-cost');
+    const volInput   = tr.querySelector('.direct-fuel-vol');
+    const hiddenFtId = tr.querySelector('.direct-fuel-ftid-input');
+    const hiddenUgt  = tr.querySelector('.direct-fuel-ugt-input');
 
-    if (!ftId) {
+    if (!fiId) {
         if (levelCell) levelCell.textContent = '-';
         if (costInput) costInput.value = '';
         if (volInput)  volInput.value = '';
+        if (hiddenFtId) hiddenFtId.value = '';
+        if (hiddenUgt)  hiddenUgt.value = '';
         calcDirectFuelTotal();
         return;
     }
 
-    const ft = directFuelCatalog.find(function(f) { return parseInt(f.fuel_type_id, 10) === ftId; });
+    const ft = directFuelCatalog.find(function(f) { return parseInt(f.fi_id, 10) === fiId; });
     if (ft) {
+        if (hiddenFtId) hiddenFtId.value = ft.fuel_type_id || '';
+        if (hiddenUgt)  hiddenUgt.value  = ft.ugt_no || '';
         const cur = parseFloat(ft.current_level || 0);
         const cap = parseFloat(ft.capacity || 0);
         const cost = parseFloat(ft.current_price || 0);

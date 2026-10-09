@@ -405,6 +405,10 @@ if ($type === 'job_order') {
                 'fleet_card_number'     => $txn['fleet_card_number'] ?? '',
                 'fleet_company_name'    => $txn['fleet_company_name'] ?? '',
                 'fleet_auth_number'     => $txn['fleet_auth_number'] ?? '',
+                'fleet_vehicle_plate'   => $txn['fleet_vehicle_plate'] ?? '',
+                'fleet_odometer'        => $txn['fleet_odometer'] ?? '',
+                'fleet_points_earned'   => $txn['fleet_points_earned'] ?? null,
+                'fleet_points_redeemed' => $txn['fleet_points_redeemed'] ?? null,
                 'credit_company_name'   => $txn['credit_company_name'] ?? '',
                 'credit_account_number' => $txn['credit_account_number'] ?? '',
                 'credit_po_number'      => $txn['credit_po_number'] ?? '',
@@ -419,6 +423,8 @@ if ($type === 'job_order') {
                 'job_order'             => $job_order_data,
                 'transaction_type'      => $txn_type,
                 // Loyalty fields
+                'discount_amount'         => (float)($txn['discount_amount']         ?? $txn['loyalty_discount_amount'] ?? 0),
+                'loyalty_discount_amount' => (float)($txn['loyalty_discount_amount'] ?? $txn['discount_amount']         ?? 0),
                 'loyalty_type'            => $txn['loyalty_type']            ?? '',
                 'loyalty_card_no'         => $txn['loyalty_card_no']         ?? '',
                 'loyalty_points_earned'   => $txn['loyalty_points_earned']   ?? null,
@@ -504,6 +510,13 @@ if (!$sale && !empty($id)) {
                 'amount_tendered'     => (float)($txn_uf['amount_tendered'] ?? 0),
                 'change_amount'       => (float)($txn_uf['change_amount'] ?? 0),
                 'card_reference'      => $txn_uf['card_reference'] ?? '',
+                'fleet_card_number'     => $txn_uf['fleet_card_number'] ?? '',
+                'fleet_company_name'    => $txn_uf['fleet_company_name'] ?? '',
+                'fleet_auth_number'     => $txn_uf['fleet_auth_number'] ?? '',
+                'fleet_vehicle_plate'   => $txn_uf['fleet_vehicle_plate'] ?? '',
+                'fleet_odometer'        => $txn_uf['fleet_odometer'] ?? '',
+                'fleet_points_earned'   => $txn_uf['fleet_points_earned'] ?? null,
+                'fleet_points_redeemed' => $txn_uf['fleet_points_redeemed'] ?? null,
                 'remarks'             => $txn_uf['remarks'] ?? '',
                 'validation_status'   => $txn_uf['validation_status'] ?? 'Pending',
                 'station_name'        => $txn_uf['station_name'],
@@ -1489,6 +1502,10 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
   <div class="jo-r-row"><span class="jo-r-key">VAT-Exempt Sales</span><span class="jo-r-val">&#8369;0.00</span></div>
   <?php endif; ?>
 
+  <?php if (!empty($sale['discount_amount']) && (float)$sale['discount_amount'] > 0): ?>
+  <div class="jo-r-row" style="color:#dc2626;font-weight:700;"><span class="jo-r-key">Loyalty Discount</span><span class="jo-r-val">-&#8369;<?php echo number_format((float)$sale['discount_amount'], 2); ?></span></div>
+  <?php endif; ?>
+
   <div class="jo-r-div2"></div>
   <div class="jo-r-row jo-r-grand">
     <span>GRAND TOTAL</span>
@@ -1589,8 +1606,20 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
       <?php if (!empty($sale['fleet_company_name'])): ?>
       <div class="jo-r-row"><span class="jo-r-key">Company Name</span><span class="jo-r-val"><?php echo htmlspecialchars($sale['fleet_company_name']); ?></span></div>
       <?php endif; ?>
+      <?php if (!empty($sale['fleet_vehicle_plate'])): ?>
+      <div class="jo-r-row"><span class="jo-r-key">Vehicle Plate</span><span class="jo-r-val"><?php echo htmlspecialchars($sale['fleet_vehicle_plate']); ?></span></div>
+      <?php endif; ?>
+      <?php if (!empty($sale['fleet_odometer'])): ?>
+      <div class="jo-r-row"><span class="jo-r-key">Odometer</span><span class="jo-r-val"><?php echo htmlspecialchars($sale['fleet_odometer']); ?></span></div>
+      <?php endif; ?>
       <?php if (!empty($sale['fleet_auth_number'])): ?>
-      <div class="jo-r-row"><span class="jo-r-key">Auth No.</span><span class="jo-r-val"><?php echo htmlspecialchars($sale['fleet_auth_number']); ?></span></div>
+      <div class="jo-r-row"><span class="jo-r-key">Auth / Ref No.</span><span class="jo-r-val"><?php echo htmlspecialchars($sale['fleet_auth_number']); ?></span></div>
+      <?php endif; ?>
+      <?php if (isset($sale['fleet_points_earned']) && $sale['fleet_points_earned'] !== null): ?>
+      <div class="jo-r-row"><span class="jo-r-key">Fleet Pts Earned</span><span class="jo-r-val" style="color:#16a34a;font-weight:700;">+<?php echo number_format((int)$sale['fleet_points_earned']); ?> pts</span></div>
+      <?php endif; ?>
+      <?php if (!empty($sale['fleet_points_redeemed']) && (int)$sale['fleet_points_redeemed'] > 0): ?>
+      <div class="jo-r-row"><span class="jo-r-key">Fleet Pts Redeemed</span><span class="jo-r-val" style="color:#dc2626;font-weight:700;">-<?php echo number_format((int)$sale['fleet_points_redeemed']); ?> pts</span></div>
       <?php endif; ?>
 
     <?php elseif (in_array($pm_lc, ['e-fuel card', 'petron e-fuel card', 'petron e-fuel', 'efuel'])): ?>
@@ -1637,7 +1666,7 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
 
   <div class="jo-r-div"></div>
 
-  <?php if (!empty($sale['loyalty_type']) && $sale['loyalty_type'] === 'Petron Rewards Card'): ?>
+  <?php if ((!empty($sale['loyalty_type']) && in_array($sale['loyalty_type'], ['Petron Rewards Card', 'Petron Value Card', 'Petron Rewards'], true)) || !empty($sale['loyalty_card_no']) || $sale['loyalty_points_earned'] !== null || !empty($sale['loyalty_points_redeemed'])): ?>
   <!-- ══ LOYALTY ══════════════════════════════════════════════════════════════ -->
   <div class="jo-r-lbl" style="color:#003d7a;">Petron Rewards Card</div>
   <?php if (!empty($sale['loyalty_card_no'])): ?>

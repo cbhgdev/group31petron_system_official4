@@ -1,0 +1,142 @@
+[
+    {
+        "file": "find_po_files.php",
+        "line": 8,
+        "text": "if (stripos($c, 'create po') !== false || stripos($c, 'create_po') !== false || stripos($c, 'purchase order') !== false || stripos($c, 'create purchase order') !== false) {"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 25,
+        "text": "case 'create_po':"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 92,
+        "text": "log_activity($pdo, $me['id'], 'Create PO',"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1128,
+        "text": "<button class=\"action-btn btn-primary\" onclick=\"openCreatePoModal()\">"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1192,
+        "text": "<button class=\"action-btn btn-primary\" onclick=\"openCreatePoModal(null, '<?php echo addslashes(htmlspecialchars($alert['product_name'])); ?>', '<?php echo $alert['delivery_type']; ?>')\">"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1193,
+        "text": "<i class=\"fas fa-file-invoice\"><\/i> Create PO"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1527,
+        "text": "const modals = ['discrepancyModal', 'createPoModal'];"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1542,
+        "text": "function openCreatePoModal(alertId = null, product = '', type = 'merchandise') {"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1543,
+        "text": "document.getElementById('createPoModal').style.display = 'block';"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1551,
+        "text": "<!-- Create PO Modal -->"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1552,
+        "text": "<div id=\"createPoModal\" class=\"modal\">"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1556,
+        "text": "<span class=\"close\" onclick=\"closeModal('createPoModal')\">&times;<\/span>"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1559,
+        "text": "<input type=\"hidden\" name=\"action\" value=\"create_po\">"
+    },
+    {
+        "file": "manager_deliveries_management.php",
+        "line": 1598,
+        "text": "<button type=\"button\" class=\"action-btn btn-secondary\" onclick=\"closeModal('createPoModal')\">Cancel<\/button>"
+    },
+    {
+        "file": "manager_stock_request_review.php",
+        "line": 3950,
+        "text": "<i class=\"fas fa-check-circle\"><\/i> Issue & Create PO"
+    },
+    {
+        "file": "purchase_orders_management.php",
+        "line": 19,
+        "text": "if (isset($_POST['create_po'])) {"
+    },
+    {
+        "file": "purchase_orders_management.php",
+        "line": 308,
+        "text": "<button type=\"button\" class=\"btn btn-primary add-item-btn\" data-bs-toggle=\"modal\" data-bs-target=\"#createPOModal\">"
+    },
+    {
+        "file": "purchase_orders_management.php",
+        "line": 433,
+        "text": "<!-- Create PO Modal -->"
+    },
+    {
+        "file": "purchase_orders_management.php",
+        "line": 434,
+        "text": "<div class=\"modal fade\" id=\"createPOModal\" tabindex=\"-1\">"
+    },
+    {
+        "file": "purchase_orders_management.php",
+        "line": 493,
+        "text": "<button type=\"submit\" name=\"create_po\" class=\"btn btn-primary\">"
+    },
+    {
+        "file": "purchase_orders_management.php",
+        "line": 494,
+        "text": "<i class=\"fas fa-save me-2\"><\/i>Create PO"
+    },
+    {
+        "file": "search_create_po.php",
+        "line": 9,
+        "text": "if (stripos($l, 'create po') !== false || stripos($l, 'create_po') !== false || stripos($l, 'createpo') !== false || stripos($l, 'create-po') !== false) {"
+    },
+    {
+        "file": "search_create_po.php",
+        "line": 19,
+        "text": "file_put_contents(__DIR__ . '\/test_search_create_po.json', json_encode($results, JSON_PRETTY_PRINT));"
+    },
+    {
+        "file": "superadmin_admin_map.php",
+        "line": 824,
+        "text": ".bindPopup(createPopupContent(station), {"
+    },
+    {
+        "file": "superadmin_admin_map.php",
+        "line": 873,
+        "text": "\/\/ Create Popup Content"
+    },
+    {
+        "file": "superadmin_admin_map.php",
+        "line": 875,
+        "text": "function createPopupContent(station) {"
+    },
+    {
+        "file": "superadmin_admin_map.php",
+        "line": 1326,
+        "text": "marker.setPopupContent(createPopupContent(station));"
+    },
+    {
+        "file": "superadmin_audit_trail.php",
+        "line": 138,
+        "text": "'create_po','approve_po','receive_po','create_purchase_order',"
+    }
+]
