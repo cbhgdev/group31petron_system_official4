@@ -6499,44 +6499,71 @@ setTimeout(function() {
             <!-- Left: Job Order section (top) + Merchandise section (bottom) + Customer/Payment -->
             <div style="flex:1; min-width:0; overflow:visible;">
 
-                <!-- ══ JOB ORDER SECTION (TOP) ══════════════════════════════ -->
-                <div class="txn-card" id="joCard" style="overflow:visible;position:relative;z-index:10;<?= !empty($_GET['mh_open']) ? 'display:none;' : '' ?>">
-                    <div class="txn-card-header" style="background:#fffbeb;display:flex;align-items:center;justify-content:space-between;padding:10px 16px;">
+                <!-- ══ UNIFIED MERCHANDISE / SERVICE TRANSACTION CARD ═══════ -->
+                <div class="txn-card" style="overflow:visible;position:relative;z-index:10;">
+                    <div class="txn-card-header" style="background:#fff;border-bottom:1.5px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;padding:12px 18px;">
                         <div style="display:flex;align-items:center;gap:10px;">
-                            <i class="fas fa-tools" style="color:#b45309;font-size:16px;"></i>
-                            <h3 style="color:#92400e;margin:0;font-size:15px;font-weight:800;">Job Order</h3>
+                            <i class="fas fa-file-invoice-dollar" style="color:var(--petron-blue);font-size:17px;"></i>
+                            <h3 style="color:#002F70;margin:0;font-size:16px;font-weight:800;">Merchandise / Service Transaction</h3>
                         </div>
-                        <button type="button" onclick="toggleJoCardCollapse()" id="joCollapseBtn" class="txn-btn secondary" style="font-size:12px;font-weight:700;padding:4px 10px;height:28px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;" title="Collapse/Expand Job Order">
-                            <i class="fas fa-chevron-up" id="joCollapseIcon"></i>
-                            <span id="joCollapseText">Collapse</span>
-                        </button>
                     </div>
-                    <script>
-                    window.toggleJoCardCollapse = function() {
-                        var b = document.getElementById('joCardBody');
-                        var icon = document.getElementById('joCollapseIcon');
-                        var txt = document.getElementById('joCollapseText');
-                        if (!b) return;
-                        var isCollapsed = (b.style.display === 'none');
-                        b.style.display = isCollapsed ? 'block' : 'none';
-                        if (icon) icon.className = isCollapsed ? 'fas fa-chevron-up' : 'fas fa-chevron-down';
-                        if (txt) txt.textContent = isCollapsed ? 'Collapse' : 'Expand';
-                    };
-                    </script>
-                    <div class="txn-card-body" id="joCardBody" style="overflow:visible;padding:12px 18px 14px 18px;">
 
-                        <!-- Customer Details — New Radio Button Selection -->
-                        <div class="jo-sub-header" style="color:#b45309;">
-                            <i class="fas fa-user" style="margin-right:5px;"></i>Customer Details
+                    <!-- ── Merchandise sub-tabs ─────────────────────────────── -->
+                    <div style="display:flex;gap:10px;padding:12px 18px 0 18px;align-items:center;flex-wrap:wrap;width:100%;">
+                        <?php
+                        $mh_open    = isset($_GET['mh_open'])  && $_GET['mh_open']  == '1';
+                        $jom_open   = isset($_GET['jom_open']) && $_GET['jom_open'] == '1';
+                        $merch_active = (!$mh_open && !$jom_open) ? 'active' : 'inactive';
+                        $hist_active  = ($mh_open  && !$jom_open) ? 'active' : 'inactive';
+                        $jom_active   = $jom_open  ? 'active' : 'inactive';
+                        ?>
+                        <div class="txn-subtab-nav" style="margin-bottom:0 !important; max-width:740px;">
+                            <button type="button" onclick="switchMerchTab('form')" id="merchTabBtn_form"
+                                    class="txn-subtab-btn darkblue <?= $merch_active ?>">
+                                <i class="fas fa-edit"></i> Transaction Form
+                            </button>
+                            <button type="button" onclick="switchMerchTab('history')" id="merchTabBtn_history"
+                                    class="txn-subtab-btn darkblue <?= $hist_active ?>">
+                                <i class="fas fa-history"></i> Merchandise History
+                            </button>
+                            <button type="button" onclick="switchMerchTab('combined')" id="merchTabBtn_combined"
+                                    class="txn-subtab-btn darkblue <?= $jom_active ?>"
+                                    style="white-space:nowrap;">
+                                <i class="fas fa-tools"></i> JO + Merchandise History
+                            </button>
+                        </div>
+                        <div id="merchHistoryHeaderButtons" style="display: <?= ($mh_open || $jom_open) ? 'flex' : 'none' ?>; gap:8px; align-items:center; margin-left:auto;">
+                            <a href="staff_transactions_hub.php?section=merchandise&active_tab=merchandise"
+                               title="Back to Transaction Form"
+                               class="txn-btn secondary"
+                               style="font-size:12px;padding:7px 14px;">
+                                <i class="fas fa-arrow-left"></i> Back
+                            </a>
+                        </div>
+                    </div>
+
+                    <!-- ── Sub-tab: Form (Unified Transaction Form) ─────────── -->
+                    <div id="merchTab_form" style="<?= ($mh_open || $jom_open) ? 'display:none;' : '' ?>">
+                    <div class="txn-card-body" style="overflow:visible;padding:16px 18px;">
+
+                        <!-- Customer Details — Single Unified Section -->
+                        <div style="font-size:12px;font-weight:700;color:#002F70;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;display:flex;align-items:center;gap:6px;">
+                            <i class="fas fa-user" style="color:var(--petron-blue);"></i>Customer Details
                         </div>
                         
-                        <!-- Customer Type Selection - REMOVED: Now only Registered Customers -->
                         <input type="hidden" id="joCustomerModeType" value="walkin">
+                        <input type="hidden" id="merchCustomerModeType" value="walkin">
+                        <!-- Hidden inputs for legacy scripts referencing merch customer fields -->
+                        <input type="hidden" id="merchFirstName" value="">
+                        <input type="hidden" id="merchLastName" value="">
+                        <input type="hidden" id="merchContactNumber" value="">
+                        <div id="merchCustomerLockedBanner" style="display:none;"></div>
+                        <div id="merchFirstNameResults" style="display:none;"></div>
 
                         <!-- Customer Input Fields -->
                         <div id="joCustomerLockedBanner" style="display:none;background:#ecfdf5;border:1.5px solid #6ee7b7;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#065f46;align-items:center;gap:8px;">
                             <i class="fas fa-lock" style="color:#059669;"></i>
-                            <span>Customer info locked.</span>
+                            <span>Customer info locked (registered customer selected).</span>
                         </div>
                         <div class="txn-form-grid" style="margin-bottom:14px;">
                             <div class="txn-field" style="position:relative;">
@@ -6546,7 +6573,7 @@ setTimeout(function() {
                                        class="txn-input"
                                        placeholder="Type customer name or search..."
                                        autocomplete="off"
-                                       oninput="this.value = this.value.replace(/[^a-zA-Z\s\-'\.\u00C0-\u024F]/g, ''); unlockCustomerIfNeeded('jo'); searchCustomerByName('jo');"
+                                       oninput="this.value = this.value.replace(/[^a-zA-Z\s\-'\.\u00C0-\u024F]/g, ''); if(window.syncCustomerMirror) syncCustomerMirror(); unlockCustomerIfNeeded('jo'); searchCustomerByName('jo');"
                                        onfocus="searchCustomerByName('jo')">
                                 <!-- First Name Dropdown -->
                                 <div id="joFirstNameResults" 
@@ -6563,18 +6590,44 @@ setTimeout(function() {
                                        class="txn-input"
                                        placeholder="Customer last name"
                                        autocomplete="off"
-                                       oninput="this.value = this.value.replace(/[^a-zA-Z\s\-'\.\u00C0-\u024F]/g, '');">
+                                       oninput="this.value = this.value.replace(/[^a-zA-Z\s\-'\.\u00C0-\u024F]/g, ''); if(window.syncCustomerMirror) syncCustomerMirror();">
                             </div>
                         </div>
-                        <div class="txn-form-grid" style="margin-bottom:14px;">
+                        <div class="txn-form-grid" style="margin-bottom:16px;">
                             <div class="txn-field">
                                 <label>Contact Number</label>
                                 <input type="text" id="joContactNumber" class="txn-input"
                                        placeholder="e.g. 09XX-XXX-XXXX"
                                        autocomplete="off"
-                                       oninput="this.value = this.value.replace(/[^0-9+]/g, ''); if (this.value.length > 13) this.value = this.value.slice(0, 13);">
+                                       oninput="this.value = this.value.replace(/[^0-9+]/g, ''); if (this.value.length > 13) this.value = this.value.slice(0, 13); if(window.syncCustomerMirror) syncCustomerMirror();">
                             </div>
                         </div>
+
+                        <!-- ══ SECTION: VEHICLE & SERVICE DETAILS (COLLAPSIBLE) ══ -->
+                        <div id="joCard" style="margin-top:16px;border-top:1.5px solid #e2e8f0;padding-top:14px;">
+                            <script>
+                            window.toggleJoCardCollapse = function() {
+                                var b = document.getElementById('joCardBody');
+                                var icon = document.getElementById('joCollapseIcon');
+                                var txt = document.getElementById('joCollapseText');
+                                if (!b) return;
+                                var isCollapsed = (b.style.display === 'none');
+                                b.style.display = isCollapsed ? 'block' : 'none';
+                                if (icon) icon.className = isCollapsed ? 'fas fa-chevron-up' : 'fas fa-chevron-down';
+                                if (txt) txt.textContent = isCollapsed ? 'Collapse' : 'Expand';
+                            };
+                            </script>
+                            <div style="background:#fffbeb;border:1.5px solid #fde68a;border-radius:8px;display:flex;align-items:center;justify-content:space-between;padding:10px 16px;margin-bottom:14px;">
+                                <div style="display:flex;align-items:center;gap:10px;">
+                                    <i class="fas fa-wrench" style="color:#b45309;font-size:15px;"></i>
+                                    <span style="color:#92400e;font-size:13px;font-weight:800;letter-spacing:.3px;">Vehicle &amp; Service Details <span style="font-weight:500;font-size:11px;color:#b45309;">(Optional for repairs / services)</span></span>
+                                </div>
+                                <button type="button" onclick="toggleJoCardCollapse()" id="joCollapseBtn" class="txn-btn secondary" style="font-size:12px;font-weight:700;padding:4px 10px;height:28px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;" title="Collapse/Expand Vehicle &amp; Service Details">
+                                    <i class="fas fa-chevron-up" id="joCollapseIcon"></i>
+                                    <span id="joCollapseText">Collapse</span>
+                                </button>
+                            </div>
+                            <div id="joCardBody" style="overflow:visible;">
 
                         <!-- Vehicle Details -->
                         <div style="font-size:11px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">
@@ -7000,15 +7053,6 @@ setTimeout(function() {
 
 
 
-                        <!-- Bottom Action Buttons -->
-                        <div style="display:flex;gap:10px;margin-top:16px;justify-content:flex-end;flex-wrap:wrap;">
-                            <button type="button" class="txn-btn secondary" onclick="resetJobOrderForm()" title="Reset all job order fields">
-                                <i class="fas fa-undo"></i> Reset
-                            </button>
-                            <button type="button" id="joAddToCartBtn" class="txn-btn primary" onclick="addServiceFromFormToCart()" style="background:#002F70;border-color:#002F70;display:inline-flex;align-items:center;gap:6px;font-weight:700;" title="Add Job Order Service to Cart">
-                                <i class="fas fa-cart-plus"></i> Add Service to Cart
-                            </button>
-                        </div>
 
                         <!-- Mechanic busy warning banner -->
                         <div id="joMechanicBusyWarn" style="display:none;margin-bottom:14px;
@@ -7047,109 +7091,13 @@ setTimeout(function() {
                             <i class="fas fa-spinner fa-spin" style="color:#b45309;"></i> Fetching parts…
                         </span>
 
-                    </div><!-- /txn-card-body -->
-                </div><!-- /joCard -->
+                            </div><!-- /joCardBody -->
+                        </div><!-- /joCard -->
 
-
-                <!-- ══ MERCHANDISE SECTION (BOTTOM) ════════════════════════ -->
-                <div class="txn-card">
-                    <div class="txn-card-header">
-                        <i class="fas fa-shopping-cart" style="color:var(--petron-blue);"></i>
-                        <h3>Merchandise</h3>
-                    </div>
-
-                    <!-- ── Merchandise sub-tabs ─────────────────────────────── -->
-                    <div style="display:flex;gap:10px;padding:0 16px;margin-bottom:12px;margin-top:12px;align-items:center;flex-wrap:wrap;width:100%;">
-                        <?php
-                        $mh_open    = isset($_GET['mh_open'])  && $_GET['mh_open']  == '1';
-                        $jom_open   = isset($_GET['jom_open']) && $_GET['jom_open'] == '1';
-                        $merch_active = (!$mh_open && !$jom_open) ? 'active' : 'inactive';
-                        $hist_active  = ($mh_open  && !$jom_open) ? 'active' : 'inactive';
-                        $jom_active   = $jom_open  ? 'active' : 'inactive';
-                        ?>
-                        <div class="txn-subtab-nav" style="margin-bottom:0 !important; max-width:740px;">
-                            <button type="button" onclick="switchMerchTab('form')" id="merchTabBtn_form"
-                                    class="txn-subtab-btn darkblue <?= $merch_active ?>">
-                                <i class="fas fa-shopping-cart"></i> Merchandise
-                            </button>
-                            <button type="button" onclick="switchMerchTab('history')" id="merchTabBtn_history"
-                                    class="txn-subtab-btn darkblue <?= $hist_active ?>">
-                                <i class="fas fa-history"></i> Merchandise History
-                            </button>
-                            <button type="button" onclick="switchMerchTab('combined')" id="merchTabBtn_combined"
-                                    class="txn-subtab-btn darkblue <?= $jom_active ?>"
-                                    style="white-space:nowrap;">
-                                <i class="fas fa-tools"></i> JO + Merchandise History
-                            </button>
-                        </div>
-                        <div id="merchHistoryHeaderButtons" style="display: <?= ($mh_open || $jom_open) ? 'flex' : 'none' ?>; gap:8px; align-items:center; margin-left:auto;">
-                            <a href="staff_transactions_hub.php?section=merchandise&active_tab=merchandise"
-                               title="Back to Merchandise Form"
-                               class="txn-btn secondary"
-                               style="font-size:12px;padding:7px 14px;">
-                                <i class="fas fa-arrow-left"></i> Back
-                            </a>
-                        </div>
-                    </div>
-
-                    <!-- ── Sub-tab: Form ─────────────────────────────────────── -->
-                    <div id="merchTab_form">
-                    <div class="txn-card-body" style="overflow:visible;">
-
-                        <!-- Customer Details — New Radio Button Selection -->
-                        <div style="font-size:11px;font-weight:700;color:#002F70;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;">
-                            <i class="fas fa-user" style="margin-right:5px;"></i>Customer Details
-                        </div>
-                        
-                        <!-- Customer Type Selection - REMOVED: Now only Registered Customers -->
-                        <input type="hidden" id="merchCustomerModeType" value="walkin">
-
-                        <!-- Customer Input Fields (Merchandise) -->
-                        <div id="merchCustomerLockedBanner" style="display:none;background:#ecfdf5;border:1.5px solid #6ee7b7;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#065f46;align-items:center;gap:8px;">
-                            <i class="fas fa-lock" style="color:#059669;"></i>
-                            <span>Customer info locked.</span>
-                        </div>
-                        <div class="txn-form-grid" style="margin-bottom:14px;">
-                            <div class="txn-field" style="position:relative;">
-                                <label>First Name <span style="color:#dc2626;">*</span></label>
-                                <input type="text"
-                                       id="merchFirstName"
-                                       class="txn-input"
-                                       placeholder="Type customer name or search..."
-                                       autocomplete="off"
-                                       oninput="this.value = this.value.replace(/[^a-zA-Z\s\-'\.\u00C0-\u024F]/g, ''); unlockCustomerIfNeeded('merch'); searchCustomerByName('merch');"
-                                       onfocus="searchCustomerByName('merch')">
-                                <!-- First Name Dropdown -->
-                                <div id="merchFirstNameResults" 
-                                     style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;
-                                            background:#fff;border:1px solid #cbd5e1;border-radius:8px;
-                                            max-height:280px;overflow-y:auto;z-index:9999;
-                                            box-shadow:0 8px 24px rgba(0,0,0,.12);">
-                                </div>
-                            </div>
-                            <div class="txn-field">
-                                <label>Last Name</label>
-                                <input type="text"
-                                       id="merchLastName"
-                                       class="txn-input"
-                                       placeholder="Customer last name"
-                                       autocomplete="off"
-                                       oninput="this.value = this.value.replace(/[^a-zA-Z\s\-'\.\u00C0-\u024F]/g, '');">
-                            </div>
-                        </div>
-                        <div class="txn-form-grid" style="margin-bottom:14px;">
-                            <div class="txn-field">
-                                <label>Contact Number</label>
-                                <input type="text" id="merchContactNumber" class="txn-input"
-                                       placeholder="e.g. 09XX-XXX-XXXX"
-                                       autocomplete="off"
-                                       oninput="this.value = this.value.replace(/[^0-9+]/g, ''); if (this.value.length > 13) this.value = this.value.slice(0, 13);">
-                            </div>
-                        </div>
-
-                        <!-- Merchandise Section label -->
-                        <div style="font-size:11px;font-weight:700;color:#002F70;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;">
-                            <i class="fas fa-box" style="margin-right:5px;"></i>Merchandise Section
+                        <!-- ── Products / Merchandise Section ──────────────────── -->
+                        <div style="font-size:12px;font-weight:700;color:#002F70;text-transform:uppercase;letter-spacing:.5px;margin-top:22px;margin-bottom:12px;padding-top:16px;border-top:1.5px solid #f1f5f9;display:flex;align-items:center;gap:6px;">
+                            <i class="fas fa-boxes" style="color:var(--petron-blue);"></i>
+                            <span>Products / Merchandise</span>
                         </div>
 
                         <div class="txn-form-grid" style="position:relative;z-index:500;">
@@ -7316,9 +7264,13 @@ setTimeout(function() {
                             </div>
                         </div>
 
-                        <div style="display:flex;gap:10px;margin-top:18px;justify-content:flex-end;">
-                            <button type="button" class="txn-btn secondary" onclick="fullResetMerchandiseForm()" title="Reset merchandise fields">
-                                <i class="fas fa-undo"></i> Reset Form
+                        <!-- ══ FULL FORM RESET ══ -->
+                        <div style="display:flex;gap:10px;margin-top:24px;padding-top:14px;border-top:1.5px solid #e2e8f0;justify-content:space-between;align-items:center;flex-wrap:wrap;">
+                            <span style="font-size:12px;color:#64748b;">
+                                <i class="fas fa-info-circle"></i> Add products or services above. Items appear in the Order Summary on the right.
+                            </span>
+                            <button type="button" class="txn-btn secondary" onclick="fullResetUnifiedForm()" title="Reset all form fields">
+                                <i class="fas fa-undo"></i> Reset Full Form
                             </button>
                         </div>
 
@@ -12401,19 +12353,72 @@ setTimeout(function() {
             // so they persist across multiple cart additions.
         }
 
-        // ── Full reset: product fields + customer fields (called by Reset Form button) ──
-        function fullResetMerchandiseForm() {
-            resetMerchandiseForm(); // clears product fields
+        // ── Auto-sync customer inputs across form mirror elements ─────────────
+        window.syncCustomerMirror = function syncCustomerMirror() {
+            const fn = (document.getElementById('joFirstName')?.value || '').trim();
+            const ln = (document.getElementById('joLastName')?.value || '').trim();
+            const cn = (document.getElementById('joContactNumber')?.value || '').trim();
+            const mFn = document.getElementById('merchFirstName');
+            const mLn = document.getElementById('merchLastName');
+            const mCn = document.getElementById('merchContactNumber');
+            if (mFn) mFn.value = fn;
+            if (mLn) mLn.value = ln;
+            if (mCn) mCn.value = cn;
+        };
+
+        // ── Unified Form Full Reset (Customer + Products + Service/Vehicle) ───
+        window.fullResetUnifiedForm = function fullResetUnifiedForm() {
+            clearSelectedCustomerFull('jo');
             clearSelectedCustomerFull('merch');
-            // Hide customer results dropdown if open
-            const firstNameResults = document.getElementById('merchFirstNameResults');
-            if (firstNameResults) firstNameResults.style.display = 'none';
+            const joFnRes = document.getElementById('joFirstNameResults');
+            if (joFnRes) joFnRes.style.display = 'none';
+            const merchFnRes = document.getElementById('merchFirstNameResults');
+            if (merchFnRes) merchFnRes.style.display = 'none';
+
+            // Clear products
+            resetMerchandiseForm();
+
+            // Clear service details
+            if (typeof clearJobOrderDetailsOnly === 'function') {
+                clearJobOrderDetailsOnly();
+            }
+
+            // Clear & unlock vehicle details
+            ['joVehicleType','joVehicleBrand','joVehicleModel','joVehiclePlate','joYearModel','joOdometer','joEngineNumber','joChassisNumber'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.value = '';
+                    el.removeAttribute('readonly');
+                    el.style.background = '';
+                    el.style.cursor = '';
+                    el.style.color = '';
+                }
+            });
+
+            // Reset JO date & priority
+            const todayStr = new Date().toISOString().split('T')[0];
+            const joDateEl = document.getElementById('joDate');
+            if (joDateEl) joDateEl.value = todayStr;
+            const joExpEl = document.getElementById('joExpectedRelease');
+            if (joExpEl) joExpEl.value = todayStr;
+            const priNorm = document.getElementById('joPriorityNormal');
+            if (priNorm) priNorm.checked = true;
+
             // Reset Loyalty
             const loyaltyProgram = document.getElementById('loyaltyProgram');
             if (loyaltyProgram) {
                 loyaltyProgram.value = 'No Loyalty';
-                onLoyaltyChange();
+                if (typeof onLoyaltyChange === 'function') onLoyaltyChange();
             }
+
+            if (typeof showTxnAlert === 'function') {
+                showTxnAlert('Unified transaction form reset.', 'info');
+            }
+        };
+
+        // Legacy alias
+        function fullResetMerchandiseForm() {
+            fullResetUnifiedForm();
         }
 
         // ── Reset Job Order form fields only ─────────────────────────────────
@@ -13560,17 +13565,10 @@ setTimeout(function() {
                 const hasService = cart.some(i => i.item_type === 'service');
                 const activeCustomerPrefix = hasService ? 'jo' : 'merch';
                 let firstName = '', lastName = '', contactNumber = '';
-                if (hasService) {
-                    firstName     = (document.getElementById('joFirstName')?.value || document.getElementById('merchFirstName')?.value || '').trim();
-                    lastName      = (document.getElementById('joLastName')?.value  || document.getElementById('merchLastName')?.value  || '').trim();
-                    contactNumber = (document.getElementById('joContactNumber')?.value || document.getElementById('merchContactNumber')?.value || '').trim();
-                    if (!firstName) { showTxnAlert('Please enter the customer\'s first name in the Job Order section.', 'warning'); _resetSubmitBtn(); return; }
-                } else {
-                    firstName     = (document.getElementById('merchFirstName')?.value || document.getElementById('joFirstName')?.value || '').trim();
-                    lastName      = (document.getElementById('merchLastName')?.value  || document.getElementById('joLastName')?.value  || '').trim();
-                    contactNumber = (document.getElementById('merchContactNumber')?.value || document.getElementById('joContactNumber')?.value || '').trim();
-                    if (!firstName) { showTxnAlert('Please enter the customer\'s first name.', 'warning'); _resetSubmitBtn(); return; }
-                }
+                firstName     = (document.getElementById('joFirstName')?.value || document.getElementById('merchFirstName')?.value || '').trim();
+                lastName      = (document.getElementById('joLastName')?.value  || document.getElementById('merchLastName')?.value  || '').trim();
+                contactNumber = (document.getElementById('joContactNumber')?.value || document.getElementById('merchContactNumber')?.value || '').trim();
+                if (!firstName) { showTxnAlert('Please enter the customer\'s first name.', 'warning'); _resetSubmitBtn(); return; }
                 let selectedCustomerId = selectedCustomerIds.jo || selectedCustomerIds.merch || null;
                 const fullName = [firstName, lastName].filter(Boolean).join(' ') || firstName || 'Walk-in Customer';
 
