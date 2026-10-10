@@ -522,15 +522,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    // â”€â”€ Mark JO In Progress â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Mark JO In Progress ────────────────────────────────────────────────
     if ($action === 'mark_jo_inprogress') {
         $jo_id  = (int)($_POST['jo_id'] ?? 0);
         $jo_src = $_POST['jo_source'] ?? 'job_orders';
         try {
             if ($jo_src === 'merchandise_transactions') {
+                $cur = $pdo->prepare("SELECT workflow_status FROM merchandise_transactions WHERE id=? AND station_id=?");
+                $cur->execute([$jo_id, $station_id]);
+                $cur_stat = $cur->fetchColumn() ?: 'Pending';
+                if (!in_array(strtolower($cur_stat), ['pending', 'waiting for parts'])) {
+                    throw new Exception("Job Order is already in '{$cur_stat}' status and cannot be started.");
+                }
                 $pdo->prepare("UPDATE merchandise_transactions SET workflow_status='In Progress', updated_at=NOW() WHERE id=? AND station_id=?")
                     ->execute([$jo_id, $station_id]);
             } else {
+                $cur = $pdo->prepare("SELECT status FROM job_orders WHERE id=? AND station_id=?");
+                $cur->execute([$jo_id, $station_id]);
+                $cur_stat = $cur->fetchColumn() ?: 'Pending';
+                if (!in_array(strtolower($cur_stat), ['pending', 'waiting for parts'])) {
+                    throw new Exception("Job Order is already in '{$cur_stat}' status and cannot be started.");
+                }
                 $pdo->prepare("UPDATE job_orders SET status='In Progress', started_at=NOW(), updated_at=NOW() WHERE id=? AND station_id=?")
                     ->execute([$jo_id, $station_id]);
             }
@@ -543,15 +555,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    // â”€â”€ Mark JO Completed â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Mark JO Completed ──────────────────────────────────────────────────
     if ($action === 'mark_jo_completed') {
         $jo_id  = (int)($_POST['jo_id'] ?? 0);
         $jo_src = $_POST['jo_source'] ?? 'job_orders';
         try {
             if ($jo_src === 'merchandise_transactions') {
+                $cur = $pdo->prepare("SELECT workflow_status FROM merchandise_transactions WHERE id=? AND station_id=?");
+                $cur->execute([$jo_id, $station_id]);
+                $cur_stat = $cur->fetchColumn() ?: 'Pending';
+                if (in_array(strtolower($cur_stat), ['pending', 'waiting for parts'])) {
+                    throw new Exception("Start the Job Order and move it to In Progress before marking it complete.");
+                }
+                if (strtolower($cur_stat) === 'released') {
+                    throw new Exception("This Job Order has already been released.");
+                }
                 $pdo->prepare("UPDATE merchandise_transactions SET workflow_status='Completed', updated_at=NOW() WHERE id=? AND station_id=?")
                     ->execute([$jo_id, $station_id]);
             } else {
+                $cur = $pdo->prepare("SELECT status FROM job_orders WHERE id=? AND station_id=?");
+                $cur->execute([$jo_id, $station_id]);
+                $cur_stat = $cur->fetchColumn() ?: 'Pending';
+                if (in_array(strtolower($cur_stat), ['pending', 'waiting for parts'])) {
+                    throw new Exception("Start the Job Order and move it to In Progress before marking it complete.");
+                }
+                if (strtolower($cur_stat) === 'released') {
+                    throw new Exception("This Job Order has already been released.");
+                }
                 $pdo->prepare("UPDATE job_orders SET status='Completed', completed_at=NOW(), updated_at=NOW() WHERE id=? AND station_id=?")
                     ->execute([$jo_id, $station_id]);
             }

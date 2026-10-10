@@ -1794,19 +1794,16 @@ function handleEventTypeChange() {
 <!-- Day Overview Modal -->
 <div id="dayOverviewModal" onclick="if(event.target===this)closeDayOverviewModal()" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
     <div style="background: #fff; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.2); width: 92%; max-width: 540px; max-height: 85vh; display: flex; flex-direction: column; overflow: hidden;">
-        <div style="padding: 18px 22px; border-bottom: 1px solid #dadce0; display: flex; justify-content: space-between; align-items: center; background: #f8fafc;">
-            <div>
-                <h2 id="dayOverviewTitle" style="margin: 0; font-size: 18px; color: #002F70; font-weight: 700;">Day Schedule</h2>
-                <div id="dayOverviewSubtitle" style="font-size: 12px; color: #64748b; margin-top: 2px;"></div>
-            </div>
-
+        <div style="padding: 16px 20px; border-bottom: 1px solid #e2e8f0; background: #002F6C; color: #fff;">
+            <h2 id="dayOverviewTitle" style="margin: 0; font-size: 17px; color: #ffffff !important; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;">Day Schedule</h2>
+            <div id="dayOverviewSubtitle" style="font-size: 12.5px; color: #cbd5e1; margin-top: 2px; font-weight: 500;"></div>
         </div>
         <div id="dayOverviewList" style="padding: 20px 22px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 10px;">
             <!-- Filled dynamically -->
         </div>
-        <div style="padding: 14px 22px; border-top: 1px solid #dadce0; display: flex; justify-content: flex-end; align-items: center; background: #f8fafc;">
-            <button type="button" onclick="closeDayOverviewModal()" style="padding: 9px 20px; border: 1px solid #cbd5e1; background: #fff; color: #334155; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">
-                Close
+        <div style="padding: 12px 20px; border-top: 1px solid #e2e8f0; display: flex; justify-content: flex-end; align-items: center; background: #f8fafc;">
+            <button type="button" onclick="closeDayOverviewModal()" style="padding: 9px 20px; border: 1px solid #cbd5e1; background: #002F6C !important; color: #ffffff !important; border-radius: 6px; font-size: 13.5px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 2px 5px rgba(0,47,108,0.25);">
+                <i class="fas fa-times"></i> Close
             </button>
         </div>
     </div>
@@ -1815,9 +1812,8 @@ function handleEventTypeChange() {
 <!-- Read-Only Details Modal -->
 <div id="detailsModal" onclick="if(event.target===this)closeDetailsModal()" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1001; align-items: center; justify-content: center;">
     <div style="background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.2); width: 90%; max-width: 550px; max-height: 90vh; overflow-y: auto;">
-        <div style="padding: 24px; border-bottom: 1px solid #dadce0; display: flex; justify-content: space-between; align-items: center;">
-            <h2 id="detailsTitle" style="margin: 0; font-size: 20px; color: #1a73e8; font-weight: 600;">Event Details</h2>
-
+        <div style="padding: 16px 20px; border-bottom: 1px solid #e2e8f0; background: #002F6C; color: #fff;">
+            <h2 id="detailsTitle" style="margin: 0; font-size: 17px; color: #ffffff !important; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px;">Event Details</h2>
         </div>
         <div style="padding: 24px;">
             <div id="detailsContent" style="font-size: 14px; color: #3c4043; line-height: 1.6;">

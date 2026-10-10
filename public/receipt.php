@@ -822,52 +822,30 @@ try {
     }
 } catch (Exception $e) {}
 
-// Smart detection: if station name is the system name or a street address, default to PETRON CORPORATION
 $_raw_sn = $sale['station_name'] ?? '';
-if (preg_match('/(station management|blvd|street|st\.|road|city|misamis)/i', $_raw_sn)) {
-    $_raw_sn = 'PETRON CORPORATION';
-}
 
-$cfg_header = trim($receipt_cfg['station_header'] ?? '');
-if (in_array($cfg_header, ['PETRON STATION MANAGEMENT SYSTEM', 'PETRON CORPORATION'], true)) {
-    $cfg_header = '';
-}
+$cfg_header   = trim($receipt_cfg['station_header'] ?? '');
 $station_name = !empty($cfg_header)
     ? $cfg_header
     : ($_raw_sn ?: 'PETRON CORPORATION');
 
 $branch_name  = !empty($receipt_cfg['branch_name']) ? $receipt_cfg['branch_name'] : '';
 
-$cfg_address = trim($receipt_cfg['station_address'] ?? '');
-if (stripos($cfg_address, 'Vamenta Blvd') !== false) {
-    $cfg_address = '';
-}
+$cfg_address  = trim($receipt_cfg['station_address'] ?? '');
 $station_addr = !empty($cfg_address)
     ? $cfg_address
     : ($sale['station_address'] ?? '');
 
 $station_contact = !empty($receipt_cfg['station_contact']) ? $receipt_cfg['station_contact'] : '';
 
-$cfg_vat_tin = trim($receipt_cfg['station_vat_tin'] ?? '');
-if ($cfg_vat_tin === '248-719-305-00000') {
-    $cfg_vat_tin = '';
-}
+$cfg_vat_tin  = trim($receipt_cfg['station_vat_tin'] ?? '');
 $vat_tin      = !empty($cfg_vat_tin)
     ? $cfg_vat_tin
     : ($sale['station_vat_tin'] ?? '');
 
 $vat_reg_no   = 'Registered';
-$cfg_atp      = trim($receipt_cfg['atp_no'] ?? '');
-if ($cfg_atp === 'BIR-ATP-2026-00984712') {
-    $cfg_atp = '';
-}
-$atp_no       = $cfg_atp;
-
-$cfg_min      = trim($receipt_cfg['min_serial'] ?? '');
-if ($cfg_min === 'MIN-2026-009812') {
-    $cfg_min = '';
-}
-$min_serial   = $cfg_min;
+$atp_no       = trim($receipt_cfg['atp_no'] ?? '');
+$min_serial   = trim($receipt_cfg['min_serial'] ?? '');
 
 $show_vat             = !isset($receipt_cfg['show_vat']) || (int)$receipt_cfg['show_vat'] === 1;
 $show_payment_details = !isset($receipt_cfg['show_payment_details']) || (int)$receipt_cfg['show_payment_details'] === 1;

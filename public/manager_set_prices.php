@@ -1286,10 +1286,7 @@ button[title*="Reset"],
 
 
 
-<div style="display:inline-flex;align-items:center;gap:8px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:600;margin-bottom:14px;">
-    <i class="fas fa-file-invoice-dollar" style="color:#002F6C;font-size:14px;"></i>
-    <span><strong>Pricing Mode: VAT-Inclusive</strong> &mdash; All product selling prices and service rates displayed and edited already include 12% VAT.</span>
-</div>
+
 
 <!-- ── Section Tabs ──────────────────────────────────────────────────── -->
 <input type="hidden" id="activeSection" value="<?php echo htmlspecialchars($active_tab); ?>">

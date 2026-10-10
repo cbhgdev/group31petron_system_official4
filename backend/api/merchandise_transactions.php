@@ -1078,7 +1078,7 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
             'payment_status'        => $resolved_payment_status,
             'ar_status'             => $resolved_ar_status,
             // Workflow status tracks service progress only; transaction validity is official on save.
-            'workflow_status'       => !empty($data['workflow_status']) ? $data['workflow_status'] : ($has_service_item ? 'Pending' : 'Completed'),
+            'workflow_status'       => !empty($data['workflow_status']) ? $data['workflow_status'] : 'Pending',
             // ── Job Order integration ──────────────────────────────────────
             'job_order_id'               => (!empty($data['job_order_id']) && ctype_digit((string)$data['job_order_id'])) ? (int)$data['job_order_id'] : null,
             'job_order_db_id'            => !empty($data['job_order_db_id'])         ? (int)$data['job_order_db_id']       : null,
@@ -1091,12 +1091,11 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
             'job_order_year_model'       => !empty($data['job_order_year_model'])    ? $data['job_order_year_model']       : null,
             'job_order_engine_number'    => !empty($data['job_order_engine_number']) ? $data['job_order_engine_number']    : null,
             'job_order_chassis_number'   => !empty($data['job_order_chassis_number'])? $data['job_order_chassis_number']   : null,
-            'job_order_estimated_duration' => isset($data['job_order_estimated_duration']) && $data['job_order_estimated_duration'] ? (int)$data['job_order_estimated_duration'] : null,
+            'job_order_estimated_duration' => (isset($data['job_order_estimated_duration']) && $data['job_order_estimated_duration']) ? (int)$data['job_order_estimated_duration'] : null,
             'job_order_mechanic_id'      => !empty($data['job_order_mechanic_id'])   ? (int)$data['job_order_mechanic_id'] : null,
             'job_order_mechanic_name'    => !empty($data['job_order_mechanic_name']) ? $data['job_order_mechanic_name']    : null,
             'job_order_contact'          => !empty($data['job_order_contact'])       ? $data['job_order_contact']          : null,
-            // ── Transaction type: classify based on cart contents ──────────────
-            // Determined by whether items contain service-type and/or merchandise-type entries
+            // ── Transaction type: classify based on cart contents or explicit selection ──
             'transaction_type'           => $resolved_transaction_type,
             // ── Loyalty fields ────────────────────────────────────────────────────
             'loyalty_type'               => ($target_customer_id > 0 && $loyalty_acc) ? 'Petron Value Card (PVC)' : 'No Loyalty',

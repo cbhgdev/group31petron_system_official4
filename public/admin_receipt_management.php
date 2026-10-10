@@ -75,34 +75,6 @@ try {
         }
     }
 
-    // Clean legacy default/seed dummy values in receipt_config so newly created or unconfigured stations start with clean blank fields
-    try {
-        $pdo->exec("
-            UPDATE receipt_config
-            SET atp_no = ''
-            WHERE atp_no = 'BIR-ATP-2026-00984712'
-        ");
-        $pdo->exec("
-            UPDATE receipt_config
-            SET min_serial = ''
-            WHERE min_serial = 'MIN-2026-009812'
-        ");
-        $pdo->exec("
-            UPDATE receipt_config
-            SET station_header = ''
-            WHERE station_header IN ('PETRON STATION MANAGEMENT SYSTEM', 'PETRON CORPORATION')
-        ");
-        $pdo->exec("
-            UPDATE receipt_config
-            SET station_address = ''
-            WHERE station_address LIKE '%Vamenta Blvd%'
-        ");
-        $pdo->exec("
-            UPDATE receipt_config
-            SET station_vat_tin = ''
-            WHERE station_vat_tin = '248-719-305-00000'
-        ");
-    } catch (Throwable $e) {}
 } catch (Exception $e) {}
 
 // ── Load current receipt config from DB ────────────────────────────────────
@@ -123,9 +95,7 @@ if ($station_id > 0) {
     } catch (Exception $e) {}
 }
 
-// Only load saved configuration for THIS station from receipt_config.
-// For a new station or other station with no saved receipt config,
-// all station & BIR fields remain completely blank so the admin can manually input them.
+// Load saved configuration for THIS station from receipt_config.
 $val_header        = $config['station_header']        ?? '';
 $val_branch        = $config['branch_name']           ?? '';
 $val_address       = $config['station_address']       ?? '';
@@ -133,23 +103,6 @@ $val_contact       = $config['station_contact']       ?? '';
 $val_vat_tin       = $config['station_vat_tin']       ?? '';
 $val_atp_no        = $config['atp_no']                ?? '';
 $val_min_serial    = $config['min_serial']            ?? '';
-
-// For a new station or unconfigured station, ensure all station & BIR header fields start completely blank for manual input
-if (in_array(trim($val_header), ['PETRON STATION MANAGEMENT SYSTEM', 'PETRON CORPORATION'], true)) {
-    $val_header = '';
-}
-if (stripos($val_address, 'Vamenta Blvd') !== false) {
-    $val_address = '';
-}
-if (trim($val_vat_tin) === '248-719-305-00000') {
-    $val_vat_tin = '';
-}
-if (trim($val_atp_no) === 'BIR-ATP-2026-00984712') {
-    $val_atp_no = '';
-}
-if (trim($val_min_serial) === 'MIN-2026-009812') {
-    $val_min_serial = '';
-}
 $val_title         = !empty($config['receipt_title'])         ? $config['receipt_title']         : 'SALES INVOICE';
 $val_prefix        = !empty($config['receipt_number_prefix']) ? $config['receipt_number_prefix'] : 'RCP-';
 $val_footer_title  = !empty($config['footer_title'])          ? $config['footer_title']          : 'Official Sales Invoice / Receipt';

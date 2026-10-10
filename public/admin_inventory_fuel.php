@@ -436,6 +436,7 @@ $total_fuel_available = array_sum(array_filter(array_map(fn($r) => $r['status'] 
 $total_tank_capacity = array_sum(array_column($rows, 'capacity'));
 $total_low_fuel_tanks = count(array_filter($rows, fn($r) => $r['status'] === 'Low'));
 $total_critical_fuel_tanks = count(array_filter($rows, fn($r) => in_array($r['status'], ['Critical','Out of Stock'])));
+$total_alert_tanks = $total_low_fuel_tanks + $total_critical_fuel_tanks;
 $total_fuel_value = array_sum(array_filter(array_map(fn($r) => $r['status'] === 'Deactivated' ? 0 : (float)$r['value'], $rows)));
 
 
@@ -992,14 +993,9 @@ body, html { overflow-x:hidden !important; }
 </style>
 
 <div class="main-content">
-<div class="int-head" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+<div class="int-head" style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
   <div>
     <h1><i class="fas fa-gas-pump"></i> Fuel Inventory Management</h1>
-  </div>
-  <div style="display:flex; align-items:center; gap:10px;">
-    <a href="manager_stock_request_review.php?open_po=1&type=fuel" class="btn-forward" style="background:#002F6C!important;color:#fff!important;border-radius:8px!important;padding:9px 18px!important;font-weight:700!important;font-size:13.5px!important;display:inline-flex!important;align-items:center!important;gap:8px!important;text-decoration:none!important;box-shadow:0 3px 8px rgba(0,47,108,0.25)!important;">
-      <i class="fas fa-plus-circle"></i> Create Fuel PO
-    </a>
   </div>
 </div>
 
@@ -1053,6 +1049,9 @@ body, html { overflow-x:hidden !important; }
     </a>
     <a href="admin_inventory_fuel.php?tab=alerts" class="tab-btn <?= $active_tab === 'alerts' ? 'active' : '' ?>">
         <i class="fas fa-exclamation-triangle"></i> Stock Alerts
+        <?php if ($total_alert_tanks > 0): ?>
+            <span style="background:#dc2626; color:#fff; font-size:11px; font-weight:800; padding:2px 7px; border-radius:10px; margin-left:6px;"><?= $total_alert_tanks ?></span>
+        <?php endif; ?>
     </a>
 </div>
 

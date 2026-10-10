@@ -216,15 +216,18 @@ if (!function_exists('fetch_pumps_for_fuel_product')) {
 
 
         if ($inv_id > 0 && $expected_pumps > count($pumps) && (int)$station_id > 0) {
-            $clean_fuel_tag = strtoupper(trim($fuel['fuel_type'] ?? 'FUEL'));
+            $ft_raw = $fuel['fuel_type'] ?? 'FUEL';
+            $clean_fuel_tag = strtoupper(trim(preg_replace('/\b(DIESEL|XTRA\s+UNL)\s+[12]\b/i', '$1', $ft_raw)));
+            $tank_idx = 1;
+            if (preg_match('/\b(diesel\s*2|unl\s*2|xtra\s*unl\s*2)\b/i', $ft_raw)) {
+                $tank_idx = 2;
+            }
             $capacity = (float)($fuel['capacity'] ?? 0);
             for ($pi = count($pumps) + 1; $pi <= $expected_pumps; $pi++) {
-                $p_num_idx = (int)ceil($pi / 2);
-                $n_num_idx = (int)((($pi - 1) % 2) + 1);
-                $code = "{$p_num_idx}-{$n_num_idx}";
+                $code = "{$tank_idx}-{$pi}";
                 $pump_num = "{$clean_fuel_tag} - {$code}";
-                $pump_name = "Pump {$p_num_idx}";
-                $nozzle_num = "Nozzle {$n_num_idx}";
+                $pump_name = "Pump {$pi}";
+                $nozzle_num = "Nozzle {$pi}";
 
                 $chk_pump = $pdo->prepare("SELECT id FROM fuel_pumps WHERE station_id = ? AND tank_id = ? AND pump_number = ? LIMIT 1");
                 $chk_pump->execute([$station_id, $inv_id, $pump_num]);
@@ -951,19 +954,21 @@ try {
                 $pump_configs = json_decode($pump_configs_raw, true) ?: [];
 
                 if ($num_pumps > 0 && $station_id > 0) {
-                    $clean_fuel_tag = strtoupper(trim($fuel_type));
+                    $clean_fuel_tag = strtoupper(trim(preg_replace('/\b(DIESEL|XTRA\s+UNL)\s+[12]\b/i', '$1', $fuel_type)));
+                    $tank_idx = 1;
+                    if (preg_match('/\b(diesel\s*2|unl\s*2|xtra\s*unl\s*2)\b/i', $fuel_type)) {
+                        $tank_idx = 2;
+                    }
                     for ($pi = 1; $pi <= $num_pumps; $pi++) {
                         $p_cfg = $pump_configs[$pi - 1] ?? [];
                         $p_status = ucfirst(strtolower($p_cfg['status'] ?? 'Active'));
                         if (!in_array($p_status, ['Active', 'Inactive', 'Maintenance'])) {
                             $p_status = 'Active';
                         }
-                        $p_num_idx = (int)ceil($pi / 2);
-                        $n_num_idx = (int)((($pi - 1) % 2) + 1);
-                        $code = "{$p_num_idx}-{$n_num_idx}";
+                        $code = "{$tank_idx}-{$pi}";
                         $pump_num = "{$clean_fuel_tag} - {$code}";
-                        $pump_name = "Pump {$p_num_idx}";
-                        $nozzle_num = "Nozzle {$n_num_idx}";
+                        $pump_name = "Pump {$pi}";
+                        $nozzle_num = "Nozzle {$pi}";
                         
                         // Check if pump exists for this station and tank with this specific pump_number
                         $chk_pump = $pdo->prepare("SELECT id FROM fuel_pumps WHERE station_id = ? AND tank_id = ? AND pump_number = ? LIMIT 1");

@@ -888,31 +888,8 @@ require_once __DIR__ . '/../partials/header.php';
                 }
                 // Helper: get the formatted fuel name incorporating pump groupings
                 function get_adm_formatted_fuel_name(string $fuel_type, int $seq): string {
-                    $f = strtoupper(trim($fuel_type));
-                    if (str_contains($f,'TURBO') && str_contains($f,'DIESEL')) {
-                        return "TURBO DIESEL - {$seq}";
-                    }
-                    if (str_contains($f,'DIESEL')) {
-                        if ($seq <= 4) {
-                            return "DIESEL 1 - {$seq}";
-                        } else {
-                            return "DIESEL 2 - {$seq}";
-                        }
-                    }
-                    if (str_contains($f,'KEROSENE')) {
-                        return "KEROSENE - {$seq}";
-                    }
-                    if (str_contains($f,'XCS') && str_contains($f,'PLUS')) {
-                        return "XCS PLUS - {$seq}";
-                    }
-                    if (str_contains($f,'XTRA') && str_contains($f,'UNL')) {
-                        if ($seq <= 2) {
-                            return "XTRA UNL 1 - {$seq}";
-                        } else {
-                            return "XTRA UNL 2 - {$seq}";
-                        }
-                    }
-                    return "{$f} - {$seq}";
+                    $grp = adm_fuel_group($fuel_type);
+                    return "{$grp} - {$seq}";
                 }
                 // Pre-compute group-level sequential labels
                 $grp_counters = [];
