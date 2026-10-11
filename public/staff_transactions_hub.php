@@ -14,6 +14,7 @@ require_once __DIR__ . '/../backend/lib.php';
 require_once __DIR__ . '/../public/db_connect.php';
 require_once __DIR__ . '/../backend/transaction_schema_fix.php';
 require_once __DIR__ . '/../backend/customer_module_helpers.php';
+require_once __DIR__ . '/../backend/helpers/job_order_tracker_render.php';
 require_login();
 
 // Set page_id based on section so sidebar highlights the correct nav item
@@ -2344,23 +2345,6 @@ if ($section === 'merchandise') {
         usort($job_orders, fn($a, $b) => strtotime($b['created_at']) - strtotime($a['created_at']));
 
         // ── Pre-fetch pending transaction_requests for Job Order Tracker ────────
-                // ── AJAX JSON POLLING ENDPOINT FOR JOB ORDER TRACKER ────────────────────
-        if (isset($_GET['ajax_tracker']) && $_GET['ajax_tracker'] == '1') {
-            header('Content-Type: application/json');
-            $completed_jo_count = (int)array_reduce($job_orders, fn($c,$j) => $c + (($j['status']??'')==='Completed'?1:0), 0);
-            echo json_encode([
-                'success' => true,
-                'kpis' => [
-                    'total_txns'   => (int)($mh_kpi_txn_count + $kpi_jo_count),
-                    'total_sales'  => '₱' . number_format($kpi_total_encoded, 2),
-                    'completed_jo' => $completed_jo_count,
-                    'merch_sold'   => (int)$kpi_merch_released
-                ],
-                'jo_count' => count($job_orders)
-            ]);
-            exit;
-        }
-
         $pending_requests = [];
         try {
             $pr_stmt = $pdo->prepare("SELECT * FROM transaction_requests WHERE station_id = ? AND status = 'Pending'");
@@ -2540,6 +2524,58 @@ if ($section === 'merchandise') {
         in_array($j['status'] ?? '', ['Rejected', 'Cancelled'])
         || ($j['validation_status'] ?? '') === 'Rejected'
     ));
+
+    // ── AJAX JSON POLLING ENDPOINT FOR JOB ORDER TRACKER (LIVE DATA) ────────────────────
+    if (isset($_GET['ajax_tracker']) && $_GET['ajax_tracker'] == '1') {
+        header('Content-Type: application/json');
+        $completed_jo_count = (int)array_reduce($job_orders, fn($c,$j) => $c + (($j['status']??'')==='Completed'?1:0), 0);
+        
+        // Unique mechanics list from active tracker dataset
+        $unique_mechs = [];
+        foreach ($job_orders as $_jom) {
+            $mn = trim($_jom['mechanic_name'] ?? '');
+            if ($mn && $mn !== 'Unassigned' && !in_array($mn, $unique_mechs)) {
+                $unique_mechs[] = $mn;
+            }
+        }
+        sort($unique_mechs);
+
+        // Unique service types list from active tracker dataset
+        $unique_services = [];
+        foreach ($job_orders as $_jos) {
+            $st = trim($_jos['service_type'] ?? '');
+            if ($st && !in_array($st, $unique_services)) {
+                $unique_services[] = $st;
+            }
+        }
+        sort($unique_services);
+
+        // Render fresh tbody HTML using unified helper
+        $tbody_html = render_job_order_tracker_rows(
+            $job_orders,
+            $pending_requests ?? [],
+            $inv_impact ?? [],
+            $role ?? 'staff',
+            $enable_void_transaction ?? true
+        );
+
+        echo json_encode([
+            'success' => true,
+            'kpis' => [
+                'total_txns'   => (int)($mh_kpi_txn_count + $kpi_jo_count),
+                'total_sales'  => '₱' . number_format($kpi_total_encoded, 2),
+                'completed_jo' => $completed_jo_count,
+                'merch_sold'   => (int)$kpi_merch_released
+            ],
+            'jo_count'          => count($job_orders),
+            'hash'              => md5($tbody_html),
+            'tbody_html'        => $tbody_html,
+            'mechanics'         => $unique_mechs,
+            'service_types'     => $unique_services,
+            'last_updated_time' => date('h:i:s A')
+        ]);
+        exit;
+    }
 }
 
 // ── Mechanics list (for job order encode form) ────────────────────────────────
@@ -14298,10 +14334,46 @@ setTimeout(function() {
         </div>
 
         <!-- Unified Job Order Table -->
+        <style>
+        @keyframes joLivePulse {
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+            70% { transform: scale(1.1); box-shadow: 0 0 0 5px rgba(34, 197, 94, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+        }
+        .jo-live-pulse-dot {
+            width: 7px;
+            height: 7px;
+            background-color: #22c55e;
+            border-radius: 50%;
+            display: inline-block;
+            animation: joLivePulse 2s infinite;
+        }
+        .jo-kpi-flash {
+            animation: joKpiPulse 0.8s ease-out;
+        }
+        @keyframes joKpiPulse {
+            0% { background-color: #dcfce7; transform: scale(1.02); }
+            100% { background-color: transparent; transform: scale(1); }
+        }
+        </style>
         <div class="txn-card" style="margin-bottom: 80px;">
-            <div class="txn-card-header" style="background:#f0f7ff;">
-                <i class="fas fa-clipboard-list" style="color:#003d7a;"></i>
-                <h3 style="color:#003d7a;">All Job Orders</h3>
+            <div class="txn-card-header" style="background:#f0f7ff; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; padding:10px 16px;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <i class="fas fa-clipboard-list" style="color:#003d7a; font-size:16px;"></i>
+                    <h3 style="color:#003d7a; margin:0; font-size:15px; font-weight:800;">All Job Orders</h3>
+                    <span id="joLiveBadge" style="display:inline-flex; align-items:center; gap:5px; background:#dcfce7; color:#15803d; border:1px solid #86efac; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; letter-spacing:0.3px;">
+                        <span class="jo-live-pulse-dot"></span>
+                        <span>LIVE UPDATES</span>
+                    </span>
+                </div>
+                <div style="display:flex; align-items:center; gap:10px;">
+                    <span id="joLastUpdatedText" style="font-size:11.5px; color:#64748b; font-weight:600;">
+                        <i class="far fa-clock"></i> Updated just now
+                    </span>
+                    <button type="button" id="joManualRefreshBtn" onclick="refreshJobOrderTrackerManual()" class="txn-btn secondary" style="padding:4px 10px; font-size:11.5px !important; font-weight:700 !important; border-radius:6px; display:inline-flex; align-items:center; gap:5px; background:#fff; border:1px solid #cbd5e1; cursor:pointer;" title="Refresh Job Order Tracker">
+                        <i class="fas fa-sync-alt" id="joRefreshIcon"></i> <span>Refresh</span>
+                    </button>
+                </div>
             </div>
             <div class="txn-card-body" style="padding:0;">
                 
@@ -14331,7 +14403,7 @@ setTimeout(function() {
                             <th style="font-size:11px;font-weight:800;color:#ffffff;background:#002F70;text-transform:uppercase;letter-spacing:.2px;padding:8px 4px;text-align:center;white-space:normal;word-break:normal;overflow:hidden;line-height:1.2;border-bottom:2px solid #001f4d;">ACTIONS</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="joUnifiedTableBody">
                     <?php if (!empty($job_orders)): ?>
                     <?php foreach ($job_orders as $job):
                         $val_status  = $job['validation_status'] ?? 'Pending Validation';
@@ -15218,6 +15290,7 @@ setTimeout(function() {
                 btnElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
             }
 
+            _isPerformingJOAction = true;
             var fd = new FormData();
             fd.append('ajax_action', '1');
             fd.append('jo_action', action);
@@ -15242,6 +15315,11 @@ setTimeout(function() {
                         showTxnAlert(result.data.message || 'Job Order updated successfully.', 'success');
                     }
                     updateJobOrderRowDOM(joId, joSource, result.data);
+                    setTimeout(function() {
+                        if (typeof autoRefreshJobOrderTracker === 'function') {
+                            autoRefreshJobOrderTracker(true);
+                        }
+                    }, 350);
                 } else {
                     if (btnElement) {
                         btnElement.disabled = false;
@@ -15265,6 +15343,9 @@ setTimeout(function() {
                 } else {
                     alert('An error occurred.');
                 }
+            })
+            .finally(function() {
+                _isPerformingJOAction = false;
             });
         }
 
@@ -15421,43 +15502,153 @@ setTimeout(function() {
 
         document.addEventListener('DOMContentLoaded', function() { joRenderTable(); });
 
-        // ── 10-SECOND REAL-TIME AUTO REFRESH FOR JOB ORDER TRACKER ───────────
+        // ── REAL-TIME LIVE AUTO REFRESH & DATA SYNC FOR JOB ORDER TRACKER ─────
         let _isRefreshingJO = false;
-        async function autoRefreshJobOrderTracker() {
+        let _joLastDataHash = '';
+        let _isPerformingJOAction = false;
+
+        async function autoRefreshJobOrderTracker(force = false) {
             if (_isRefreshingJO) return;
-            if (document.hidden) return; // Skip if browser tab is in background
+            if (_isPerformingJOAction) return;
+
+            // Skip if tab is hidden (unless user explicitly forced refresh)
+            if (document.hidden && !force) return;
 
             // NEVER refresh if ANY modal is currently open
             if (typeof window.isAnyModalOpen === 'function' && window.isAnyModalOpen()) return;
             var vm = document.getElementById('viewMerchandiseModal');
             if (vm && vm.style.display !== 'none' && vm.style.display !== '') return;
 
-            // Only refresh if Tracker tab is currently visible
+            // Only refresh if Tracker tab is currently visible (unless forced)
             const trackerTab = document.getElementById('innerTab_tracker');
-            if (trackerTab && trackerTab.style.display === 'none') return;
+            if (!force && trackerTab && trackerTab.style.display === 'none') return;
+
+            const refreshIcon = document.getElementById('joRefreshIcon');
+            if (refreshIcon && force) {
+                refreshIcon.classList.add('fa-spin');
+            }
 
             try {
                 _isRefreshingJO = true;
-                const resp = await fetch('staff_transactions_hub.php?section=merchandise&active_tab=tracker&ajax_tracker=1');
+                const resp = await fetch('staff_transactions_hub.php?section=merchandise&active_tab=tracker&ajax_tracker=1', {
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
                 if (!resp.ok) return;
                 const data = await resp.json();
 
-                if (data.kpis) {
-                    if (document.getElementById('jo_kpi_total_txns')) document.getElementById('jo_kpi_total_txns').textContent = data.kpis.total_txns;
-                    if (document.getElementById('jo_kpi_total_sales')) document.getElementById('jo_kpi_total_sales').textContent = data.kpis.total_sales;
-                    if (document.getElementById('jo_kpi_completed_jo')) document.getElementById('jo_kpi_completed_jo').textContent = data.kpis.completed_jo;
-                    if (document.getElementById('jo_kpi_merch_sold')) document.getElementById('jo_kpi_merch_sold').textContent = data.kpis.merch_sold;
+                if (data && data.success) {
+                    // Update KPIs smoothly with subtle flash animation if changed
+                    if (data.kpis) {
+                        const updateKpi = (id, newVal) => {
+                            const el = document.getElementById(id);
+                            if (el && el.textContent.trim() !== String(newVal).trim()) {
+                                el.textContent = newVal;
+                                if (el.parentElement) {
+                                    el.parentElement.classList.remove('jo-kpi-flash');
+                                    void el.parentElement.offsetWidth; // trigger reflow
+                                    el.parentElement.classList.add('jo-kpi-flash');
+                                }
+                            }
+                        };
+                        updateKpi('jo_kpi_total_txns', data.kpis.total_txns);
+                        updateKpi('jo_kpi_total_sales', data.kpis.total_sales);
+                        updateKpi('jo_kpi_completed_jo', data.kpis.completed_jo);
+                        updateKpi('jo_kpi_merch_sold', data.kpis.merch_sold);
+                    }
+
+                    // Check if table data has changed or force update requested
+                    const tbody = document.getElementById('joUnifiedTableBody') || document.querySelector('#joUnifiedTable tbody');
+                    if (data.tbody_html && tbody) {
+                        if (force || !_joLastDataHash || data.hash !== _joLastDataHash) {
+                            // Verify no active interaction within the table rows
+                            const activeEl = document.activeElement;
+                            const isInteractingWithRow = activeEl && tbody.contains(activeEl);
+                            
+                            if (!isInteractingWithRow || force) {
+                                tbody.innerHTML = data.tbody_html;
+                                _joLastDataHash = data.hash;
+
+                                // Sync Mechanics dropdown if new mechanics added
+                                if (Array.isArray(data.mechanics)) {
+                                    const mechSelect = document.getElementById('joFilterMechanic');
+                                    if (mechSelect) {
+                                        const currentMech = mechSelect.value;
+                                        let currentOpts = Array.from(mechSelect.options).map(o => o.value);
+                                        data.mechanics.forEach(m => {
+                                            if (!currentOpts.includes(m)) {
+                                                const opt = document.createElement('option');
+                                                opt.value = m;
+                                                opt.textContent = m;
+                                                mechSelect.appendChild(opt);
+                                            }
+                                        });
+                                        mechSelect.value = currentMech;
+                                    }
+                                }
+
+                                // Sync Service Types dropdown if new services added
+                                if (Array.isArray(data.service_types)) {
+                                    const svcSelect = document.getElementById('joFilterServiceType');
+                                    if (svcSelect) {
+                                        const currentSvc = svcSelect.value;
+                                        let currentOpts = Array.from(svcSelect.options).map(o => o.value);
+                                        data.service_types.forEach(s => {
+                                            if (!currentOpts.includes(s)) {
+                                                const opt = document.createElement('option');
+                                                opt.value = s;
+                                                opt.textContent = s.length > 38 ? s.substring(0, 36) + '...' : s;
+                                                opt.title = s;
+                                                svcSelect.appendChild(opt);
+                                            }
+                                        });
+                                        svcSelect.value = currentSvc;
+                                    }
+                                }
+
+                                // Re-run table filtering & pagination (preserves page and filters)
+                                if (typeof joRenderTable === 'function') {
+                                    joRenderTable();
+                                }
+                            }
+                        }
+                    }
+
+                    // Update last refreshed label
+                    const lastUpdated = document.getElementById('joLastUpdatedText');
+                    if (lastUpdated) {
+                        const timeStr = data.last_updated_time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                        lastUpdated.innerHTML = '<i class="far fa-clock"></i> Updated ' + timeStr;
+                    }
                 }
-                // Silent KPI refresh only — NEVER reload page in background
             } catch (e) {
-                console.warn('Job Order Tracker refresh notice:', e);
+                console.warn('Job Order Tracker live refresh notice:', e);
             } finally {
                 _isRefreshingJO = false;
+                if (refreshIcon) {
+                    setTimeout(() => refreshIcon.classList.remove('fa-spin'), 300);
+                }
             }
         }
 
-        // Run auto-refresh every 10 seconds
-        setInterval(autoRefreshJobOrderTracker, 10000);
+        // Manual Refresh Handler
+        function refreshJobOrderTrackerManual() {
+            autoRefreshJobOrderTracker(true);
+        }
+
+        // Run auto-refresh every 5 seconds for live real-time updates
+        setInterval(function() {
+            autoRefreshJobOrderTracker(false);
+        }, 5000);
+
+        // When tab visibility changes back to active, trigger immediate sync
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                const trackerTab = document.getElementById('innerTab_tracker');
+                if (trackerTab && trackerTab.style.display !== 'none') {
+                    autoRefreshJobOrderTracker(true);
+                }
+            }
+        });
 
         // ── Petron Downward Custom Dropdowns ──
         function setupPetronDownwardDropdowns(selectors) {
@@ -16106,6 +16297,11 @@ setTimeout(function() {
                     if (typeof updateJobOrderRowDOM === 'function') {
                         updateJobOrderRowDOM(result.data.jo_id, result.data.jo_source, result.data);
                     }
+                    setTimeout(function() {
+                        if (typeof autoRefreshJobOrderTracker === 'function') {
+                            autoRefreshJobOrderTracker(true);
+                        }
+                    }, 350);
                 } else {
                     var msg = (result.data && result.data.message) ? result.data.message : 'Payment recording failed.';
                     if (typeof showTxnAlert === 'function') {
@@ -17001,6 +17197,10 @@ setTimeout(function() {
             var url = new URL(window.location.href);
             url.searchParams.set('active_tab', tab);
             history.replaceState(null, '', url.toString());
+
+            if (tab === 'tracker' && typeof autoRefreshJobOrderTracker === 'function') {
+                autoRefreshJobOrderTracker(true);
+            }
         }
 
         function goBackFromTracker() {
