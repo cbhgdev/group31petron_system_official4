@@ -41,7 +41,8 @@ function manager_procurement_prepare_schema(PDO $pdo): void
         "ALTER TABLE fuel_purchase_orders ADD COLUMN IF NOT EXISTS approved_at DATETIME NULL",
         "ALTER TABLE fuel_purchase_orders ADD COLUMN IF NOT EXISTS updated_at DATETIME NULL",
         "ALTER TABLE fuel_purchase_orders MODIFY COLUMN status VARCHAR(100) NOT NULL DEFAULT 'Approved PO'",
-        "UPDATE notifications SET redirect_url = 'manager_stock_request_review.php' WHERE (title LIKE '%Purchase Order%' OR message LIKE '%Purchase Order%' OR event_type = 'purchase_order' OR reference_type = 'purchase_order') AND (redirect_url LIKE '%staff_record_delivery%' OR redirect_url LIKE '%staff_inventory%' OR redirect_url LIKE '%admin_stock_confirmation%' OR redirect_url = '' OR redirect_url IS NULL)",
+        "UPDATE notifications n JOIN users u ON u.id = n.user_id SET n.redirect_url = CASE WHEN (n.title LIKE '%Fuel%' OR n.message LIKE '%Fuel%') THEN 'staff_record_delivery.php?tab=fuel' ELSE 'staff_record_delivery.php?tab=merchandise' END WHERE u.role IN ('staff','cashier','pump_attendant') AND (n.title LIKE '%Stock Request%' OR n.title LIKE '%Purchase Order%' OR n.message LIKE '%Purchase Order%' OR n.event_type = 'purchase_order' OR n.reference_type = 'purchase_order')",
+        "UPDATE notifications n JOIN users u ON u.id = n.user_id SET n.redirect_url = 'manager_stock_request_review.php' WHERE u.role IN ('manager','admin','superadmin') AND (n.title LIKE '%Purchase Order%' OR n.message LIKE '%Purchase Order%' OR n.event_type = 'purchase_order' OR n.reference_type = 'purchase_order') AND (n.redirect_url LIKE '%staff%' OR n.redirect_url = '' OR n.redirect_url IS NULL)",
     ];
 
     foreach ($statements as $sql) {
@@ -162,12 +163,25 @@ function manager_notify_users(PDO $pdo, array $user_ids, string $title, string $
             return;
         }
 
+        $stmt_users = $pdo->prepare("SELECT id, role FROM users WHERE id IN (" . implode(',', array_fill(0, count($valid_ids), '?')) . ")");
+        $stmt_users->execute($valid_ids);
+        $user_rows = $stmt_users->fetchAll(PDO::FETCH_ASSOC);
+
         $stmt = $pdo->prepare("
             INSERT INTO notifications (user_id, type, title, message, event_type, severity, redirect_url, created_at)
             VALUES (?, ?, ?, ?, 'stock_request', ?, ?, NOW())
         ");
-        foreach ($valid_ids as $user_id) {
-            $stmt->execute([$user_id, $type, $title, $message, $severity, $redirect_url]);
+        foreach ($user_rows as $ur) {
+            $u_id = (int)$ur['id'];
+            $u_role = function_exists('role_key') ? role_key($ur['role'] ?? '') : strtolower($ur['role'] ?? '');
+            $u_url = $redirect_url;
+            if (in_array($u_role, ['staff', 'cashier', 'pump_attendant'], true)) {
+                if (stripos($u_url, 'manager_stock_request_review.php') !== false || stripos($u_url, 'manager_purchase_orders.php') !== false) {
+                    $is_fuel = (stripos($title, 'fuel') !== false || stripos($message, 'fuel') !== false);
+                    $u_url = $is_fuel ? 'staff_record_delivery.php?tab=fuel' : 'staff_record_delivery.php?tab=merchandise';
+                }
+            }
+            $stmt->execute([$u_id, $type, $title, $message, $severity, $u_url]);
         }
     } catch (Exception $e) {
         error_log('Manager PR notification skipped: ' . $e->getMessage());
@@ -445,7 +459,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     "Purchase Order {$po_number} generated for {$item_summary}. Ready for delivery tracking.",
                     'purchase_order',
                     $first_request_id,
-                    'manager_stock_request_review.php'
+                    'staff_record_delivery.php?tab=merchandise'
                 );
             }
 
@@ -611,7 +625,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     "Fuel Purchase Order {$po_number} generated for " . number_format($st_liters, 2) . " Liters. Ready for delivery tracking.",
                     'purchase_order',
                     (int)($items_to_insert[0]['request_id'] ?? 0),
-                    'manager_stock_request_review.php'
+                    'staff_record_delivery.php?tab=fuel'
                 );
             }
 
@@ -1484,12 +1498,13 @@ body .main,
     align-items: flex-start;
     justify-content: flex-start;
     flex-direction: column;
-    transition: transform .15s, box-shadow .15s;
     box-sizing: border-box;
+    cursor: default !important;
+    user-select: none;
 }
 .summary-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 10px rgba(0,0,0,.09);
+    transform: none !important;
+    box-shadow: none !important;
 }
 .summary-card-label {
     font-size: 10px !important;
@@ -2015,22 +2030,22 @@ body.sidebar-collapsed .modal-overlay {
     </div>
     <!-- PR Summary Cards -->
     <div class="summary-grid" id="prSummaryCardsGrid">
-        <a href="manager_stock_request_review.php" class="summary-card" style="text-decoration: none; color: inherit;">
+        <div class="summary-card">
             <div class="summary-card-label"><i class="fas fa-hourglass-half" style="color:#d97706;margin-right:4px;"></i> Pending Requests</div>
             <div class="summary-card-value"><?= number_format($cnt_pending_pr) ?></div>
-        </a>
-        <a href="manager_purchase_orders.php" class="summary-card" style="text-decoration: none; color: inherit;">
+        </div>
+        <div class="summary-card">
             <div class="summary-card-label"><i class="fas fa-file-invoice" style="color:#9333ea;margin-right:4px;"></i> POs Generated</div>
             <div class="summary-card-value" style="color: #9333ea;"><?= number_format($cnt_po_generated) ?></div>
-        </a>
-        <a href="<?= htmlspecialchars($pending_del_target_url) ?>" class="summary-card" style="text-decoration: none; color: inherit;">
+        </div>
+        <div class="summary-card">
             <div class="summary-card-label"><i class="fas fa-truck" style="color:#1d4ed8;margin-right:4px;"></i> Pending Deliveries</div>
             <div class="summary-card-value" style="color: #1d4ed8;"><?= number_format($cnt_pending_delivery) ?></div>
-        </a>
-        <a href="javascript:void(0)" onclick="switchPendingSubTab('history')" class="summary-card" style="text-decoration: none; color: inherit; cursor: pointer;">
+        </div>
+        <div class="summary-card">
             <div class="summary-card-label"><i class="fas fa-check-circle" style="color:#16a34a;margin-right:4px;"></i> Completed</div>
             <div class="summary-card-value" style="color: #16a34a;"><?= number_format($cnt_completed) ?></div>
-        </a>
+        </div>
     </div>
 
     <!-- Purchase History Summary Cards -->

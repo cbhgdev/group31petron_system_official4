@@ -170,24 +170,22 @@ try {
         );
 
         if ($is_po) {
-            $nr['redirect_url'] = 'manager_stock_request_review.php';
+            if (in_array($role, ['staff', 'cashier', 'pump_attendant'], true)) {
+                $is_fuel = (
+                    stripos($nr['title'] ?? '', 'fuel') !== false ||
+                    stripos($nr['message'] ?? '', 'fuel') !== false ||
+                    ($nr['event_type'] ?? '') === 'fuel_stock_request'
+                );
+                $nr['redirect_url'] = $is_fuel ? 'staff_record_delivery.php?tab=fuel' : 'staff_record_delivery.php?tab=merchandise';
+            } else {
+                $nr['redirect_url'] = 'manager_stock_request_review.php';
+            }
         } elseif (in_array($role, ['staff', 'cashier', 'pump_attendant'])) {
             if (empty($cur_url) && !empty($cur_ref)) {
                 $cur_url = notification_redirect_url($cur_ref, (int)($nr['reference_id'] ?? 0), $role);
             }
-            if (strpos($cur_url, 'staff_fuel_deliveries.php') !== false || strpos($cur_url, 'staff_record_delivery.php') !== false) {
-                $is_fuel = (
-                    strpos($cur_url, 'staff_fuel_deliveries.php') !== false ||
-                    strpos($cur_url, 'tab=fuel') !== false ||
-                    strpos($cur_url, 'fpo') !== false ||
-                    stripos($nr['title'] ?? '', 'fuel') !== false ||
-                    stripos($nr['message'] ?? '', 'fuel') !== false ||
-                    stripos($nr['message'] ?? '', 'diesel') !== false ||
-                    stripos($nr['message'] ?? '', 'liters') !== false ||
-                    stripos($nr['message'] ?? '', 'xcs') !== false ||
-                    stripos($nr['message'] ?? '', 'tank') !== false
-                );
-                $cur_url = $is_fuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+            if (strpos($cur_url, 'staff_fuel_deliveries.php') !== false) {
+                $cur_url = 'staff_inventory_fuel.php';
             }
             $nr['redirect_url'] = $cur_url;
         } else {

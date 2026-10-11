@@ -60,6 +60,29 @@ try {
         WHERE d.status IN ('Pending Stock-In', 'Pending', 'Received', 'Ready for Stock-In')
           AND fpo.status = 'Completed'
     ");
+    $pdo->exec("
+        UPDATE notifications n
+        JOIN users u ON u.id = n.user_id
+        SET n.redirect_url = CASE 
+            WHEN (n.title LIKE '%Fuel%' OR n.message LIKE '%Fuel%') THEN 'staff_record_delivery.php?tab=fuel'
+            ELSE 'staff_record_delivery.php?tab=merchandise'
+        END
+        WHERE u.role IN ('staff', 'cashier', 'pump_attendant')
+          AND (
+            n.title LIKE '%Stock Request%'
+            OR n.title LIKE '%Purchase Order%'
+            OR n.message LIKE '%Purchase Order%'
+            OR n.event_type = 'purchase_order'
+            OR n.reference_type = 'purchase_order'
+          )
+          AND (
+            n.redirect_url LIKE '%manager_stock_request_review%'
+            OR n.redirect_url LIKE '%manager_purchase_orders%'
+            OR n.redirect_url LIKE '%staff_inventory%'
+            OR n.redirect_url = ''
+            OR n.redirect_url IS NULL
+          )
+    ");
 } catch (Exception $ignored) {}
 
 $staff_profile = [

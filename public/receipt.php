@@ -14,14 +14,14 @@ if ($type === 'job_order') {
         // Fetch by job_order_id string (JO-xxx) OR numeric db id
         $stmt = $pdo->prepare("
             SELECT jo.*,
-                   COALESCE(u.username, 'Mechanic') AS mechanic_name,
-                   COALESCE(cb.username, 'Staff') AS staff_name,
+                   COALESCE(NULLIF(jo.mechanic_name,''), NULLIF(jo.assigned_mechanic,''), NULLIF(TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))),''), u.name, u.username) AS mechanic_name,
+                   COALESCE(NULLIF(TRIM(CONCAT(COALESCE(cb.first_name,''),' ',COALESCE(cb.last_name,''))),''), cb.name, cb.username, 'Staff') AS staff_name,
                    s.name  AS station_name,
                    s.location AS station_location,
                    s.address  AS station_address,
                    s.vat_tin  AS station_vat_tin
             FROM job_orders jo
-            LEFT JOIN users    u  ON u.id  = jo.assigned_mechanic_id
+            LEFT JOIN users    u  ON (u.id = jo.assigned_mechanic_id OR u.id = jo.mechanic_id)
             LEFT JOIN users    cb ON cb.id = jo.created_by
             LEFT JOIN stations s  ON s.id  = jo.station_id
             WHERE jo.job_order_id = ? OR jo.job_order_number = ? OR jo.id = ?
@@ -42,13 +42,15 @@ if ($type === 'job_order') {
             try {
                 $stmt_mt = $pdo->prepare("
                     SELECT mt.*,
-                           COALESCE(u.username, 'Staff') AS staff_name,
+                           COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))),''), u.name, u.username, 'Staff') AS staff_name,
+                           COALESCE(NULLIF(mt.job_order_mechanic_name,''), NULLIF(TRIM(CONCAT(COALESCE(m.first_name,''),' ',COALESCE(m.last_name,''))),''), m.name, m.username) AS resolved_mechanic_name,
                            s.name AS station_name,
                            s.location AS station_location,
                            s.address AS station_address,
                            s.vat_tin AS station_vat_tin
                     FROM merchandise_transactions mt
                     LEFT JOIN users u ON mt.staff_id = u.id
+                    LEFT JOIN users m ON (mt.job_order_mechanic_id IS NOT NULL AND mt.job_order_mechanic_id = m.id)
                     LEFT JOIN stations s ON mt.station_id = s.id
                     WHERE mt.transaction_id = ?
                        OR mt.transaction_id LIKE ?
@@ -91,8 +93,10 @@ if ($type === 'job_order') {
                         'vehicle_plate' => $jo_mt['job_order_vehicle_plate'] ?? '',
                         'vehicle_type' => $jo_mt['job_order_vehicle_type'] ?? '',
                         'contact_number' => $jo_mt['job_order_contact'] ?? '',
-                        'assigned_mechanic' => $jo_mt['job_order_mechanic_name'] ?? null,
-                        'mechanic_name' => $jo_mt['job_order_mechanic_name'] ?? null,
+                        'assigned_mechanic' => $jo_mt['resolved_mechanic_name'] ?? $jo_mt['job_order_mechanic_name'] ?? null,
+                        'mechanic_name' => $jo_mt['resolved_mechanic_name'] ?? $jo_mt['job_order_mechanic_name'] ?? null,
+                        'job_order_db_id' => $jo_mt['job_order_db_id'] ?? null,
+                        'job_order_mechanic_id' => $jo_mt['job_order_mechanic_id'] ?? null,
                         'total_cost' => $jo_total,
                         'labor_cost' => 0,
                         'service_cost' => $jo_total,
@@ -234,6 +238,9 @@ if ($type === 'job_order') {
                 'loyalty_card_no'         => $jo['loyalty_card_no']         ?? '',
                 'loyalty_points_earned'   => $jo['loyalty_points_earned']   ?? null,
                 'loyalty_points_redeemed' => $jo['loyalty_points_redeemed'] ?? null,
+                'mechanic_name'       => $jo['mechanic_name'] ?? $jo['assigned_mechanic'] ?? null,
+                'job_order_id'        => $jo['job_order_id'] ?? $jo['job_order_number'] ?? null,
+                'job_order_db_id'     => $jo['job_order_db_id'] ?? null,
                 'job_order'           => [
                     'job_order_id'        => $jo['job_order_id'] ?? $jo['job_order_number'] ?? null,
                     'service_type'        => $jo['service_type'] ?? $jo['job_type'] ?? '',
@@ -337,12 +344,14 @@ if ($type === 'job_order') {
             SELECT mt.*,
                    TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))) AS staff_full_name,
                    COALESCE(u.username, 'Staff') AS staff_username,
+                   COALESCE(NULLIF(TRIM(CONCAT(COALESCE(m.first_name,''),' ',COALESCE(m.last_name,''))),''), m.name, m.username, NULLIF(mt.job_order_mechanic_name,'')) AS resolved_mechanic_name,
                    COALESCE(s.name, 'Petron Station') AS station_name,
                    COALESCE(s.location, '') AS station_location,
                    COALESCE(s.address, '') AS station_address,
                    COALESCE(s.vat_tin, '') AS station_vat_tin
             FROM merchandise_transactions mt
             LEFT JOIN users u ON mt.staff_id = u.id
+            LEFT JOIN users m ON (mt.job_order_mechanic_id IS NOT NULL AND mt.job_order_mechanic_id = m.id)
             LEFT JOIN stations s ON mt.station_id = s.id
             WHERE mt.transaction_id = ?
                OR mt.transaction_id LIKE ?
@@ -370,12 +379,19 @@ if ($type === 'job_order') {
             $stmt2->execute([$txn['id']]);
             $items = $stmt2->fetchAll(PDO::FETCH_ASSOC);
 
+            // Resolved mechanic name
+            $mech_name = $txn['resolved_mechanic_name'] ?? $txn['job_order_mechanic_name'] ?? null;
+            if (in_array(strtolower(trim((string)$mech_name)), ['mechanic', 'unassigned', 'n/a', 'none', '-'])) {
+                $mech_name = null;
+            }
+
             // Build job order data if exists
             $job_order_data = null;
-            if (!empty($txn['job_order_service']) || !empty($txn['job_order_vehicle_plate'])) {
+            if (!empty($txn['job_order_service']) || !empty($txn['job_order_vehicle_plate']) || !empty($mech_name)) {
                 $job_order_data = [
+                    'job_order_id'        => $txn['job_order_id'] ?? $txn['job_order_db_id'] ?? null,
                     'service_type'        => $txn['job_order_service'] ?? '',
-                    'mechanic_name'       => $txn['job_order_mechanic_name'] ?? null,
+                    'mechanic_name'       => $mech_name,
                     'vehicle_plate'       => $txn['job_order_vehicle_plate'] ?? null,
                     'vehicle_type'        => $txn['job_order_vehicle_type'] ?? null,
                     'service_description' => $txn['job_order_description'] ?? '',
@@ -392,6 +408,9 @@ if ($type === 'job_order') {
             $sale = [
                 'transaction_id'      => $txn['transaction_id'],
                 'id'                  => $txn['transaction_id'],
+                'job_order_id'        => $txn['job_order_id'] ?? null,
+                'job_order_db_id'     => $txn['job_order_db_id'] ?? null,
+                'mechanic_name'       => $mech_name,
                 'created_at'          => $txn['created_at'] ?? date('Y-m-d H:i:s'),
                 'staff_name'          => trim($txn['staff_full_name'] ?? '') ?: ($txn['staff_username'] ?? 'Staff'),
                 'shift_name'          => $txn['shift_name'] ?? $txn['shift_period'] ?? '',
@@ -461,12 +480,14 @@ if (!$sale && !empty($id)) {
             SELECT mt.*,
                    TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))) AS staff_full_name,
                    COALESCE(u.username, 'Staff') AS staff_username,
+                   COALESCE(NULLIF(TRIM(CONCAT(COALESCE(m.first_name,''),' ',COALESCE(m.last_name,''))),''), m.name, m.username, NULLIF(mt.job_order_mechanic_name,'')) AS resolved_mechanic_name,
                    COALESCE(s.name, 'Petron Station') AS station_name,
                    COALESCE(s.location, '') AS station_location,
                    COALESCE(s.address, '') AS station_address,
                    COALESCE(s.vat_tin, '') AS station_vat_tin
             FROM merchandise_transactions mt
             LEFT JOIN users u ON mt.staff_id = u.id
+            LEFT JOIN users m ON (mt.job_order_mechanic_id IS NOT NULL AND mt.job_order_mechanic_id = m.id)
             LEFT JOIN stations s ON mt.station_id = s.id
             WHERE mt.transaction_id = ?
                OR mt.transaction_id LIKE ?
@@ -487,11 +508,17 @@ if (!$sale && !empty($id)) {
             $stmt2->execute([$txn_uf['id']]);
             $items_uf = $stmt2->fetchAll(PDO::FETCH_ASSOC);
 
+            $mech_name_uf = $txn_uf['resolved_mechanic_name'] ?? $txn_uf['job_order_mechanic_name'] ?? null;
+            if (in_array(strtolower(trim((string)$mech_name_uf)), ['mechanic', 'unassigned', 'n/a', 'none', '-'])) {
+                $mech_name_uf = null;
+            }
+
             $job_order_data = null;
-            if (!empty($txn_uf['job_order_service']) || !empty($txn_uf['job_order_vehicle_plate'])) {
+            if (!empty($txn_uf['job_order_service']) || !empty($txn_uf['job_order_vehicle_plate']) || !empty($mech_name_uf)) {
                 $job_order_data = [
+                    'job_order_id'        => $txn_uf['job_order_id'] ?? $txn_uf['job_order_db_id'] ?? null,
                     'service_type'        => $txn_uf['job_order_service'] ?? '',
-                    'mechanic_name'       => $txn_uf['job_order_mechanic_name'] ?? null,
+                    'mechanic_name'       => $mech_name_uf,
                     'vehicle_plate'       => $txn_uf['job_order_vehicle_plate'] ?? null,
                     'vehicle_type'        => $txn_uf['job_order_vehicle_type'] ?? null,
                     'service_description' => $txn_uf['job_order_description'] ?? '',
@@ -506,6 +533,9 @@ if (!$sale && !empty($id)) {
             $sale = [
                 'transaction_id'      => $txn_uf['transaction_id'],
                 'id'                  => $txn_uf['transaction_id'],
+                'job_order_id'        => $txn_uf['job_order_id'] ?? null,
+                'job_order_db_id'     => $txn_uf['job_order_db_id'] ?? null,
+                'mechanic_name'       => $mech_name_uf,
                 'created_at'          => $txn_uf['created_at'] ?? date('Y-m-d H:i:s'),
                 'staff_name'          => trim($txn_uf['staff_full_name'] ?? '') ?: ($txn_uf['staff_username'] ?? 'Staff'),
                 'shift_name'          => $txn_uf['shift_name'] ?? $txn_uf['shift_period'] ?? '',
@@ -553,14 +583,14 @@ if (!$sale && !empty($id)) {
         try {
             $stmt_jo = $pdo->prepare("
                 SELECT jo.*,
-                       COALESCE(u.username, 'Mechanic') AS mechanic_name,
-                       COALESCE(cb.username, 'Staff') AS staff_name,
+                       COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))),''), u.name, u.username, NULLIF(jo.mechanic_name,''), NULLIF(jo.assigned_mechanic,'')) AS mechanic_name,
+                       COALESCE(NULLIF(TRIM(CONCAT(COALESCE(cb.first_name,''),' ',COALESCE(cb.last_name,''))),''), cb.name, cb.username, 'Staff') AS staff_name,
                        s.name  AS station_name,
                        s.location AS station_location,
                        s.address  AS station_address,
                        s.vat_tin  AS station_vat_tin
                 FROM job_orders jo
-                LEFT JOIN users u ON u.id = jo.assigned_mechanic_id
+                LEFT JOIN users u ON (u.id = jo.assigned_mechanic_id OR u.id = jo.mechanic_id)
                 LEFT JOIN users cb ON cb.id = jo.created_by
                 LEFT JOIN stations s ON s.id = jo.station_id
                 WHERE jo.job_order_id = ? OR jo.job_order_number = ? OR jo.id = ?
@@ -590,6 +620,8 @@ if (!$sale && !empty($id)) {
                 $sale = [
                     'transaction_id'      => $jo_uf['job_order_id'] ?? $jo_uf['job_order_number'] ?? $jo_uf['id'],
                     'id'                  => $jo_uf['id'],
+                    'job_order_id'        => $jo_uf['job_order_id'] ?? $jo_uf['job_order_number'] ?? null,
+                    'mechanic_name'       => $jo_uf['mechanic_name'] ?? $jo_uf['assigned_mechanic'] ?? null,
                     'created_at'          => $jo_uf['created_at'] ?? $jo_uf['order_date'] ?? date('Y-m-d H:i:s'),
                     'staff_name'          => $jo_uf['staff_name'] ?? 'N/A',
                     'shift_name'          => $jo_uf['shift_name'] ?? $jo_uf['shift_period'] ?? '',
@@ -921,6 +953,65 @@ $norm_pay_info = function_exists('format_payment_for_record') ? format_payment_f
 $pm_lc     = strtolower($norm_pay_info['payment_type'] ?? $pay_method);
 $job_order = $sale['job_order'] ?? null;
 $has_jo    = !empty($job_order);
+
+// ── Authoritative Mechanic Name Resolution ───────────────────────────────────
+$raw_mech = $sale['mechanic_name'] ?? ($job_order['mechanic_name'] ?? '');
+if (in_array(strtolower(trim((string)$raw_mech)), ['mechanic', 'unassigned', 'n/a', 'none', '-', 'null', ''])) {
+    $raw_mech = '';
+}
+
+if (empty($raw_mech) && isset($pdo)) {
+    try {
+        $check_ids = array_filter([
+            $sale['job_order_db_id'] ?? null,
+            $sale['job_order_id'] ?? null,
+            $sale['id'] ?? null,
+            $id,
+            $txn_id
+        ]);
+        foreach ($check_ids as $cid) {
+            if (!$cid) continue;
+            $c_num = is_numeric($cid) ? (int)$cid : 0;
+            $stmt_m = $pdo->prepare("
+                SELECT COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))),''), u.name, u.username, NULLIF(jo.mechanic_name,''), NULLIF(jo.assigned_mechanic,'')) AS mname
+                FROM job_orders jo
+                LEFT JOIN users u ON (u.id = jo.assigned_mechanic_id OR u.id = jo.mechanic_id)
+                WHERE jo.job_order_id = ? OR jo.job_order_number = ? OR jo.id = ?
+                LIMIT 1
+            ");
+            $stmt_m->execute([$cid, $cid, $c_num]);
+            $found_m = $stmt_m->fetchColumn();
+            if ($found_m && !in_array(strtolower(trim($found_m)), ['mechanic', 'unassigned', 'n/a', 'none', '-', ''])) {
+                $raw_mech = trim($found_m);
+                break;
+            }
+        }
+
+        if (empty($raw_mech)) {
+            $stmt_mt_m = $pdo->prepare("
+                SELECT COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))),''), u.name, u.username, NULLIF(mt.job_order_mechanic_name,'')) AS mname
+                FROM merchandise_transactions mt
+                LEFT JOIN users u ON mt.job_order_mechanic_id = u.id
+                WHERE mt.transaction_id = ? OR mt.id = ?
+                LIMIT 1
+            ");
+            $stmt_mt_m->execute([$txn_id, is_numeric($id) ? (int)$id : 0]);
+            $found_mt_m = $stmt_mt_m->fetchColumn();
+            if ($found_mt_m && !in_array(strtolower(trim($found_mt_m)), ['mechanic', 'unassigned', 'n/a', 'none', '-', ''])) {
+                $raw_mech = trim($found_mt_m);
+            }
+        }
+    } catch (Exception $e_mech) {}
+}
+
+$mechanic_name = $raw_mech;
+if ($mechanic_name) {
+    if (!isset($job_order) || !is_array($job_order)) {
+        $job_order = ['mechanic_name' => $mechanic_name];
+    } elseif (empty($job_order['mechanic_name'])) {
+        $job_order['mechanic_name'] = $mechanic_name;
+    }
+}
 
 // Logo path - robust dynamic resolution for both local subdirectories and production domains
 $logo = '';
@@ -1408,7 +1499,10 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
   <div class="jo-r-row"><span class="jo-r-key">Customer Name</span><span class="jo-r-val jo-r-bold"><?php echo htmlspecialchars($customer); ?></span></div>
   <?php endif; ?>
   <?php if ($show_cashier): ?>
-  <div class="jo-r-row"><span class="jo-r-key">Staff / Shift</span><span class="jo-r-val"><?php echo htmlspecialchars($staff_name) . ($shift_name ? ' (' . htmlspecialchars($shift_name) . ')' : ''); ?></span></div>
+  <div class="jo-r-row"><span class="jo-r-key">Staff</span><span class="jo-r-val"><?php echo htmlspecialchars($staff_name); ?></span></div>
+  <?php endif; ?>
+  <?php if (!empty($mechanic_name)): ?>
+  <div class="jo-r-row"><span class="jo-r-key">Mechanic</span><span class="jo-r-val jo-r-bold"><?php echo htmlspecialchars($mechanic_name); ?></span></div>
   <?php endif; ?>
 
   <div class="jo-r-div"></div>
@@ -1489,10 +1583,13 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
   </div>
   <?php endif; ?>
 
-  <?php if (!empty($job_order['mechanic_name'])): ?>
+  <?php 
+    $disp_jo_mech = !empty($job_order['mechanic_name']) ? $job_order['mechanic_name'] : $mechanic_name;
+    if (!empty($disp_jo_mech)): 
+  ?>
   <div class="jo-r-row">
     <span class="jo-r-key">Mechanic</span>
-    <span class="jo-r-val"><?php echo htmlspecialchars($job_order['mechanic_name']); ?></span>
+    <span class="jo-r-val jo-r-bold"><?php echo htmlspecialchars($disp_jo_mech); ?></span>
   </div>
   <?php endif; ?>
 

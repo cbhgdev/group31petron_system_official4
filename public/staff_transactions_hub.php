@@ -1866,14 +1866,25 @@ if ($section === 'merchandise') {
 
             // 4. Release Vehicle
             } elseif ($jo_action === 'release_job_order' || $jo_action === 'set_released') {
+                $is_adjusted_order = (
+                    strtolower(trim($cur['validation_status'] ?? '')) === 'adjusted' ||
+                    strtolower(trim($cur['status'] ?? '')) === 'adjusted' ||
+                    strtolower(trim($cur['workflow_status'] ?? '')) === 'adjusted' ||
+                    $cur_wf_lower === 'adjusted'
+                );
+
                 if ($cur_status === 'Pending' || $cur_status === 'Waiting for Parts') {
-                    throw new Exception('The Job Order must be completed before it can be released.');
+                    if (!$is_adjusted_order) {
+                        throw new Exception('The Job Order must be completed before it can be released.');
+                    }
                 }
                 if ($cur_status === 'In Progress') {
                     throw new Exception('Complete the Job Order before releasing it.');
                 }
                 if ($cur_status === 'Released') {
-                    throw new Exception('Job Order has already been released.');
+                    if (!$is_adjusted_order) {
+                        throw new Exception('Job Order has already been released.');
+                    }
                 }
                 if ($cur_status === 'Voided') {
                     throw new Exception('Cannot release a voided or cancelled Job Order.');
@@ -1885,24 +1896,25 @@ if ($section === 'merchandise') {
                 }
 
                 if ($jo_src === 'merchandise_transactions') {
-                    $pdo->prepare("UPDATE merchandise_transactions SET workflow_status='Released', released_at=NOW(), updated_at=NOW() WHERE id=? AND (station_id=? OR ?=0)")
+                    $pdo->prepare("UPDATE merchandise_transactions SET workflow_status='Released', validation_status=IF(LOWER(TRIM(validation_status))='adjusted', 'Approved', validation_status), released_at=NOW(), updated_at=NOW() WHERE id=? AND (station_id=? OR ?=0)")
                         ->execute([$jo_id, $station_id, $station_id]);
                     try {
-                        $pdo->prepare("UPDATE job_orders SET status='Released', released_at=NOW(), updated_at=NOW() WHERE (job_order_id = ? OR id = (SELECT job_order_db_id FROM merchandise_transactions WHERE id = ?)) AND (station_id=? OR ?=0)")
+                        $pdo->prepare("UPDATE job_orders SET status='Released', validation_status=IF(LOWER(TRIM(validation_status))='adjusted', 'Approved', validation_status), released_at=NOW(), updated_at=NOW() WHERE (job_order_id = ? OR id = (SELECT job_order_db_id FROM merchandise_transactions WHERE id = ?)) AND (station_id=? OR ?=0)")
                             ->execute([$jo_id, $jo_id, $station_id, $station_id]);
                     } catch (Exception $je) {}
                 } else {
-                    $pdo->prepare("UPDATE job_orders SET status='Released', released_at=NOW(), updated_at=NOW() WHERE id=? AND (station_id=? OR ?=0)")
+                    $pdo->prepare("UPDATE job_orders SET status='Released', validation_status=IF(LOWER(TRIM(validation_status))='adjusted', 'Approved', validation_status), released_at=NOW(), updated_at=NOW() WHERE id=? AND (station_id=? OR ?=0)")
                         ->execute([$jo_id, $station_id, $station_id]);
                     try {
-                        $pdo->prepare("UPDATE merchandise_transactions SET workflow_status='Released', released_at=NOW(), updated_at=NOW() WHERE (job_order_db_id = ? OR id = ?) AND (station_id=? OR ?=0)")
+                        $pdo->prepare("UPDATE merchandise_transactions SET workflow_status='Released', validation_status=IF(LOWER(TRIM(validation_status))='adjusted', 'Approved', validation_status), released_at=NOW(), updated_at=NOW() WHERE (job_order_db_id = ? OR id = ?) AND (station_id=? OR ?=0)")
                             ->execute([$jo_id, $jo_id, $station_id, $station_id]);
                     } catch (Exception $mte) {}
                 }
 
                 try {
+                    $old_val_log = $is_adjusted_order ? 'Adjusted' : $cur_status;
                     $pdo->prepare("INSERT INTO audit_trail (transaction_id, manager_id, action_type, old_value, new_value, station_id) VALUES (?, ?, 'JO_RELEASE_VEHICLE', ?, 'Released', ?)")
-                        ->execute([$ref_label, $me['id'] ?? 0, $cur_status, $station_id]);
+                        ->execute([$ref_label, $me['id'] ?? 0, $old_val_log, $station_id]);
                 } catch (Exception $ae) {}
 
                 log_activity($pdo, $me['id'] ?? 0, 'JO_RELEASE', "Vehicle for Job Order #{$ref_label} released by " . ($me['name'] ?? $me['username'] ?? 'Staff'));
@@ -7231,44 +7243,65 @@ setTimeout(function() {
                         <!-- Assigned Mechanic + Notes -->
                         <div class="txn-form-grid cols-3" style="margin-bottom:6px;">
                             <div class="txn-field">
-                                <label>Assigned Mechanic</label>
-                                <div style="position:relative;">
+                                <label style="display:flex;justify-content:space-between;align-items:center;">
+                                    <span>Assigned Mechanic</span>
+                                    <span id="joMechanicBadge" style="display:none;background:#eff6ff;color:#1e40af;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;border:1px solid #bfdbfe;">0 selected</span>
+                                </label>
+                                <div style="position:relative;" id="joMechanicContainer">
                                     <input type="text"
                                            id="joMechanic"
                                            class="txn-input"
-                                           placeholder="Type to search mechanic…"
+                                           placeholder="Type to search or check mechanic(s)…"
                                            autocomplete="off"
                                            oninput="filterMechanicDropdown(this.value)"
                                            onfocus="showMechanicDropdown()"
-                                           onblur="setTimeout(hideMechanicDropdown, 200)"
-                                           style="padding-right:36px !important;">
+                                           onclick="showMechanicDropdown()"
+                                           style="padding-right:36px !important;cursor:pointer;">
                                     <input type="hidden" id="joMechanicId"   value="">
                                     <input type="hidden" id="joMechanicName" value="">
                                     <i class="fas fa-chevron-down"
+                                       id="joMechanicChevron"
+                                       onclick="toggleMechanicDropdown(event)"
                                        style="position:absolute;right:10px;top:50%;transform:translateY(-50%);
-                                              color:#94a3b8;font-size:12px;pointer-events:none;"></i>
+                                              color:#94a3b8;font-size:12px;cursor:pointer;padding:6px;"></i>
                                     <div id="joMechanicDropdown"
                                          style="display:none;position:absolute;top:100%;left:0;right:0;
                                                 background:#fff;border:1.5px solid #cbd5e1;border-top:none;
-                                                border-radius:0 0 8px 8px;max-height:220px;overflow-y:auto;
-                                                z-index:999;box-shadow:0 8px 24px rgba(0,0,0,.12);">
-                                        <?php foreach ($mechanics as $mech): ?>
-                                        <div class="jo-mechanic-item"
-                                             data-id="<?= (int)$mech['id'] ?>"
-                                             data-name="<?= htmlspecialchars($mech['full_name']) ?>"
-                                             data-spec="<?= htmlspecialchars($mech['specialization'] ?? '') ?>"
-                                             onclick="selectMechanic(this)"
-                                             style="padding:9px 14px;cursor:pointer;font-size:13px;
-                                                    color:#1e293b;border-bottom:1px solid #f1f5f9;
-                                                    transition:background .12s;">
-                                            <?= htmlspecialchars($mech['full_name']) ?>
+                                                border-radius:0 0 8px 8px;max-height:240px;overflow-y:auto;
+                                                 z-index:999;box-shadow:0 8px 24px rgba(0,0,0,.12);">
+                                        <div id="joMechanicList">
+                                            <?php foreach ($mechanics as $mech): ?>
+                                            <label class="jo-mechanic-item"
+                                                   data-id="<?= (int)$mech['id'] ?>"
+                                                   data-name="<?= htmlspecialchars($mech['full_name']) ?>"
+                                                   data-spec="<?= htmlspecialchars($mech['specialization'] ?? '') ?>"
+                                                   style="display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;font-size:13px;
+                                                          color:#1e293b;border-bottom:1px solid #f1f5f9;
+                                                          transition:background .12s;margin:0;"
+                                                   onmouseover="this.style.background='#eff6ff'"
+                                                   onmouseout="this.style.background=''">
+                                                <input type="checkbox"
+                                                       class="jo-mech-checkbox"
+                                                       value="<?= (int)$mech['id'] ?>"
+                                                       data-id="<?= (int)$mech['id'] ?>"
+                                                       data-name="<?= htmlspecialchars($mech['full_name']) ?>"
+                                                       onchange="onMechanicCheckboxChange(this)"
+                                                       style="width:17px !important;height:17px !important;min-width:17px !important;max-width:17px !important;flex-shrink:0 !important;display:inline-block !important;margin:0 !important;accent-color:#002F70;cursor:pointer;">
+                                                <span style="flex:1;">
+                                                    <span style="font-weight:600;display:block;"><?= htmlspecialchars($mech['full_name']) ?></span>
+                                                    <?php if (!empty($mech['specialization'])): ?>
+                                                    <span style="font-size:11px;color:#64748b;display:block;"><?= htmlspecialchars($mech['specialization']) ?></span>
+                                                    <?php endif; ?>
+                                                </span>
+                                            </label>
+                                            <?php endforeach; ?>
+                                            <?php if (empty($mechanics)): ?>
+                                            <div style="padding:10px 14px;color:#94a3b8;font-size:12px;">No mechanics on record</div>
+                                            <?php endif; ?>
                                         </div>
-                                        <?php endforeach; ?>
-                                        <?php if (empty($mechanics)): ?>
-                                        <div style="padding:10px 14px;color:#94a3b8;font-size:12px;">No mechanics on record</div>
-                                        <?php endif; ?>
                                     </div>
                                 </div>
+                                <div id="joSelectedMechanicsTags" style="display:none;flex-wrap:wrap;gap:4px;margin-top:5px;"></div>
                             </div>
                             <div class="txn-field">
                                 <label>Estimated Duration (mins)</label>
@@ -7501,10 +7534,7 @@ setTimeout(function() {
                         </div><!-- /merchProductsSection -->
 
                         <!-- ══ FULL FORM RESET ══ -->
-                        <div style="display:flex;gap:10px;margin-top:24px;padding-top:14px;border-top:1.5px solid #e2e8f0;justify-content:space-between;align-items:center;flex-wrap:wrap;">
-                            <span style="font-size:12px;color:#64748b;">
-                                <i class="fas fa-info-circle"></i> Add products or services above. Items appear in the Order Summary on the right.
-                            </span>
+                        <div style="display:flex;gap:10px;margin-top:24px;padding-top:14px;border-top:1.5px solid #e2e8f0;justify-content:flex-end;align-items:center;">
                             <button type="button" class="txn-btn secondary" onclick="fullResetUnifiedForm()" title="Reset all form fields">
                                 <i class="fas fa-undo"></i> Reset Full Form
                             </button>
@@ -10135,49 +10165,134 @@ setTimeout(function() {
         // Fires when the Assigned Mechanic dropdown changes.
         // Calls the API and shows a warning banner if the mechanic has ongoing jobs.
         // ── Mechanic Typeahead Dropdown ──────────────────────────────────────
+        // ── Mechanic Multi-Select Dropdown ───────────────────────────────────
         function filterMechanicDropdown(query) {
             const dd    = document.getElementById('joMechanicDropdown');
             const items = dd ? dd.querySelectorAll('.jo-mechanic-item') : [];
             const q     = query.toLowerCase().trim();
-            let anyVisible = false;
             items.forEach(item => {
                 const name = (item.dataset.name || '').toLowerCase();
                 const spec = (item.dataset.spec || '').toLowerCase();
                 const show = !q || name.includes(q) || spec.includes(q);
-                item.style.display = show ? '' : 'none';
-                if (show) anyVisible = true;
+                item.style.display = show ? 'flex' : 'none';
             });
             if (dd) dd.style.display = 'block';
-            // Clear hidden fields if text was manually changed (no selection yet)
-            const hiddenId = document.getElementById('joMechanicId');
-            if (hiddenId && hiddenId.value) {
-                // User is typing again — deselect previous choice
-                hiddenId.value = '';
-                document.getElementById('joMechanicName').value = '';
-            }
         }
 
         function showMechanicDropdown() {
             const dd    = document.getElementById('joMechanicDropdown');
             const items = dd ? dd.querySelectorAll('.jo-mechanic-item') : [];
-            items.forEach(i => i.style.display = '');   // show all
+            items.forEach(i => i.style.display = 'flex');   // show all
             if (dd) dd.style.display = 'block';
         }
+
+        window.toggleMechanicDropdown = function toggleMechanicDropdown(e) {
+            if (e) e.stopPropagation();
+            const dd = document.getElementById('joMechanicDropdown');
+            if (!dd) return;
+            if (dd.style.display === 'block') {
+                hideMechanicDropdown();
+            } else {
+                showMechanicDropdown();
+            }
+        };
 
         window.hideMechanicDropdown = function hideMechanicDropdown() {
             const dd = document.getElementById('joMechanicDropdown');
             if (dd) dd.style.display = 'none';
+        };
+
+        function onMechanicCheckboxChange(cb) {
+            updateSelectedMechanics();
         }
 
-        function selectMechanic(el) {
-            const id   = el.dataset.id   || '';
-            const name = el.dataset.name || '';
-            document.getElementById('joMechanic').value     = name;
-            document.getElementById('joMechanicId').value   = id;
-            document.getElementById('joMechanicName').value = name;
-            hideMechanicDropdown();
-            // Trigger busy-check
+        function updateSelectedMechanics() {
+            const checkedBoxes = Array.from(document.querySelectorAll('.jo-mech-checkbox:checked'));
+            const ids   = checkedBoxes.map(cb => cb.value || cb.dataset.id).filter(Boolean);
+            const names = checkedBoxes.map(cb => (cb.dataset.name || '').trim()).filter(Boolean);
+
+            const idStr   = ids.join(', ');
+            const nameStr = names.join(', ');
+
+            const hiddenId   = document.getElementById('joMechanicId');
+            const hiddenName = document.getElementById('joMechanicName');
+            const textInput  = document.getElementById('joMechanic');
+
+            if (hiddenId)   hiddenId.value   = idStr;
+            if (hiddenName) hiddenName.value = nameStr;
+            if (textInput)  textInput.value  = nameStr;
+
+            // Update badge / counter
+            const badge = document.getElementById('joMechanicBadge');
+            if (badge) {
+                if (ids.length > 0) {
+                    badge.textContent = `${ids.length} selected`;
+                    badge.style.display = 'inline-block';
+                } else {
+                    badge.style.display = 'none';
+                }
+            }
+
+            const countLabel = document.getElementById('joMechanicCountLabel');
+            if (countLabel) {
+                countLabel.textContent = ids.length > 0 ? `${ids.length} selected` : 'Check one or more';
+            }
+
+            // Update tags display under the input
+            const tagsDiv = document.getElementById('joSelectedMechanicsTags');
+            if (tagsDiv) {
+                if (ids.length > 0) {
+                    tagsDiv.innerHTML = names.map((name, idx) => {
+                        const mid = ids[idx];
+                        return `<span style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:20px;padding:3px 10px;font-size:11px;color:#1e40af;font-weight:600;display:inline-flex;align-items:center;gap:6px;">
+                                    ${escapeHtml(name)}
+                                    <span onclick="removeMechanicById('${mid}', event)" style="cursor:pointer;color:#64748b;font-size:13px;line-height:1;font-weight:700;" title="Remove">&times;</span>
+                                </span>`;
+                    }).join('');
+                    tagsDiv.style.display = 'flex';
+                } else {
+                    tagsDiv.innerHTML = '';
+                    tagsDiv.style.display = 'none';
+                }
+            }
+
+            // Trigger busy-check for the selected mechanic(s)
             onMechanicChange();
+        }
+
+        window.removeMechanicById = function removeMechanicById(mechId, e) {
+            if (e) e.stopPropagation();
+            const cb = document.querySelector(`.jo-mech-checkbox[value="${mechId}"], .jo-mech-checkbox[data-id="${mechId}"]`);
+            if (cb) {
+                cb.checked = false;
+            }
+            updateSelectedMechanics();
+        };
+
+        window.selectAllMechanics = function selectAllMechanics(e) {
+            if (e) e.stopPropagation();
+            document.querySelectorAll('.jo-mech-checkbox').forEach(cb => {
+                const item = cb.closest('.jo-mechanic-item');
+                if (!item || item.style.display !== 'none') {
+                    cb.checked = true;
+                }
+            });
+            updateSelectedMechanics();
+        };
+
+        window.clearSelectedMechanics = function clearSelectedMechanics(e) {
+            if (e) e.stopPropagation();
+            document.querySelectorAll('.jo-mech-checkbox').forEach(cb => cb.checked = false);
+            updateSelectedMechanics();
+        };
+
+        // Legacy alias so single select or old callers don't fail
+        function selectMechanic(el) {
+            const cb = el.querySelector ? el.querySelector('.jo-mech-checkbox') : null;
+            if (cb) {
+                cb.checked = !cb.checked;
+                updateSelectedMechanics();
+            }
         }
 
         // ── Mechanic Busy-Check ──────────────────────────────────────────────
@@ -10186,7 +10301,6 @@ setTimeout(function() {
             const listEl  = document.getElementById('joMechanicBusyList');
             if (!warnBox || !listEl) return;
 
-            // Now reads from the hidden ID field (joMechanic is a text input)
             const mechId = (document.getElementById('joMechanicId')?.value || '').trim();
             if (!mechId) {
                 warnBox.style.display = 'none';
@@ -10210,14 +10324,15 @@ setTimeout(function() {
                     };
                     listEl.innerHTML = data.jobs.map(j => {
                         const color  = statusColors[j.status] || '#475569';
-                        const plate  = j.vehicle_plate ? ` — <strong>${j.vehicle_plate}</strong>` : '';
-                        const svc    = j.service_label  ? ` (${j.service_label})`                 : '';
-                        const ref    = j.jo_ref         ? `<span style="font-weight:700;">${j.jo_ref}</span>` : '';
+                        const mName  = j.mechanic_name ? `<span style="color:#002F70;font-weight:700;">[${escapeHtml(j.mechanic_name)}]</span> ` : '';
+                        const plate  = j.vehicle_plate ? ` — <strong>${escapeHtml(j.vehicle_plate)}</strong>` : '';
+                        const svc    = j.service_label  ? ` (${escapeHtml(j.service_label)})`                 : '';
+                        const ref    = j.jo_ref         ? `<span style="font-weight:700;">${escapeHtml(j.jo_ref)}</span>` : '';
                         return `<div style="display:flex;align-items:center;gap:6px;padding:4px 8px;
                                             background:#fff;border:1px solid #fde68a;border-radius:6px;font-size:11px;">
                                     <span style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0;"></span>
-                                    ${ref}${svc}${plate}
-                                    <span style="margin-left:auto;color:${color};font-weight:700;">${j.status}</span>
+                                    ${mName}${ref}${svc}${plate}
+                                    <span style="margin-left:auto;color:${color};font-weight:700;">${escapeHtml(j.status)}</span>
                                 </div>`;
                     }).join('');
                     warnBox.style.display = 'block';
@@ -10530,16 +10645,23 @@ setTimeout(function() {
                 !dropdown.contains(e.target)) {
                 hideServiceDropdown();
             }
+
+            const mCont = document.getElementById('joMechanicContainer');
+            if (mCont && !mCont.contains(e.target)) {
+                hideMechanicDropdown();
+            }
         });
 
         // Ensure dropdowns are strictly hidden on page load / refresh
         document.addEventListener('DOMContentLoaded', function() {
             closeProductDropdown();
             hideServiceDropdown();
+            hideMechanicDropdown();
         });
         window.addEventListener('load', function() {
             closeProductDropdown();
             hideServiceDropdown();
+            hideMechanicDropdown();
         });
         
         // ── Select service type ───────────────────────────────────────────────
@@ -11504,12 +11626,17 @@ setTimeout(function() {
             if (joEstimatedDuration) joEstimatedDuration.value = '';
 
             // Reset mechanic
-            const joMechanic = document.getElementById('joMechanic');
-            if (joMechanic) joMechanic.value = '';
-            const joMechanicId = document.getElementById('joMechanicId');
-            if (joMechanicId) joMechanicId.value = '';
-            const joMechanicName = document.getElementById('joMechanicName');
-            if (joMechanicName) joMechanicName.value = '';
+            if (typeof clearSelectedMechanics === 'function') {
+                clearSelectedMechanics();
+            } else {
+                const joMechanic = document.getElementById('joMechanic');
+                if (joMechanic) joMechanic.value = '';
+                const joMechanicId = document.getElementById('joMechanicId');
+                if (joMechanicId) joMechanicId.value = '';
+                const joMechanicName = document.getElementById('joMechanicName');
+                if (joMechanicName) joMechanicName.value = '';
+                document.querySelectorAll('.jo-mech-checkbox').forEach(cb => cb.checked = false);
+            }
             if (typeof hideMechanicDropdown === 'function') hideMechanicDropdown();
 
             // Clear Cart & Payment details
@@ -12730,12 +12857,17 @@ setTimeout(function() {
             if (joEstimatedDuration) joEstimatedDuration.value = '';
 
             // Reset mechanic
-            const joMechanic = document.getElementById('joMechanic');
-            if (joMechanic) joMechanic.value = '';
-            const joMechanicId = document.getElementById('joMechanicId');
-            if (joMechanicId) joMechanicId.value = '';
-            const joMechanicName = document.getElementById('joMechanicName');
-            if (joMechanicName) joMechanicName.value = '';
+            if (typeof clearSelectedMechanics === 'function') {
+                clearSelectedMechanics();
+            } else {
+                const joMechanic = document.getElementById('joMechanic');
+                if (joMechanic) joMechanic.value = '';
+                const joMechanicId = document.getElementById('joMechanicId');
+                if (joMechanicId) joMechanicId.value = '';
+                const joMechanicName = document.getElementById('joMechanicName');
+                if (joMechanicName) joMechanicName.value = '';
+                document.querySelectorAll('.jo-mech-checkbox').forEach(cb => cb.checked = false);
+            }
             hideMechanicDropdown();
 
             // Clear payment and loyalty fields
@@ -13325,12 +13457,17 @@ setTimeout(function() {
             // Reset vehicle type and mechanic typeahead
             const vehicleInput = document.getElementById('joVehicleType');
             if (vehicleInput) vehicleInput.value = '';
-            const mechInput = document.getElementById('joMechanic');
-            if (mechInput) mechInput.value = '';
-            const mechIdHid = document.getElementById('joMechanicId');
-            if (mechIdHid) mechIdHid.value = '';
-            const mechNameHid = document.getElementById('joMechanicName');
-            if (mechNameHid) mechNameHid.value = '';
+            if (typeof clearSelectedMechanics === 'function') {
+                clearSelectedMechanics();
+            } else {
+                const mechInput = document.getElementById('joMechanic');
+                if (mechInput) mechInput.value = '';
+                const mechIdHid = document.getElementById('joMechanicId');
+                if (mechIdHid) mechIdHid.value = '';
+                const mechNameHid = document.getElementById('joMechanicName');
+                if (mechNameHid) mechNameHid.value = '';
+                document.querySelectorAll('.jo-mech-checkbox').forEach(cb => cb.checked = false);
+            }
             hideMechanicDropdown();
             // Hide pricing notes and suggested parts
             const notesWrap = document.getElementById('joServicePriceNotes');
@@ -14257,6 +14394,7 @@ setTimeout(function() {
                         <option value="inprogress">In Progress</option>
                         <option value="completed">Completed</option>
                         <option value="released">Released</option>
+                        <option value="adjusted">Adjusted</option>
                     </select>
                 </div>
 
@@ -14824,42 +14962,67 @@ setTimeout(function() {
                                             class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
                                         <i class="fas fa-print"></i> Reprint
                                     </button>
-                                    <span style="font-size:12px;color:#4338ca;font-weight:800;text-align:center;padding:2px 0;">
-                                        <i class="fas fa-check-circle"></i> Adjusted
-                                    </span>
-                                    <?php if (in_array($canonical_status, ['Completed','Released'])): ?>
+
+                                    <?php
+                                    $is_credit_approved = ($pay_method === 'Credit Account' || in_array($pay_status, ['Credit Account', 'Credit Transaction', 'Credit', 'Receivables/Credit', 'A/R']));
+                                    $is_fully_paid = ($pay_status === 'Paid' || $jo_balance <= 0.009);
+                                    $can_release = ($is_fully_paid || $is_credit_approved);
+                                    ?>
+
+                                    <?php if (!$can_release): ?>
                                         <button type="button"
-                                                data-jo-id="<?= (int)$job['id'] ?>"
-                                                data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                                data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                                data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                                data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                                data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                                data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
-                                                data-jo-total="<?= (float)$jo_total ?>"
-                                                data-jo-labor="<?= (float)$labor_fee_val ?>"
-                                                data-jo-paid="<?= (float)$jo_paid ?>"
-                                                data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
-                                                data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
-                                                data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
-                                                data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
-                                                onclick="return openRequestAdjustModal(event, this);"
-                                                class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
-                                            <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
+                                                onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Completed')"
+                                                class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
+                                            <i class="fas fa-money-bill-wave"></i>
+                                            <?= in_array($pay_status, ['Partially Paid','Partial Payment','Partial']) ? 'Settle Balance' : 'Mark Paid' ?>
                                         </button>
-                                        <?php if ($enable_void_transaction): ?>
+
                                         <button type="button"
-                                                data-jo-id="<?= (int)$job['id'] ?>"
-                                                data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                                data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                                data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                                data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                                data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                                onclick="return openRequestVoidModal(event, this);"
-                                                class="void-btn">
-                                            <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
+                                                class="txn-btn primary jo-btn-disabled"
+                                                title="Settle the outstanding balance or obtain the required authorized credit approval before releasing this Job Order."
+                                                onclick="showTxnAlert('Settle the outstanding balance or obtain the required authorized credit approval before releasing this Job Order.', 'warning');"
+                                                style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#94a3b8 !important;color:#fff !important;cursor:not-allowed;opacity:0.65;border:none;">
+                                            <i class="fas fa-car-side"></i> Release Vehicle
                                         </button>
-                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <button type="button"
+                                                onclick="performJobOrderAction('release_job_order', <?= (int)$job['id'] ?>, '<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>', this)"
+                                                class="txn-btn primary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#002F70;color:#fff;border:none;">
+                                            <i class="fas fa-car-side"></i> Release Vehicle
+                                        </button>
+                                    <?php endif; ?>
+
+                                    <button type="button"
+                                            data-jo-id="<?= (int)$job['id'] ?>"
+                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
+                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
+                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
+                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
+                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
+                                            data-jo-total="<?= (float)$jo_total ?>"
+                                            data-jo-labor="<?= (float)$labor_fee_val ?>"
+                                            data-jo-paid="<?= (float)$jo_paid ?>"
+                                            data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
+                                            data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
+                                            data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
+                                            data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
+                                            onclick="return openRequestAdjustModal(event, this);"
+                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
+                                        <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
+                                    </button>
+                                    <?php if ($enable_void_transaction): ?>
+                                    <button type="button"
+                                            data-jo-id="<?= (int)$job['id'] ?>"
+                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
+                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
+                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
+                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
+                                            onclick="return openRequestVoidModal(event, this);"
+                                            class="void-btn">
+                                        <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
+                                    </button>
                                     <?php endif; ?>
 
                                 <?php elseif ($canonical_status === 'Released'): ?>

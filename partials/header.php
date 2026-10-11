@@ -115,7 +115,7 @@ $header_notif_url = function($url, $context = []) use ($app_base_path, $public_b
         }
     }
 
-    // Remap Purchase Order notifications to Purchase Management (manager_stock_request_review.php)
+    // Remap Purchase Order notifications
     $is_po_issued = (
         strpos($title_check, 'purchase order') !== false ||
         strpos($message_check, 'purchase order') !== false ||
@@ -124,7 +124,13 @@ $header_notif_url = function($url, $context = []) use ($app_base_path, $public_b
         strpos($url, 'manager_purchase_orders.php') !== false
     );
     if ($is_po_issued) {
-        $url = 'manager_stock_request_review.php';
+        $uRole = function_exists('role_key') ? role_key($_SESSION['user']['role'] ?? '') : '';
+        if (in_array($uRole, ['staff', 'cashier', 'pump_attendant'], true)) {
+            $is_fuel = (strpos($title_check, 'fuel') !== false || strpos($message_check, 'fuel') !== false || $evt_check === 'fuel_stock_request');
+            $url = $is_fuel ? 'staff_record_delivery.php?tab=fuel' : 'staff_record_delivery.php?tab=merchandise';
+        } else {
+            $url = 'manager_stock_request_review.php';
+        }
     }
 
     if ($url === '' || $url === '#') return '#';

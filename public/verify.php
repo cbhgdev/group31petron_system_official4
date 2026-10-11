@@ -17,13 +17,15 @@ if ($id === '') {
         // First: Try merchandise_transactions table (handles merchandise, job_order, and combined types)
         $stmt = $pdo->prepare("
             SELECT mt.*,
-                   COALESCE(u.username, 'Staff') AS staff_name,
+                   COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))),''), u.name, u.username, 'Staff') AS staff_name,
+                   COALESCE(NULLIF(mt.job_order_mechanic_name,''), NULLIF(TRIM(CONCAT(COALESCE(m.first_name,''),' ',COALESCE(m.last_name,''))),''), m.name, m.username) AS resolved_mechanic_name,
                    COALESCE(s.name, 'Petron Station') AS station_name,
                    COALESCE(s.location, '') AS station_location,
                    COALESCE(s.address, 'Vamenta Blvd., Carmen, CDO') AS station_address,
                    COALESCE(s.vat_tin, '236-002-207-0000') AS station_vat_tin
             FROM   merchandise_transactions mt
             LEFT JOIN users    u ON mt.staff_id   = u.id
+            LEFT JOIN users    m ON (mt.job_order_mechanic_id IS NOT NULL AND mt.job_order_mechanic_id = m.id)
             LEFT JOIN stations s ON mt.station_id = s.id
             WHERE  mt.transaction_id = ? OR mt.id = ?
             LIMIT  1
@@ -54,14 +56,16 @@ if ($id === '') {
             // Handle IDs: numeric (123), with hash (#123), or string (JO-123)
             $stmt_jo = $pdo->prepare("
                 SELECT jo.*,
-                       COALESCE(cb.username, 'Staff') AS staff_name,
-                       COALESCE(s.name, 'Petron Station') AS station_name,
-                       COALESCE(s.location, '') AS station_location,
-                       COALESCE(s.address, 'Vamenta Blvd., Carmen, CDO') AS station_address,
-                       COALESCE(s.vat_tin, '236-002-207-0000') AS station_vat_tin
+                       COALESCE(NULLIF(TRIM(CONCAT(COALESCE(cb.first_name,''),' ',COALESCE(cb.last_name,''))),''), cb.name, cb.username, 'Staff') AS staff_name,
+                       COALESCE(NULLIF(jo.mechanic_name,''), NULLIF(jo.assigned_mechanic,''), NULLIF(TRIM(CONCAT(COALESCE(mech.first_name,''),' ',COALESCE(mech.last_name,''))),''), mech.name, mech.username) AS resolved_mechanic_name,
+                       s.name  AS station_name,
+                       s.location AS station_location,
+                       s.address  AS station_address,
+                       s.vat_tin  AS station_vat_tin
                 FROM   job_orders jo
-                LEFT JOIN users    cb ON cb.id = jo.created_by
-                LEFT JOIN stations s  ON s.id  = jo.station_id
+                LEFT JOIN users    cb   ON cb.id   = jo.created_by
+                LEFT JOIN users    mech ON (mech.id = jo.assigned_mechanic_id OR mech.id = jo.mechanic_id)
+                LEFT JOIN stations s    ON s.id    = jo.station_id
                 WHERE  jo.job_order_id = ? OR jo.job_order_number = ? OR jo.id = ?
                 LIMIT  1
             ");
@@ -95,7 +99,7 @@ if ($id === '') {
                     'transaction_type' => 'job_order',
                     'job_order_service' => $jo['service_type'] ?? 'Service',
                     'job_order_vehicle_plate' => $jo['vehicle_plate'] ?? '',
-                    'job_order_mechanic_name' => $jo['mechanic_name'] ?? $jo['assigned_mechanic'] ?? '',
+                    'job_order_mechanic_name' => $jo['resolved_mechanic_name'] ?? $jo['mechanic_name'] ?? $jo['assigned_mechanic'] ?? '',
                 ];
                 
                 // Build items array from service
@@ -444,6 +448,13 @@ body {
       <div class="vrow"><span class="vrow-key">Time</span><span class="vrow-val"><?php echo $disp_time; ?></span></div>
       <div class="vrow"><span class="vrow-key">Customer</span><span class="vrow-val"><?php echo htmlspecialchars($customer); ?></span></div>
       <div class="vrow"><span class="vrow-key">Staff</span><span class="vrow-val"><?php echo htmlspecialchars($txn['staff_name'] ?? 'N/A'); ?></span></div>
+      <?php 
+        $verify_mech = $txn['resolved_mechanic_name'] ?? $txn['job_order_mechanic_name'] ?? '';
+        if (in_array(strtolower(trim((string)$verify_mech)), ['mechanic', 'unassigned', 'n/a', 'none', '-', ''])) $verify_mech = '';
+        if (!empty($verify_mech)):
+      ?>
+      <div class="vrow"><span class="vrow-key">Mechanic</span><span class="vrow-val" style="font-weight:700;"><?php echo htmlspecialchars($verify_mech); ?></span></div>
+      <?php endif; ?>
       <div class="vrow"><span class="vrow-key">Station</span><span class="vrow-val"><?php echo htmlspecialchars($station); ?></span></div>
       <div class="vrow"><span class="vrow-key">VAT TIN</span><span class="vrow-val"><?php echo htmlspecialchars($vat_tin); ?></span></div>
     </div>
@@ -495,8 +506,11 @@ body {
       <?php if (!empty($txn['job_order_vehicle_type'])): ?>
       <div class="vrow"><span class="vrow-key">Vehicle Type</span><span class="vrow-val"><?php echo htmlspecialchars($txn['job_order_vehicle_type']); ?></span></div>
       <?php endif; ?>
-      <?php if (!empty($txn['job_order_mechanic_name'])): ?>
-      <div class="vrow"><span class="vrow-key">Mechanic</span><span class="vrow-val"><?php echo htmlspecialchars($txn['job_order_mechanic_name']); ?></span></div>
+      <?php 
+        $jo_mech_disp = !empty($txn['job_order_mechanic_name']) ? $txn['job_order_mechanic_name'] : $verify_mech;
+        if (!empty($jo_mech_disp)): 
+      ?>
+      <div class="vrow"><span class="vrow-key">Mechanic</span><span class="vrow-val" style="font-weight:700;"><?php echo htmlspecialchars($jo_mech_disp); ?></span></div>
       <?php endif; ?>
       <?php if (!empty($txn['job_order_description'])): ?>
       <div class="vrow" style="align-items:flex-start;"><span class="vrow-key">Description</span><span class="vrow-val" style="font-size:12px;color:#64748b;"><?php echo nl2br(htmlspecialchars($txn['job_order_description'])); ?></span></div>

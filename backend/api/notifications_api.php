@@ -53,7 +53,8 @@ try {
         INDEX idx_event_type  (event_type),
         INDEX idx_source_key  (source_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
-    $pdo->exec("UPDATE notifications SET redirect_url = 'manager_stock_request_review.php' WHERE (title LIKE '%Purchase Order%' OR message LIKE '%Purchase Order%' OR event_type = 'purchase_order' OR reference_type = 'purchase_order') AND (redirect_url LIKE '%staff_record_delivery%' OR redirect_url LIKE '%staff_inventory%' OR redirect_url LIKE '%admin_stock_confirmation%' OR redirect_url = '' OR redirect_url IS NULL)");
+    $pdo->exec("UPDATE notifications n JOIN users u ON u.id = n.user_id SET n.redirect_url = CASE WHEN (n.title LIKE '%Fuel%' OR n.message LIKE '%Fuel%') THEN 'staff_record_delivery.php?tab=fuel' ELSE 'staff_record_delivery.php?tab=merchandise' END WHERE u.role IN ('staff','cashier','pump_attendant') AND (n.title LIKE '%Stock Request%' OR n.title LIKE '%Purchase Order%' OR n.message LIKE '%Purchase Order%' OR n.event_type = 'purchase_order' OR n.reference_type = 'purchase_order')");
+    $pdo->exec("UPDATE notifications n JOIN users u ON u.id = n.user_id SET n.redirect_url = 'manager_stock_request_review.php' WHERE u.role IN ('manager','admin','superadmin') AND (n.title LIKE '%Purchase Order%' OR n.message LIKE '%Purchase Order%' OR n.event_type = 'purchase_order' OR n.reference_type = 'purchase_order') AND (n.redirect_url LIKE '%staff%' OR n.redirect_url = '' OR n.redirect_url IS NULL)");
     $pdo->exec("UPDATE notifications SET redirect_url = 'manager_inventory_merchandise.php?tab=adjustments' WHERE (title LIKE '%Stock Adjustment%' OR title LIKE '%Merchandise Adjustment%' OR event_type IN ('inventory_adjustment','stock_adjustment','merchandise_adjustment')) AND (redirect_url NOT LIKE '%manager_inventory_merchandise.php?tab=adjustments%' OR redirect_url IS NULL OR redirect_url = '')");
 } catch (Throwable $e) {}
 
@@ -386,15 +387,22 @@ try {
                         stripos((string)($n['redirect_url'] ?? ''), 'manager_stock_request_review.php') !== false ||
                         stripos((string)($n['redirect_url'] ?? ''), 'manager_purchase_orders.php') !== false
                     ) {
-                        $n['redirect_url'] = 'manager_stock_request_review.php';
+                        if (in_array($role, ['staff', 'cashier', 'pump_attendant'], true)) {
+                            $is_fuel = (stripos($n['title'], 'fuel') !== false || stripos($n['message'], 'fuel') !== false || in_array($n['event_type'], ['fuel','fuel_stock_in','fuel_delivery','fuel_management','fuel_reading']));
+                            $n['redirect_url'] = $is_fuel ? 'staff_record_delivery.php?tab=fuel' : 'staff_record_delivery.php?tab=merchandise';
+                        } else {
+                            $n['redirect_url'] = 'manager_stock_request_review.php';
+                        }
                     } elseif (in_array($role, ['staff', 'cashier', 'pump_attendant'])) {
                         $is_fuel = (stripos($n['title'], 'fuel') !== false || stripos($n['message'], 'fuel') !== false || in_array($n['event_type'], ['fuel','fuel_stock_in','fuel_delivery','fuel_management','fuel_reading']));
                         $raw_red = (string)($n['redirect_url'] ?? '');
-                        if (stripos($raw_red, 'staff_fuel_deliveries.php') !== false || stripos($raw_red, 'staff_record_delivery.php') !== false) {
-                            $n['redirect_url'] = $is_fuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+                        if (stripos($raw_red, 'staff_fuel_deliveries.php') !== false) {
+                            $n['redirect_url'] = 'staff_inventory_fuel.php';
+                        } elseif (stripos($raw_red, 'staff_record_delivery.php') !== false) {
+                            $n['redirect_url'] = $raw_red;
                         } elseif (in_array($n['event_type'], ['stock_in', 'merchandise_stock_in', 'fuel_stock_in', 'delivery'])) {
-                            if (empty($raw_red) || $raw_red === '#' || stripos($raw_red, 'record_delivery') !== false || stripos($raw_red, 'admin_stock_confirmation') !== false) {
-                                $n['redirect_url'] = $is_fuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
+                            if (empty($raw_red) || $raw_red === '#' || stripos($raw_red, 'admin_stock_confirmation') !== false) {
+                                $n['redirect_url'] = $is_fuel ? 'staff_record_delivery.php?tab=fuel' : 'staff_record_delivery.php?tab=merchandise';
                             }
                         }
                     }

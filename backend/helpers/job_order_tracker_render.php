@@ -429,42 +429,67 @@ if (!function_exists('render_job_order_tracker_rows')) {
                                 class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
                             <i class="fas fa-print"></i> Reprint
                         </button>
-                        <span style="font-size:12px;color:#4338ca;font-weight:800;text-align:center;padding:2px 0;">
-                            <i class="fas fa-check-circle"></i> Adjusted
-                        </span>
-                        <?php if (in_array($canonical_status, ['Completed','Released'])): ?>
+
+                        <?php
+                        $is_credit_approved = ($pay_method === 'Credit Account' || in_array($pay_status, ['Credit Account', 'Credit Transaction', 'Credit', 'Receivables/Credit', 'A/R']));
+                        $is_fully_paid = ($pay_status === 'Paid' || $jo_balance <= 0.009);
+                        $can_release = ($is_fully_paid || $is_credit_approved);
+                        ?>
+
+                        <?php if (!$can_release): ?>
                             <button type="button"
-                                    data-jo-id="<?= (int)$job['id'] ?>"
-                                    data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                    data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                    data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                    data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                    data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                    data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
-                                    data-jo-total="<?= (float)$jo_total ?>"
-                                    data-jo-labor="<?= (float)$labor_fee_val ?>"
-                                    data-jo-paid="<?= (float)$jo_paid ?>"
-                                    data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
-                                    data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
-                                    data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
-                                    data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
-                                    onclick="return openRequestAdjustModal(event, this);"
-                                    class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
-                                <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
+                                    onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Completed')"
+                                    class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
+                                <i class="fas fa-money-bill-wave"></i>
+                                <?= in_array($pay_status, ['Partially Paid','Partial Payment','Partial']) ? 'Settle Balance' : 'Mark Paid' ?>
                             </button>
-                            <?php if ($enable_void_transaction): ?>
+
                             <button type="button"
-                                    data-jo-id="<?= (int)$job['id'] ?>"
-                                    data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                    data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                    data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                    data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                    data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                    onclick="return openRequestVoidModal(event, this);"
-                                    class="void-btn">
-                                <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
+                                    class="txn-btn primary jo-btn-disabled"
+                                    title="Settle the outstanding balance or obtain the required authorized credit approval before releasing this Job Order."
+                                    onclick="showTxnAlert('Settle the outstanding balance or obtain the required authorized credit approval before releasing this Job Order.', 'warning');"
+                                    style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#94a3b8 !important;color:#fff !important;cursor:not-allowed;opacity:0.65;border:none;">
+                                <i class="fas fa-car-side"></i> Release Vehicle
                             </button>
-                            <?php endif; ?>
+                        <?php else: ?>
+                            <button type="button"
+                                    onclick="performJobOrderAction('release_job_order', <?= (int)$job['id'] ?>, '<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>', this)"
+                                    class="txn-btn primary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#002F70;color:#fff;border:none;">
+                                <i class="fas fa-car-side"></i> Release Vehicle
+                            </button>
+                        <?php endif; ?>
+
+                        <button type="button"
+                                data-jo-id="<?= (int)$job['id'] ?>"
+                                data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+                                data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
+                                data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
+                                data-jo-status="<?= htmlspecialchars($wf_label) ?>"
+                                data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
+                                data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
+                                data-jo-total="<?= (float)$jo_total ?>"
+                                data-jo-labor="<?= (float)$labor_fee_val ?>"
+                                data-jo-paid="<?= (float)$jo_paid ?>"
+                                data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
+                                data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
+                                data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
+                                data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
+                                onclick="return openRequestAdjustModal(event, this);"
+                                class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
+                            <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
+                        </button>
+                        <?php if ($enable_void_transaction): ?>
+                        <button type="button"
+                                data-jo-id="<?= (int)$job['id'] ?>"
+                                data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+                                data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
+                                data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
+                                data-jo-status="<?= htmlspecialchars($wf_label) ?>"
+                                data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
+                                onclick="return openRequestVoidModal(event, this);"
+                                class="void-btn">
+                            <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
+                        </button>
                         <?php endif; ?>
 
                     <?php elseif ($canonical_status === 'Released'): ?>

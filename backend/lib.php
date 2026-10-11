@@ -4190,9 +4190,9 @@ function notify(
                 "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reference_type VARCHAR(80) NULL AFTER redirect_url",
                 "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reference_id INT NULL AFTER reference_type",
                 "ALTER TABLE notifications ADD COLUMN IF NOT EXISTS shift_period VARCHAR(20) NULL AFTER reference_id",
-                "UPDATE notifications SET redirect_url = 'staff_inventory_fuel.php' WHERE (redirect_url LIKE '%staff_fuel_deliveries.php%' OR redirect_url LIKE '%staff_record_delivery.php%tab=fuel%') OR (redirect_url LIKE '%staff_record_delivery.php%' AND (title LIKE '%Fuel%' OR event_type IN ('fuel','fuel_stock_in','fuel_delivery') OR message LIKE '%Fuel%'))",
-                "UPDATE notifications SET redirect_url = 'staff_inventory_merchandise.php' WHERE redirect_url LIKE '%staff_record_delivery.php%' OR (event_type IN ('stock_in','merchandise_stock_in','delivery') AND (redirect_url LIKE '%staff_fuel_deliveries.php%' OR redirect_url LIKE '%staff_record_delivery.php%'))",
-                "UPDATE notifications SET redirect_url = 'manager_stock_request_review.php' WHERE (title LIKE '%Purchase Order%' OR message LIKE '%Purchase Order%' OR event_type = 'purchase_order' OR reference_type = 'purchase_order')",
+                "UPDATE notifications SET redirect_url = 'staff_inventory_fuel.php' WHERE redirect_url LIKE '%staff_fuel_deliveries.php%'",
+                "UPDATE notifications n JOIN users u ON u.id = n.user_id SET n.redirect_url = CASE WHEN (n.title LIKE '%Fuel%' OR n.message LIKE '%Fuel%') THEN 'staff_record_delivery.php?tab=fuel' ELSE 'staff_record_delivery.php?tab=merchandise' END WHERE u.role IN ('staff','cashier','pump_attendant') AND (n.title LIKE '%Stock Request%' OR n.title LIKE '%Purchase Order%' OR n.message LIKE '%Purchase Order%' OR n.event_type = 'purchase_order' OR n.reference_type = 'purchase_order')",
+                "UPDATE notifications n JOIN users u ON u.id = n.user_id SET n.redirect_url = 'manager_stock_request_review.php' WHERE u.role IN ('manager','admin','superadmin') AND (n.title LIKE '%Purchase Order%' OR n.message LIKE '%Purchase Order%' OR n.event_type = 'purchase_order' OR n.reference_type = 'purchase_order') AND (n.redirect_url LIKE '%staff%' OR n.redirect_url = '' OR n.redirect_url IS NULL)",
             ] as $ddl) {
                 try { $pdo->exec($ddl); } catch (Throwable $e) {}
             }
@@ -4207,7 +4207,13 @@ function notify(
             $event_type === 'purchase_order' ||
             $ref_type === 'purchase_order'
         ) {
-            $redirect_url = 'manager_stock_request_review.php';
+            $userRoleKey = function_exists('role_key') ? role_key($role) : strtolower($role);
+            if (in_array($userRoleKey, ['staff', 'cashier', 'pump_attendant'], true)) {
+                $is_fuel = (stripos($title, 'fuel') !== false || stripos($message, 'fuel') !== false);
+                $redirect_url = $is_fuel ? 'staff_record_delivery.php?tab=fuel' : 'staff_record_delivery.php?tab=merchandise';
+            } else {
+                $redirect_url = 'manager_stock_request_review.php';
+            }
         }
 
         $stmt = $pdo->prepare("
@@ -4322,9 +4328,11 @@ function notify_staff_action_result(
         stripos($title, 'Purchase Order') !== false ||
         stripos($message, 'Purchase Order') !== false ||
         stripos($details, 'Purchase Order') !== false ||
-        $ref_type === 'purchase_order'
+        $ref_type === 'purchase_order' ||
+        (stripos($title, 'Stock Request') !== false && stripos($result_status, 'Approved') !== false)
     ) {
-        $redirect_url = 'manager_stock_request_review.php';
+        $is_fuel = (stripos($title, 'fuel') !== false || stripos($message, 'fuel') !== false || stripos($details, 'fuel') !== false);
+        $redirect_url = $is_fuel ? 'staff_record_delivery.php?tab=fuel' : 'staff_record_delivery.php?tab=merchandise';
     } elseif (empty($redirect_url) && !empty($ref_type)) {
         $redirect_url = notification_redirect_url($ref_type, $ref_id, 'staff');
     }
@@ -4563,12 +4571,13 @@ function notification_redirect_url(string $ref_type, int $ref_id, string $role):
             'admin'    => "manager_validated_transactions.php{$id}",
         ],
         'purchase_order' => [
-            'staff'      => "manager_stock_request_review.php",
-            'cashier'    => "manager_stock_request_review.php",
-            'manager'    => "manager_stock_request_review.php",
-            'admin'      => "manager_stock_request_review.php",
-            'superadmin' => "manager_stock_request_review.php",
-            'developer'  => "manager_stock_request_review.php",
+            'staff'          => "staff_record_delivery.php?tab=merchandise",
+            'cashier'        => "staff_record_delivery.php?tab=merchandise",
+            'pump_attendant' => "staff_record_delivery.php?tab=fuel",
+            'manager'        => "manager_stock_request_review.php",
+            'admin'          => "manager_stock_request_review.php",
+            'superadmin'     => "manager_stock_request_review.php",
+            'developer'      => "manager_stock_request_review.php",
         ],
         'user_account' => [
             'superadmin' => "superadmin_admin_management.php{$id}",

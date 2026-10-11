@@ -283,6 +283,10 @@ $disp_time = $disp_time ?? date('h:i A');
 $customer = $customer ?? 'Walk-in Customer';
 $staff_name = $staff_name ?? 'N/A';
 $shift_name = $shift_name ?? '';
+$mechanic_name = $mechanic_name ?? ($job_order['mechanic_name'] ?? ($sale['mechanic_name'] ?? ''));
+if (in_array(strtolower(trim((string)$mechanic_name)), ['mechanic', 'unassigned', 'n/a', 'none', '-', 'null', ''])) {
+    $mechanic_name = '';
+}
 $items = $items ?? [];
 $job_order = $job_order ?? null;
 $has_jo = !empty($job_order);
@@ -384,8 +388,9 @@ if ($has_jo) {
     if (!empty($job_order['vehicle_type'])) {
         $job_order_rows .= rp_row('Vehicle Type', rp_e($job_order['vehicle_type']));
     }
-    if (!empty($job_order['mechanic_name'])) {
-        $job_order_rows .= rp_row('Mechanic', rp_e($job_order['mechanic_name']));
+    $disp_jo_mech = !empty($job_order['mechanic_name']) ? $job_order['mechanic_name'] : $mechanic_name;
+    if (!empty($disp_jo_mech)) {
+        $job_order_rows .= rp_row('Mechanic', rp_e($disp_jo_mech), true);
     }
 }
 
@@ -547,7 +552,8 @@ table { width: 100%; border-collapse: collapse; }
     . rp_row('Transaction ID', rp_e($txn_id), true)
     . rp_row('Date & Time', rp_e($disp_date . ' ' . $disp_time))
     . ($show_customer ? rp_row('Customer Name', rp_e($customer), true) : '')
-    . ($show_cashier ? rp_row('Staff / Shift', rp_e($staff_name . ($shift_name ? ' (' . $shift_name . ')' : ''))) : '')
+    . ($show_cashier ? rp_row('Staff', rp_e($staff_name)) : '')
+    . (!empty($mechanic_name) ? rp_row('Mechanic', rp_e($mechanic_name), true) : '')
   . '</table>
 
   <div class="dash"></div>
