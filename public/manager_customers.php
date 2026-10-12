@@ -351,12 +351,16 @@ body.modal-open { overflow: hidden !important; overflow-x: hidden !important; }
     overflow-wrap: anywhere !important;
 }
 .cust-modal table .pill {
-    padding: 2px 6px !important;
+    padding: 3px 6px !important;
     font-size: 10px !important;
     font-weight: 800 !important;
-    white-space: nowrap !important;
+    white-space: normal !important;
     display: inline-block !important;
-    line-height: 1.2 !important;
+    line-height: 1.15 !important;
+    text-align: center !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    word-break: normal !important;
 }
 .cust-modal table .btn-plain {
     height: 24px !important;
@@ -605,18 +609,18 @@ button.remove-v-btn i {
 .ar-totals-bar .atb-divider { width:1px; background:rgba(255,255,255,.25); align-self:stretch; }
 
 /* AR status pills */
-.pill.ar-paid        { background:#dcfce7; color:#166534; }
-.pill.ar-outstanding { background:#fef3c7; color:#92400e; }
-.pill.ar-overdue     { background:#fee2e2; color:#991b1b; }
-.pill.ar-partial     { background:#ede9fe; color:#5b21b6; }
-.pill.ar-good        { background:#dcfce7; color:#166534; }
-.pill.ar-noar        { background:#f1f5f9; color:#64748b; }
+.pill.ar-paid        { background:#dcfce7; color:#166534; border:1px solid #bbf7d0; }
+.pill.ar-outstanding { background:#fef3c7; color:#92400e; border:1px solid #fde68a; }
+.pill.ar-overdue     { background:#fee2e2; color:#991b1b; border:1px solid #fecaca; }
+.pill.ar-partial     { background:#ede9fe; color:#5b21b6; border:1px solid #ddd6fe; }
+.pill.ar-good        { background:#dcfce7; color:#166534; border:1px solid #bbf7d0; }
+.pill.ar-noar        { background:#f1f5f9; color:#64748b; border:1px solid #e2e8f0; }
 
 /* Payment status badge */
-.pstatus-badge { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:800; padding:4px 10px; border-radius:6px; }
-.pstatus-badge.overdue    { background:#fee2e2; color:#991b1b; }
-.pstatus-badge.outstanding{ background:#fef3c7; color:#92400e; }
-.pstatus-badge.good       { background:#dcfce7; color:#166534; }
+.pstatus-badge { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:800; padding:4px 10px; border-radius:6px; white-space:nowrap; }
+.pstatus-badge.overdue    { background:#fee2e2; color:#991b1b; border:1px solid #fecaca; }
+.pstatus-badge.outstanding{ background:#fef3c7; color:#92400e; border:1px solid #fde68a; }
+.pstatus-badge.good       { background:#dcfce7; color:#166534; border:1px solid #bbf7d0; }
 </style>
 
 <div class="cust-page">
@@ -701,7 +705,7 @@ button.remove-v-btn i {
                     <th>Contact No.</th>
                     <th>Vehicles</th>
                     <th>Credit Limit</th>
-                    <th style="white-space:nowrap !important;">Outstanding</th>
+                    <th style="white-space:nowrap !important;">Outstanding Balance</th>
                     <th>Last Transaction</th>
                     <th>Customer Since</th>
                     <th>Status</th>
@@ -1221,7 +1225,7 @@ button.remove-v-btn i {
                 </div>
 
                 <!-- AR History Table -->
-                <div class="view-box" style="overflow:hidden;">
+                <div class="view-box" style="overflow-x:auto;">
                     <h4 style="display:flex; align-items:center; justify-content:space-between;">
                         <span><i class="fas fa-list-alt" style="color:#002f70;"></i> AR History</span>
                         <span id="arRowCount" style="font-size:11px; font-weight:600; color:#64748b;"></span>
@@ -1229,15 +1233,15 @@ button.remove-v-btn i {
                     <table class="cust-table no-min-width" style="min-width:0; margin-top:6px; table-layout:fixed; width:100%;">
                         <thead>
                             <tr>
-                                <th style="width:11%;">Date</th>
+                                <th style="width:9%;">Date</th>
                                 <th style="width:14%;">Reference No.</th>
-                                <th style="width:10%;">Type</th>
-                                <th style="width:20%;">Description</th>
-                                <th style="width:11%; text-align:right;">Amount</th>
-                                <th style="width:9%; text-align:right;">Paid</th>
-                                <th style="width:10%; text-align:right;">Balance</th>
-                                <th style="width:8%; text-align:center;">Due Date</th>
-                                <th style="width:7%; text-align:center;">Status</th>
+                                <th style="width:8%;">Type</th>
+                                <th style="width:17%;">Description</th>
+                                <th style="width:9%; text-align:right;">Amount</th>
+                                <th style="width:8%; text-align:right;">Paid</th>
+                                <th style="width:9%; text-align:right;">Balance</th>
+                                <th style="width:10%; text-align:center;">Due Date</th>
+                                <th style="width:16%; text-align:center;">Status</th>
                             </tr>
                         </thead>
                         <tbody id="arHistoryBody">
@@ -2317,15 +2321,28 @@ function loadARHistory(customerId) {
             document.getElementById('arNextDue').innerText        = s.next_due_date ? formatDateCell(s.next_due_date) : '—';
 
             // Payment status pill
-            const pStatus = s.payment_status || 'No AR';
-            const pClass = { 'Good Standing':'ar-good', 'Outstanding':'ar-outstanding', 'Overdue':'ar-overdue', 'No AR':'ar-noar' }[pStatus] || 'ar-noar';
-            document.getElementById('arPayStatus').innerHTML = `<span class="pill ${pClass}">${h(pStatus)}</span>`;
+            let pStatus = s.payment_status || 'No AR';
+            if (pStatus === 'Outstanding' || pStatus.toLowerCase() === 'outstanding' || pStatus.toLowerCase() === 'outstanding balance') {
+                pStatus = 'Outstanding Balance';
+            }
+            const pClass = {
+                'Good Standing':       'ar-good',
+                'Outstanding':         'ar-outstanding',
+                'Outstanding Balance': 'ar-outstanding',
+                'Overdue':             'ar-overdue',
+                'No AR':               'ar-noar'
+            }[pStatus] || 'ar-noar';
+            document.getElementById('arPayStatus').innerHTML = `<span class="pill ${pClass}" style="white-space:normal !important; display:inline-block !important; line-height:1.15 !important; padding:3px 6px !important; font-size:10.5px !important; text-align:center !important; max-width:100% !important;">${h(pStatus)}</span>`;
 
             // Header badge
             const badge = document.getElementById('vARStatusBadge');
             if (pStatus !== 'No AR') {
                 badge.style.display = 'flex';
-                badge.innerHTML = `<span class="pstatus-badge ${pStatus === 'Overdue' ? 'overdue' : pStatus === 'Outstanding' ? 'outstanding' : 'good'}"><i class="fas fa-circle" style="font-size:7px;"></i> ${h(pStatus)}</span>`;
+                const isOverdue = (pStatus === 'Overdue');
+                const isOutstanding = (pStatus === 'Outstanding' || pStatus === 'Outstanding Balance');
+                const badgeClass = isOverdue ? 'overdue' : (isOutstanding ? 'outstanding' : 'good');
+                const badgeLabel = isOutstanding ? 'Outstanding Balance' : pStatus;
+                badge.innerHTML = `<span class="pstatus-badge ${badgeClass}"><i class="fas fa-circle" style="font-size:7px;"></i> ${h(badgeLabel)}</span>`;
             } else {
                 badge.style.display = 'none';
             }
@@ -2356,14 +2373,20 @@ function renderARTable(rows, customerId) {
     }
 
     const arStatusMap = {
-        'Paid':        'ar-paid',
-        'Outstanding': 'ar-outstanding',
-        'Overdue':     'ar-overdue',
-        'Partial':     'ar-partial',
+        'Paid':                'ar-paid',
+        'Outstanding':         'ar-outstanding',
+        'Outstanding Balance': 'ar-outstanding',
+        'Overdue':             'ar-overdue',
+        'Partial':             'ar-partial',
     };
 
     tbody.innerHTML = rows.map(r => {
-        const stClass = arStatusMap[r.status] || 'ar-outstanding';
+        let rawStatus = r.status || '';
+        let displayStatus = rawStatus;
+        if (rawStatus === 'Outstanding' || rawStatus.toLowerCase() === 'outstanding' || rawStatus.toLowerCase() === 'outstanding balance') {
+            displayStatus = 'Outstanding Balance';
+        }
+        const stClass = arStatusMap[displayStatus] || arStatusMap[rawStatus] || 'ar-outstanding';
         const txIcon  = r.tx_type === 'Job Order'
             ? '<i class="fas fa-tools" style="color:#6b21a8;margin-right:4px;"></i>'
             : '<i class="fas fa-shopping-cart" style="color:#0369a1;margin-right:4px;"></i>';
@@ -2373,14 +2396,14 @@ function renderARTable(rows, customerId) {
         return `
         <tr>
             <td style="font-size:12px; color:#475569;">${h(r.date || '—')}</td>
-            <td><strong style="color:#002f70;">${h(r.reference || '—')}</strong></td>
+            <td style="word-break:break-all; font-family:monospace; font-size:11px;"><strong style="color:#002f70;">${h(r.reference || '—')}</strong></td>
             <td>${txIcon}<span style="font-size:11px; font-weight:700;">${h(r.tx_type)}</span></td>
             <td style="font-size:12px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${h(r.description)}">${h(r.description)}</td>
             <td style="text-align:right; font-weight:700;">${money(r.amount)}</td>
             <td style="text-align:right; color:#16a34a; font-weight:700;">${money(r.paid)}</td>
             <td style="text-align:right; color:${balNum > 0 ? '#dc2626' : '#16a34a'}; font-weight:800;">${money(balNum)}</td>
             <td style="font-size:12px; text-align:center;">${dueTxt}</td>
-            <td style="text-align:center;"><span class="pill ${stClass}">${h(r.status)}</span></td>
+            <td style="text-align:center; padding:4px 4px !important;"><span class="pill ${stClass}" style="white-space:normal !important; display:inline-block !important; line-height:1.15 !important; padding:3px 6px !important; font-size:9.5px !important; text-align:center !important; max-width:100% !important; box-sizing:border-box !important;">${h(displayStatus)}</span></td>
         </tr>`;
     }).join('');
 }

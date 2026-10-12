@@ -265,7 +265,7 @@ try {
     if ($sw) {
         $pdo->prepare("
             DELETE n FROM notifications n
-            INNER JOIN station_inventory si ON (n.source_key LIKE CONCAT('mgr_inv_low_', si.product_id, '%') OR n.title LIKE '%Low Stock%' OR n.title LIKE '%Inventory Alert%')
+            INNER JOIN station_inventory si ON n.source_key = CONCAT('mgr_inv_low_', si.product_id)
             INNER JOIN inventory_products ip ON ip.id = si.product_id
             WHERE n.user_id = ?
               AND si.station_id = ?

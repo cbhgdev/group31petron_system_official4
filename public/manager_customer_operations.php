@@ -1703,7 +1703,7 @@ function manager_ar_history(): void {
     if ($totalOverdue > 0) {
         $overallStatus = 'Overdue';
     } elseif ($totalOutstanding > 0) {
-        $overallStatus = 'Outstanding';
+        $overallStatus = 'Outstanding Balance';
     } elseif (count($arRows) > 0) {
         $overallStatus = 'Good Standing';
     } else {
@@ -1749,7 +1749,7 @@ function manager_ar_history(): void {
 function manager_ar_row_status(float $balance, string $dueDate, string $today, string $payStatus): string {
     if ($balance <= 0 || strtolower($payStatus) === 'paid') return 'Paid';
     if ($dueDate && $dueDate < $today)                      return 'Overdue';
-    return 'Outstanding';
+    return 'Outstanding Balance';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

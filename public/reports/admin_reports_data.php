@@ -2874,7 +2874,23 @@ if (!function_exists('getAdminReportData')) {
                                 OR LOWER(al.action) LIKE '%supplier%'
                                 OR LOWER(al.action) LIKE '%purchase%'
                                 OR LOWER(al.action) LIKE '%user%'
-                              )";
+                              )
+                              AND LOWER(al.action) NOT LIKE '%login%'
+                              AND LOWER(al.action) NOT LIKE '%logout%'
+                              AND LOWER(al.action) NOT LIKE '%sign in%'
+                              AND LOWER(al.action) NOT LIKE '%sign out%'
+                              AND LOWER(al.action) NOT LIKE '%signin%'
+                              AND LOWER(al.action) NOT LIKE '%signout%'
+                              AND LOWER(al.action) NOT LIKE '%session%'
+                              AND LOWER(al.action) NOT LIKE '%timeout%'
+                              AND LOWER(al.action) NOT LIKE '%password%'
+                              AND LOWER(al.action) NOT LIKE '%otp%'
+                              AND LOWER(al.action) NOT LIKE '%2fa%'
+                              AND LOWER(al.action) NOT LIKE '%auth%'
+                              AND LOWER(al.action) NOT LIKE '%clock in%'
+                              AND LOWER(al.action) NOT LIKE '%clock out%'
+                              AND LOWER(al.details) NOT LIKE '%logged in%'
+                              AND LOWER(al.details) NOT LIKE '%logged out%'";
                         if ($station_id > 0) { $w .= " AND (u.station_id = ? OR u.station_id IS NULL OR u.station_id = 0)"; $p[] = $station_id; }
                         if ($filter_staff > 0) { $w .= " AND al.user_id = ?"; $p[] = $filter_staff; }
                         if ($has_role_filter) {
@@ -2917,6 +2933,10 @@ if (!function_exists('getAdminReportData')) {
                         $rows_al = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
                         foreach ($rows_al as $r) {
                             $act_lc  = strtolower($r['action']);
+                            $det_lc  = strtolower($r['details'] ?? '');
+                            if (str_contains($act_lc, 'login') || str_contains($act_lc, 'logout') || str_contains($act_lc, 'session') || str_contains($act_lc, 'clock in') || str_contains($act_lc, 'clock out') || str_contains($det_lc, 'logged in') || str_contains($det_lc, 'logged out')) {
+                                continue;
+                            }
                             $user_id = $r['user_id'];
                             $min     = substr($r['datetime'], 0, 16);
 
@@ -2974,8 +2994,16 @@ if (!function_exists('getAdminReportData')) {
                 // 10. Audit Trail Entries from audit_trail Table
                 if (ard_table_exists($pdo, 'audit_trail')) {
                     try {
-                        $p = [$date_from, $date_to];
-                        $w = "WHERE DATE(COALESCE(at.created_at, at.timestamp, NOW())) BETWEEN ? AND ?";
+                        $w = "WHERE DATE(COALESCE(at.created_at, at.timestamp, NOW())) BETWEEN ? AND ?
+                              AND LOWER(COALESCE(at.action_type, '')) NOT LIKE '%login%'
+                              AND LOWER(COALESCE(at.action_type, '')) NOT LIKE '%logout%'
+                              AND LOWER(COALESCE(at.action_type, '')) NOT LIKE '%sign in%'
+                              AND LOWER(COALESCE(at.action_type, '')) NOT LIKE '%sign out%'
+                              AND LOWER(COALESCE(at.action_type, '')) NOT LIKE '%session%'
+                              AND LOWER(COALESCE(at.action_type, '')) NOT LIKE '%timeout%'
+                              AND LOWER(COALESCE(at.action_type, '')) NOT LIKE '%auth%'
+                              AND LOWER(COALESCE(at.notes, '')) NOT LIKE '%logged in%'
+                              AND LOWER(COALESCE(at.notes, '')) NOT LIKE '%logged out%'";
                         if ($station_id > 0) { $w .= " AND (at.station_id = ? OR at.station_id IS NULL OR at.station_id = 0 OR u.station_id = ?)"; $p[] = $station_id; $p[] = $station_id; }
                         if ($filter_staff > 0) { $w .= " AND (at.manager_id = ? OR at.user_id = ?)"; $p[] = $filter_staff; $p[] = $filter_staff; }
                         if ($has_role_filter) {
@@ -3017,6 +3045,11 @@ if (!function_exists('getAdminReportData')) {
                         $st = $pdo->prepare($sql); $st->execute($p);
                         $rows_at = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
                         foreach ($rows_at as $r) {
+                            $act_lc = strtolower($r['action'] ?? '');
+                            $det_lc = strtolower($r['details'] ?? '');
+                            if (str_contains($act_lc, 'login') || str_contains($act_lc, 'logout') || str_contains($act_lc, 'session') || str_contains($det_lc, 'logged in') || str_contains($det_lc, 'logged out')) {
+                                continue;
+                            }
                             if (empty($r['total_amount']) || (float)$r['total_amount'] == 0) {
                                 if (preg_match('/(?:Amount|Total|Amt|Price|Cost|Value|Spent|₱)[:\s]*₱?\s*([0-9\.,]+)/i', $r['details'] ?? '', $m_amt)) {
                                     $clean_num = preg_replace('/[^0-9\.]/', '', $m_amt[1]);
@@ -3043,7 +3076,19 @@ if (!function_exists('getAdminReportData')) {
                 if (ard_table_exists($pdo, 'audit_logs')) {
                     try {
                         $p = [$date_from, $date_to];
-                        $w = "WHERE DATE(al.created_at) BETWEEN ? AND ?";
+                        $w = "WHERE DATE(al.created_at) BETWEEN ? AND ?
+                              AND LOWER(COALESCE(al.action_type, '')) NOT LIKE '%login%'
+                              AND LOWER(COALESCE(al.action_type, '')) NOT LIKE '%logout%'
+                              AND LOWER(COALESCE(al.action_type, '')) NOT LIKE '%sign in%'
+                              AND LOWER(COALESCE(al.action_type, '')) NOT LIKE '%sign out%'
+                              AND LOWER(COALESCE(al.action_type, '')) NOT LIKE '%session%'
+                              AND LOWER(COALESCE(al.action_type, '')) NOT LIKE '%timeout%'
+                              AND LOWER(COALESCE(al.action_type, '')) NOT LIKE '%password%'
+                              AND LOWER(COALESCE(al.action_type, '')) NOT LIKE '%otp%'
+                              AND LOWER(COALESCE(al.action_type, '')) NOT LIKE '%2fa%'
+                              AND LOWER(COALESCE(al.action_type, '')) NOT LIKE '%auth%'
+                              AND LOWER(COALESCE(al.action_details, '')) NOT LIKE '%logged in%'
+                              AND LOWER(COALESCE(al.action_details, '')) NOT LIKE '%logged out%'";
                         if ($station_id > 0 && ard_column_exists($pdo, 'audit_logs', 'station_id')) {
                             $w .= " AND (al.station_id = ? OR al.station_id IS NULL OR al.station_id = 0 OR u.station_id = ?)";
                             $p[] = $station_id; $p[] = $station_id;
@@ -3086,6 +3131,11 @@ if (!function_exists('getAdminReportData')) {
                         $st = $pdo->prepare($sql); $st->execute($p);
                         $rows_aud = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
                         foreach ($rows_aud as $r) {
+                            $act_lc = strtolower($r['action'] ?? '');
+                            $det_lc = strtolower($r['details'] ?? '');
+                            if (str_contains($act_lc, 'login') || str_contains($act_lc, 'logout') || str_contains($act_lc, 'session') || str_contains($det_lc, 'logged in') || str_contains($det_lc, 'logged out')) {
+                                continue;
+                            }
                             if (preg_match('/(CUS-[A-Z0-9_\-]+)/i', $r['details'] ?? '', $m_cus)) {
                                 $r['ref_no'] = strtoupper(trim($m_cus[1]));
                             }
@@ -3360,6 +3410,38 @@ if (!function_exists('getAdminReportData')) {
                     $act_lc = strtolower(trim($r['action'] ?? ''));
                     $det_lc = strtolower(trim($r['details'] ?? ''));
 
+                    // STRICT AUDIT SEPARATION: Exclude all login, logout, authentication, and session records from Transaction Logs
+                    // All authentication history belongs strictly to the Login History sub-tab
+                    $is_login_log = (
+                        str_contains($act_lc, 'login') ||
+                        str_contains($act_lc, 'logout') ||
+                        str_contains($act_lc, 'logged in') ||
+                        str_contains($act_lc, 'logged out') ||
+                        str_contains($act_lc, 'sign in') ||
+                        str_contains($act_lc, 'sign out') ||
+                        str_contains($act_lc, 'signin') ||
+                        str_contains($act_lc, 'signout') ||
+                        str_contains($act_lc, 'session') ||
+                        str_contains($act_lc, 'timeout') ||
+                        str_contains($act_lc, 'password') ||
+                        str_contains($act_lc, 'otp') ||
+                        str_contains($act_lc, '2fa') ||
+                        str_contains($act_lc, 'auth') ||
+                        str_contains($act_lc, 'clock in') ||
+                        str_contains($act_lc, 'clock out') ||
+                        str_contains($det_lc, 'logged in') ||
+                        str_contains($det_lc, 'logged out') ||
+                        str_contains($det_lc, 'login attempt') ||
+                        str_contains($det_lc, 'failed login') ||
+                        str_contains($det_lc, 'successful login') ||
+                        str_contains($det_lc, 'password reset') ||
+                        str_contains($det_lc, 'otp verification') ||
+                        ($mod_lc === 'user management' && ($act_lc === 'login' || $act_lc === 'logout' || str_contains($det_lc, 'logged in') || str_contains($det_lc, 'logged out')))
+                    );
+                    if ($is_login_log) {
+                        continue;
+                    }
+
                     // Check if action is adding, creating, registering or related to customer/product/supplier/user
                     // RULE: These adding actions MUST BE VISIBLE TO BOTH MANAGER AND ADMIN!
                     $is_adding_or_customer = (
@@ -3373,7 +3455,7 @@ if (!function_exists('getAdminReportData')) {
                         || str_contains($act_lc, 'insert')
                         || str_contains($act_lc, 'supplier')
                         || str_contains($act_lc, 'product')
-                        || str_contains($act_lc, 'user')
+                        || (str_contains($act_lc, 'user') && !str_contains($act_lc, 'login'))
                     );
 
                     if (!empty($excluded_names) && !$is_adding_or_customer) {
@@ -4735,6 +4817,48 @@ if (!function_exists('getAdminReportData')) {
                     } catch (Exception $e) {}
                 }
 
+                // 3. Login, Logout, and Authentication records from audit_logs Table
+                if (ard_table_exists($pdo, 'audit_logs')) {
+                    try {
+                        $p = [$date_from, $date_to];
+                        $w = "WHERE DATE(al.created_at) BETWEEN ? AND ?
+                              AND (
+                                LOWER(COALESCE(al.action_type, '')) LIKE '%login%'
+                                OR LOWER(COALESCE(al.action_type, '')) LIKE '%logout%'
+                                OR LOWER(COALESCE(al.action_type, '')) LIKE '%session%'
+                                OR LOWER(COALESCE(al.action_type, '')) LIKE '%password%'
+                                OR LOWER(COALESCE(al.action_type, '')) LIKE '%otp%'
+                                OR LOWER(COALESCE(al.action_type, '')) LIKE '%auth%'
+                                OR LOWER(COALESCE(al.action_details, '')) LIKE '%logged in%'
+                                OR LOWER(COALESCE(al.action_details, '')) LIKE '%logged out%'
+                              )
+                              AND (u.role IS NULL OR LOWER(COALESCE(u.role,'')) NOT IN ('superadmin','super_admin'))";
+                        if ($station_id > 0 && ard_column_exists($pdo, 'audit_logs', 'station_id')) {
+                            $w .= " AND (al.station_id = ? OR al.station_id IS NULL OR al.station_id = 0 OR u.station_id = ?)";
+                            $p[] = $station_id; $p[] = $station_id;
+                        } elseif ($station_id > 0) {
+                            $w .= " AND (u.station_id = ? OR u.station_id IS NULL OR u.station_id = 0)";
+                            $p[] = $station_id;
+                        }
+                        if ($filter_staff > 0) { $w .= " AND al.user_id = ?"; $p[] = $filter_staff; }
+                        $has_ip_al = ard_column_exists($pdo, 'audit_logs', 'ip_address');
+                        $ip_exp_al = $has_ip_al ? "COALESCE(al.ip_address, 'N/A')" : "'N/A'";
+                        $sql = "SELECT al.created_at AS datetime,
+                            COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))),''), u.username, CONCAT('User #',al.user_id)) AS user,
+                            COALESCE(NULLIF(u.role,''), 'Staff') AS role,
+                            COALESCE(al.action_type, 'Login') AS action,
+                            {$ip_exp_al} AS ip_address,
+                            COALESCE(al.status, 'Success') AS status,
+                            COALESCE(al.action_details, 'Authentication event recorded') AS reason
+                        FROM audit_logs al
+                        LEFT JOIN users u ON u.id = al.user_id
+                        $w";
+                        $st = $pdo->prepare($sql); $st->execute($p);
+                        $rows_aud = $st->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                        foreach ($rows_aud as $r) { $raw[] = $r; }
+                    } catch (Exception $e) {}
+                }
+
                 // PHP-side filter & sort
                 $filtered = [];
                 foreach ($raw as $r) {
@@ -4774,7 +4898,7 @@ if (!function_exists('getAdminReportData')) {
                 usort($filtered, fn($a,$b) => strtotime($b['datetime']) <=> strtotime($a['datetime']));
                 $unique = []; $seen = [];
                 foreach ($filtered as $r) {
-                    $k = $r['user'] . '|' . substr($r['datetime'],0,19) . '|' . strtolower($r['action']);
+                    $k = strtolower(trim($r['user'])) . '|' . substr($r['datetime'],0,16) . '|' . strtolower(trim($r['action']));
                     if (!isset($seen[$k])) { $seen[$k] = true; $unique[] = $r; }
                 }
                 $data['rows'] = $unique;

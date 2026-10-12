@@ -422,17 +422,6 @@ try {
 // 10. LOW INVENTORY
 // ════════════════════════════════════════════════════════════
 try {
-    // Auto-purge low inventory notifications if stock levels have been restored
-    $pdo->prepare("
-        DELETE n FROM notifications n
-        INNER JOIN station_inventory si ON (n.source_key = CONCAT('low_inv_', si.station_id) OR n.source_key LIKE CONCAT('low_inv_', si.station_id, '%'))
-        INNER JOIN inventory_products ip ON ip.id = si.product_id
-        WHERE n.user_id = ?
-          AND si.station_id = ?
-          AND si.stock_level > COALESCE(NULLIF(si.reorder_level, 0), NULLIF(ip.min_stock, 0), 10)
-          AND LOWER(COALESCE(ip.category, '')) NOT IN ('fuel', 'fuels')
-    ")->execute([$user_id, $station_id]);
-
     $low_inv = $pdo->prepare(
         "SELECT COUNT(*) FROM station_inventory si
          INNER JOIN inventory_products ip ON ip.id = si.product_id
@@ -453,6 +442,9 @@ try {
             'source_key'  => "low_inv_{$station_id}",
             'redirect_url'=> 'admin_inventory_merchandise.php',
         ]);
+    } else {
+        $pdo->prepare("DELETE FROM notifications WHERE user_id=? AND (source_key = ? OR source_key LIKE ?)")
+            ->execute([$user_id, "low_inv_{$station_id}", "low_inv_{$station_id}%"]);
     }
 } catch (Exception $e) {}
 

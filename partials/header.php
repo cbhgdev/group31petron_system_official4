@@ -6901,9 +6901,10 @@ require_once __DIR__ . '/rbac_menu.php';
 
             // Expose mark-read globally so onclick works
             window.saMarkRead = function(id, redirectUrl) {
-                if (!id) return;
-                if (typeof window.petronMarkSingleNotificationRead === 'function') {
-                    window.petronMarkSingleNotificationRead(null, id);
+                if (!id) {
+                    if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)') {
+                        window.location.href = redirectUrl;
+                    }
                     return;
                 }
                 // ── Immediately decrement badge (optimistic UI) ─────────────
@@ -6943,50 +6944,74 @@ require_once __DIR__ . '/rbac_menu.php';
                         .catch(() => {});
                 } catch (e) {}
 
+                if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)') {
+                    setTimeout(function() {
+                        window.location.href = redirectUrl;
+                    }, 80);
+                }
             };
+            window.petronMarkSingleNotificationRead = window.saMarkRead;
 
             // Mark all read button
+            window.petronMarkAllNotificationsRead = async function (e) {
+                if (e) {
+                    if (e.stopPropagation) e.stopPropagation();
+                    if (e.preventDefault) e.preventDefault();
+                }
+                // 1. Optimistic UI: immediately clear bell badge and update dropdown header
+                const badge = document.getElementById('notificationBadge');
+                if (badge) {
+                    badge.textContent = '';
+                    badge.style.display = 'none';
+                }
+                const ddBadge = document.getElementById('notifDropdownBadge');
+                if (ddBadge) {
+                    ddBadge.textContent = '0 New';
+                    ddBadge.style.background = '#002F6C';
+                }
+                // Immediately remove unread classes and indicator dots
+                document.querySelectorAll('#notificationList .notif-item').forEach(function(el) {
+                    el.classList.remove('unread');
+                    el.style.backgroundColor = 'transparent';
+                    const dot = el.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
+                    if (dot) dot.remove();
+                });
+
+                try {
+                    const res = await fetch(API_LIST + '?action=mark_all_read', { method: 'POST', credentials: 'same-origin' });
+                    const data = await res.json();
+                    if (data && data.success) {
+                        updateBadge(0, data.category_counts, data.total_count);
+                        const countText = 'All notifications marked as read';
+                        if (typeof window.showGlobalToast === 'function') {
+                            window.showGlobalToast(countText, 'success');
+                        } else if (typeof window.showToast === 'function') {
+                            window.showToast(countText, 'success');
+                        }
+                    }
+                } catch (e) {}
+                loadNotifications();
+            };
+
             const markAllBtn = document.getElementById('markAllReadBtn');
             if (markAllBtn) {
-                markAllBtn.addEventListener('click', async function (e) {
-                    e.stopPropagation();
-                    // 1. Optimistic UI: immediately clear bell badge and update dropdown header
-                    const badge = document.getElementById('notificationBadge');
-                    if (badge) {
-                        badge.textContent = '';
-                        badge.style.display = 'none';
-                    }
-                    const ddBadge = document.getElementById('notifDropdownBadge');
-                    if (ddBadge) {
-                        ddBadge.textContent = '0 New';
-                        ddBadge.style.background = '#002F6C';
-                    }
-                    // Immediately remove unread classes and indicator dots
-                    document.querySelectorAll('#notificationList .notif-item').forEach(function(el) {
-                        el.classList.remove('unread');
-                        el.style.backgroundColor = 'transparent';
-                        const dot = el.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
-                        if (dot) dot.remove();
-                    });
-
-                    try {
-                        const res = await fetch(API_LIST + '?action=mark_all_read', { method: 'POST', credentials: 'same-origin' });
-                        const data = await res.json();
-                        if (data && data.success) {
-                            updateBadge(0, data.category_counts, data.total_count);
-                            const countText = 'All notifications marked as read';
-                            if (typeof window.showGlobalToast === 'function') {
-                                window.showGlobalToast(countText, 'success');
-                            } else if (typeof window.showToast === 'function') {
-                                window.showToast(countText, 'success');
-                            }
-                        }
-                    } catch (e) {}
-                    loadNotifications();
-                });
+                markAllBtn.addEventListener('click', window.petronMarkAllNotificationsRead);
             }
 
-            // Refresh button (handled centrally via onclick="petronRefreshNotifications(event)")
+            // Refresh button
+            window.petronRefreshNotifications = async function(e) {
+                if (e) {
+                    if (e.stopPropagation) e.stopPropagation();
+                    if (e.preventDefault) e.preventDefault();
+                }
+                const icon = document.getElementById('refreshNotifIcon');
+                if (icon) icon.classList.add('fa-spin');
+                try {
+                    await generateAndRefresh();
+                    await loadNotifications();
+                } catch(err) {}
+                if (icon) icon.classList.remove('fa-spin');
+            };
 
             // Load on bell open (Expose globally for the toggle listener)
             window.saLoadNotifications = async function() {
@@ -7303,50 +7328,57 @@ require_once __DIR__ . '/rbac_menu.php';
             }
 
             // ── Mark one notification as read ─────────────────────────────────
-            window.staffMarkRead = function (id) {
-                if (id) {
-                    if (typeof window.petronMarkSingleNotificationRead === 'function') {
-                        window.petronMarkSingleNotificationRead(null, id);
-                        return;
+            window.staffMarkRead = function (id, redirectUrl) {
+                if (!id) {
+                    if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)') {
+                        window.location.href = redirectUrl;
                     }
-                    // ── Immediately decrement badge (optimistic UI) ─────────
-                    (function() {
-                        const badge = document.getElementById('notificationBadge');
-                        if (badge && badge.style.display !== 'none') {
-                            let cur = parseInt(badge.textContent.replace(/\D/g, ''), 10) || 0;
-                            cur = Math.max(0, cur - 1);
-                            if (cur > 0) {
-                                badge.textContent = cur > 99 ? '99+' : cur;
-                                badge.style.display = 'inline-flex';
-                                badge.style.setProperty('background', '#dc2626', 'important');
-                            } else {
-                                badge.textContent = '';
-                                badge.style.display = 'none';
+                    return;
+                }
+                // ── Immediately decrement badge (optimistic UI) ─────────
+                (function() {
+                    const badge = document.getElementById('notificationBadge');
+                    if (badge && badge.style.display !== 'none') {
+                        let cur = parseInt(badge.textContent.replace(/\D/g, ''), 10) || 0;
+                        cur = Math.max(0, cur - 1);
+                        if (cur > 0) {
+                            badge.textContent = cur > 99 ? '99+' : cur;
+                            badge.style.display = 'inline-flex';
+                            badge.style.setProperty('background', '#dc2626', 'important');
+                        } else {
+                            badge.textContent = '';
+                            badge.style.display = 'none';
+                        }
+                    }
+                    const item = document.querySelector('[onclick*="' + id + '"]');
+                    if (item) {
+                        item.classList.remove('unread');
+                        item.style.backgroundColor = 'transparent';
+                        const dot = item.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
+                        if (dot) dot.remove();
+                    }
+                })();
+                try {
+                    const fd = new FormData();
+                    fd.append('notification_id', id);
+                    if (navigator.sendBeacon) navigator.sendBeacon(API_LIST + '?action=mark_read', fd);
+                    fetch(API_LIST + '?action=mark_read', { method: 'POST', body: fd, credentials: 'same-origin', keepalive: true })
+                        .then(r => r.ok ? r.json() : null)
+                        .then(data => {
+                            if (data && data.success) {
+                                updateBadge(data.bell_unread_count ?? 0, data.category_counts, data.total_count);
                             }
-                        }
-                        const item = document.querySelector('[onclick*="' + id + '"]');
-                        if (item) {
-                            item.classList.remove('unread');
-                            item.style.backgroundColor = 'transparent';
-                            const dot = item.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
-                            if (dot) dot.remove();
-                        }
-                    })();
-                    try {
-                        const fd = new FormData();
-                        fd.append('notification_id', id);
-                        if (navigator.sendBeacon) navigator.sendBeacon(API_LIST + '?action=mark_read', fd);
-                        fetch(API_LIST + '?action=mark_read', { method: 'POST', body: fd, credentials: 'same-origin', keepalive: true })
-                            .then(r => r.ok ? r.json() : null)
-                            .then(data => {
-                                if (data && data.success) {
-                                    updateBadge(data.bell_unread_count ?? 0, data.category_counts, data.total_count);
-                                }
-                            })
-                            .catch(() => {});
-                    } catch (e) {}
+                        })
+                        .catch(() => {});
+                } catch (e) {}
+
+                if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)') {
+                    setTimeout(function() {
+                        window.location.href = redirectUrl;
+                    }, 80);
                 }
             };
+            window.petronMarkSingleNotificationRead = window.staffMarkRead;
 
             // ── Fetch unread count only (lightweight) ─────────────────────────
             async function fetchUnreadCount() {
@@ -7427,47 +7459,65 @@ require_once __DIR__ . '/rbac_menu.php';
 
 
             // ── Mark all read ──────────────────────────────────────────────────
+            window.petronMarkAllNotificationsRead = async function (e) {
+                if (e) {
+                    if (e.stopPropagation) e.stopPropagation();
+                    if (e.preventDefault) e.preventDefault();
+                }
+                // 1. Optimistic UI: immediately clear bell badge and update dropdown header
+                const badge = document.getElementById('notificationBadge');
+                if (badge) {
+                    badge.textContent = '';
+                    badge.style.display = 'none';
+                }
+                const ddBadge = document.getElementById('notifDropdownBadge');
+                if (ddBadge) {
+                    ddBadge.textContent = '0 New';
+                    ddBadge.style.background = '#002F6C';
+                }
+                // Immediately remove unread classes and indicator dots
+                document.querySelectorAll('#notificationList .notif-item').forEach(function(el) {
+                    el.classList.remove('unread');
+                    el.style.backgroundColor = 'transparent';
+                    const dot = el.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
+                    if (dot) dot.remove();
+                });
+
+                try {
+                    const res = await fetch(API_LIST + '?action=mark_all_read', { method: 'POST', credentials: 'same-origin' });
+                    const data = await res.json();
+                    if (data && data.success) {
+                        updateBadge(0, data.category_counts, data.total_count);
+                        const countText = 'All notifications marked as read';
+                        if (typeof window.showGlobalToast === 'function') {
+                            window.showGlobalToast(countText, 'success');
+                        } else if (typeof window.showToast === 'function') {
+                            window.showToast(countText, 'success');
+                        }
+                    }
+                } catch (e) {}
+                loadNotifications(false);
+            };
+
             const markAllBtn = document.getElementById('markAllReadBtn');
             if (markAllBtn) {
-                markAllBtn.addEventListener('click', async function (e) {
-                    e.stopPropagation();
-                    // 1. Optimistic UI: immediately clear bell badge and update dropdown header
-                    const badge = document.getElementById('notificationBadge');
-                    if (badge) {
-                        badge.textContent = '';
-                        badge.style.display = 'none';
-                    }
-                    const ddBadge = document.getElementById('notifDropdownBadge');
-                    if (ddBadge) {
-                        ddBadge.textContent = '0 New';
-                        ddBadge.style.background = '#002F6C';
-                    }
-                    // Immediately remove unread classes and indicator dots
-                    document.querySelectorAll('#notificationList .notif-item').forEach(function(el) {
-                        el.classList.remove('unread');
-                        el.style.backgroundColor = 'transparent';
-                        const dot = el.querySelector('div[style*="border-radius:50%"][style*="margin-top:"]');
-                        if (dot) dot.remove();
-                    });
-
-                    try {
-                        const res = await fetch(API_LIST + '?action=mark_all_read', { method: 'POST', credentials: 'same-origin' });
-                        const data = await res.json();
-                        if (data && data.success) {
-                            updateBadge(0, data.category_counts, data.total_count);
-                            const countText = 'All notifications marked as read';
-                            if (typeof window.showGlobalToast === 'function') {
-                                window.showGlobalToast(countText, 'success');
-                            } else if (typeof window.showToast === 'function') {
-                                window.showToast(countText, 'success');
-                            }
-                        }
-                    } catch (e) {}
-                    loadNotifications();
-                });
+                markAllBtn.addEventListener('click', window.petronMarkAllNotificationsRead);
             }
 
-            // ── Refresh button (handled centrally via onclick="petronRefreshNotifications(event)" to avoid duplicate triggers) ──
+            // ── Refresh button ──
+            window.petronRefreshNotifications = async function(e) {
+                if (e) {
+                    if (e.stopPropagation) e.stopPropagation();
+                    if (e.preventDefault) e.preventDefault();
+                }
+                const icon = document.getElementById('refreshNotifIcon');
+                if (icon) icon.classList.add('fa-spin');
+                try {
+                    await runGeneratorBackground(true);
+                    await loadNotifications(true);
+                } catch(err) {}
+                if (icon) icon.classList.remove('fa-spin');
+            };
 
             // Expose globally for the toggle listener
             window.loadStaffNotifications = async function() {

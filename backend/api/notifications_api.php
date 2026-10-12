@@ -318,7 +318,7 @@ try {
                 try {
                     $pdo->prepare("
                         DELETE n FROM notifications n
-                        INNER JOIN station_inventory si ON (n.source_key LIKE CONCAT('mgr_inv_low_', si.product_id, '%') OR n.title LIKE '%Inventory Alert%' OR n.title LIKE '%Low Stock%')
+                        INNER JOIN station_inventory si ON n.source_key = CONCAT('mgr_inv_low_', si.product_id)
                         INNER JOIN inventory_products ip ON ip.id = si.product_id
                         WHERE n.user_id = ?
                           AND si.stock_level > COALESCE(NULLIF(si.reorder_level, 0), NULLIF(ip.min_stock, 0), 10)
@@ -327,7 +327,7 @@ try {
 
                     $pdo->prepare("
                         DELETE n FROM notifications n
-                        INNER JOIN fuel_inventory fi ON (n.source_key LIKE CONCAT('mgr_fuel_low_', fi.id, '%') OR n.title LIKE '%Low Fuel%')
+                        INNER JOIN fuel_inventory fi ON n.source_key = CONCAT('mgr_fuel_low_', fi.id)
                         WHERE n.user_id = ?
                           AND fi.current_level > COALESCE(NULLIF(fi.reorder_level, 0), fi.capacity * 0.15, 500)
                     ")->execute([$user_id]);
