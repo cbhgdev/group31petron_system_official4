@@ -5725,17 +5725,23 @@ setTimeout(function() {
                 if (beginningEl) beginningEl.value = '0.00';
             }
 
-            // Validate: ending_reading must be filled (strip commas before parsing)
-            const endingRaw = (formData.get('ending_reading') || '').replace(/,/g, '');
-            const endingVal = parseFloat(endingRaw);
-            if (!endingVal || endingVal <= 0) {
-                showRowMsg(msgEl, 'error', 'Please enter the Ending meter reading.');
-                return false;
-            }
-            // Inject stripped values back so API receives plain numbers
-            formData.set('ending_reading', endingRaw);
-            formData.set('beginning_reading', beginningRaw);
+            // Validate: ending_reading (strip commas before parsing)
+            const endingRaw = (formData.get('ending_reading') || '').replace(/,/g, '').trim();
+            let endingVal = parseFloat(endingRaw);
             const beginningVal = parseFloat(beginningRaw) || 0;
+
+            // If ending reading is blank or 0, but beginning exists, default Ending = Beginning (0 sales / walay halin)
+            if ((!endingRaw || isNaN(endingVal) || endingVal <= 0) && beginningVal > 0) {
+                endingVal = beginningVal;
+                formData.set('ending_reading', beginningVal.toFixed(2));
+                if (endingEl) endingEl.value = beginningVal.toFixed(2);
+            } else if (isNaN(endingVal) || endingVal < 0) {
+                showRowMsg(msgEl, 'error', 'Please enter a valid Ending meter reading.');
+                return false;
+            } else {
+                formData.set('ending_reading', endingRaw);
+            }
+            formData.set('beginning_reading', beginningRaw);
 
             // Validation Rule 1: Ending Reading must not be less than Beginning Reading
             // Note: Ending can equal Beginning (volume = 0), which is valid
@@ -5754,12 +5760,7 @@ setTimeout(function() {
                 return false;
             }
 
-            // Validation Rule 3: Calibration cannot exceed Gross Volume
-            const grossVol = endingVal - beginningVal;
-            if (calibrationVal > grossVol && grossVol > 0) {
-                showRowMsg(msgEl, 'error', `Calibration (${calibrationVal.toFixed(2)}L) cannot be greater than Gross Volume (${grossVol.toFixed(2)}L).`);
-                return false;
-            }
+            // Note: Calibration can equal or exceed Gross Volume (resulting in 0 net volume / walay halin)
 
             // Disable button, show loading
             submitBtn.disabled = true;
@@ -6002,40 +6003,65 @@ setTimeout(function() {
                 const calEl       = document.getElementById(`cal_${ftId}`);
                 const msgEl       = document.getElementById(`cardMsg_${ftId}`);
 
-                const endingRaw    = (endingEl    ? endingEl.value    : '').replace(/,/g, '').trim();
-                const beginningRaw = (beginningEl ? beginningEl.value : '').replace(/,/g, '').trim();
-                const calRaw       = (calEl       ? calEl.value       : '0.00').replace(/,/g, '').trim();
-
-                const endingVal    = parseFloat(endingRaw)    || 0;
-                const beginningVal = parseFloat(beginningRaw) || 0;
-                const calVal       = parseFloat(calRaw)       || 0;
-
-                // 1. Skip rows where ending reading is not entered / blank
-                if (!endingRaw || endingVal <= 0) {
+                // Skip deactivated tanks if disabled
+                if (endingEl && endingEl.disabled) {
                     return;
                 }
 
-                // 2. If beginning reading is editable (first shift) and empty, default to 0
-                //    (valid for new pump installation or first-ever shift entry)
+                let endingRaw    = (endingEl    ? endingEl.value    : '').replace(/,/g, '').trim();
+                let beginningRaw = (beginningEl ? beginningEl.value : '').replace(/,/g, '').trim();
+                let calRaw       = (calEl       ? calEl.value       : '0.00').replace(/,/g, '').trim();
+
+                let endingVal    = parseFloat(endingRaw)    || 0;
+                let beginningVal = parseFloat(beginningRaw) || 0;
+                let calVal       = parseFloat(calRaw)       || 0;
+
+                // If beginning reading is editable (first shift) and empty, default to 0
                 if (beginningEl && !beginningEl.readOnly && (!beginningRaw || beginningRaw === '')) {
                     beginningEl.value = '0.00';
-                    // beginningRaw stays '' but we treat beginningVal as 0 — already handled below
+                    beginningRaw = '0.00';
+                    beginningVal = 0;
                 }
 
-                // 3. Ending must be >= Beginning
+                // If ending reading is blank or <= 0:
+                // Auto-default Ending = Beginning (meaning NO sales / 0 net volume / "walay halin" for this pump during this shift)
+                if (!endingRaw || endingVal <= 0) {
+                    if (beginningVal > 0) {
+                        endingVal = beginningVal;
+                        endingRaw = beginningVal.toFixed(2);
+                        calVal = 0;
+                        calRaw = '0.00';
+                        if (endingEl) {
+                            endingEl.value = beginningEl.value;
+                        }
+                        if (calEl) {
+                            calEl.value = '0.00';
+                        }
+                        const volEl = document.getElementById('volume_' + ftId);
+                        const amtEl = document.getElementById('amount_' + ftId);
+                        if (volEl) volEl.value = '0.00';
+                        if (amtEl) amtEl.value = '0.00';
+                    } else {
+                        endingVal = 0;
+                        endingRaw = '0.00';
+                    }
+                }
+
+                // Ending cannot be lower than Beginning
                 if (endingVal < beginningVal) {
                     skippedForms.push({ ftId, reason: `Ending (${endingVal.toLocaleString()}) < Beginning (${beginningVal.toLocaleString()})` });
                     if (msgEl) showRowMsg(msgEl, 'error', 'Ending Reading cannot be lower than Beginning Reading — skipped.');
                     return;
                 }
 
-                // 4. Calibration >= 0
+                // Calibration cannot be negative
                 if (calVal < 0) {
                     skippedForms.push({ ftId, reason: 'Calibration cannot be negative' });
                     if (msgEl) showRowMsg(msgEl, 'error', 'Calibration cannot be negative — skipped.');
                     return;
                 }
 
+                // Note: Calibration can equal or exceed Gross Volume (0 net volume / walay halin is valid)
                 formsToSubmit.push({ ftId, form, endingRaw, beginningRaw, calRaw, endingVal });
             });
 
@@ -15033,25 +15059,7 @@ setTimeout(function() {
                                         <i class="fas fa-print"></i> Reprint
                                     </button>
 
-                                    <button type="button"
-                                            data-jo-id="<?= (int)$job['id'] ?>"
-                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
-                                            data-jo-total="<?= (float)$jo_total ?>"
-                                            data-jo-labor="<?= (float)$labor_fee_val ?>"
-                                            data-jo-paid="<?= (float)$jo_paid ?>"
-                                            data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
-                                            data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
-                                            data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
-                                            data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
-                                            onclick="return openRequestAdjustModal(event, this);"
-                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
-                                        <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
-                                    </button>
+
                                     <?php if ($enable_void_transaction): ?>
                                     <button type="button"
                                             data-jo-id="<?= (int)$job['id'] ?>"
@@ -15103,25 +15111,7 @@ setTimeout(function() {
                                         </button>
                                     <?php endif; ?>
 
-                                    <button type="button"
-                                            data-jo-id="<?= (int)$job['id'] ?>"
-                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
-                                            data-jo-total="<?= (float)$jo_total ?>"
-                                            data-jo-labor="<?= (float)$labor_fee_val ?>"
-                                            data-jo-paid="<?= (float)$jo_paid ?>"
-                                            data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
-                                            data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
-                                            data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
-                                            data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
-                                            onclick="return openRequestAdjustModal(event, this);"
-                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
-                                        <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
-                                    </button>
+
                                     <?php if ($enable_void_transaction): ?>
                                     <button type="button"
                                             data-jo-id="<?= (int)$job['id'] ?>"
@@ -15621,7 +15611,6 @@ setTimeout(function() {
 
                 if (newStatus === 'Released') {
                     actionsHtml += '<button type="button" onclick="printJobOrderReceipt(' + joId + ',\'' + joRef.replace(/'/g, "\\'") + '\')" class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-print"></i> Reprint</button>';
-                    if (adjustBtnHtml) actionsHtml += adjustBtnHtml;
                     if (voidBtnHtml) actionsHtml += voidBtnHtml;
                 } else if (newStatus === 'Completed') {
                     actionsHtml += '<button type="button" onclick="printJobOrderReceipt(' + joId + ',\'' + joRef.replace(/'/g, "\\'") + '\')" class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-print"></i> Reprint</button>';
@@ -15635,7 +15624,6 @@ setTimeout(function() {
                     } else {
                         actionsHtml += '<button type="button" onclick="performJobOrderAction(\'release_job_order\', ' + joId + ', \'' + joSource + '\', this)" class="txn-btn primary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#002F70;color:#fff;border:none;"><i class="fas fa-car-side"></i> Release Vehicle</button>';
                     }
-                    if (adjustBtnHtml) actionsHtml += adjustBtnHtml;
                     if (voidBtnHtml) actionsHtml += voidBtnHtml;
                 } else if (newStatus === 'In Progress') {
                     if (canRelease) {
@@ -15998,17 +15986,30 @@ setTimeout(function() {
         /* Center the inner dialog card inside every modal backdrop */
         #viewJobOrderModal > div,
         #viewMerchandiseModal > div,
-        #updateStatusModal > div,
         #adjustJobOrderModal > div,
         #requestAdjustModal > div,
-        #requestVoidModal > div,
-        #paymentSettleModal > div,
         #txnRequestModal > div,
         #customerRequestModal > div {
             margin: auto !important;
             flex-shrink: 0;
             max-width: min(1040px, calc(100% - 24px)) !important;
             max-height: min(calc(100vh - 110px), 820px) !important;
+        }
+
+        #updateStatusModal > div,
+        #requestVoidModal > div {
+            margin: auto !important;
+            flex-shrink: 0;
+            max-width: min(520px, calc(100% - 24px)) !important;
+            max-height: min(calc(100vh - 110px), 820px) !important;
+        }
+
+        #paymentSettleModal > div {
+            margin: auto !important;
+            flex-shrink: 0;
+            width: 100% !important;
+            max-width: min(480px, calc(100% - 24px)) !important;
+            max-height: min(calc(100vh - 90px), 860px) !important;
         }
 
         .pm-method-btn{flex:1;padding:8px 4px;border:1.5px solid #e2e8f0;border-radius:8px;
@@ -16125,7 +16126,7 @@ setTimeout(function() {
               <!-- Cash: tendered + change -->
               <div id="pmCashFields" class="pm-row">
                 <label class="pm-label">Amount Tendered <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#94a3b8;">(optional)</span></label>
-                <div style="display:flex;align-items:center;border:1.5px solid #d1d5db;border-radius:8px;overflow:hidden;max-width:200px;">
+                <div style="display:flex;align-items:center;border:1.5px solid #d1d5db;border-radius:8px;overflow:hidden;width:100%;">
                   <span style="background:#f3f4f6;padding:9px 11px;font-weight:700;color:#374151;border-right:1px solid #d1d5db;font-size:13px;">₱</span>
                   <input type="number" id="pmTendered" step="0.01" min="0" placeholder="e.g. 500.00"
                          oninput="pmCalcChange()"
@@ -16952,8 +16953,10 @@ setTimeout(function() {
                             if (statusBadges) statusBadges.innerHTML = '<span style="padding:4px 10px;border-radius:6px;background:' + reqBg + ';color:' + reqColor + ';font-size:11px;font-weight:800;"><i class="fas fa-clock"></i> ' + (pendingReq.request_type ? pendingReq.request_type.toUpperCase() : 'REQUEST') + ' PENDING APPROVAL</span>';
                         } else {
                             // Normal Active Transaction
+                            var wfStatusLower = (txn.status || txn.workflow_status || '').toLowerCase();
+                            var isFinished = (valStatus === 'released' || valStatus === 'completed' || wfStatusLower === 'released' || wfStatusLower === 'completed');
                             if (settleBtn) settleBtn.style.display = (balanceDue > 0.009) ? 'inline-flex' : 'none';
-                            if (adjustBtn) adjustBtn.style.display = 'inline-flex';
+                            if (adjustBtn) adjustBtn.style.display = isFinished ? 'none' : 'inline-flex';
                             if (voidBtn) voidBtn.style.display = 'inline-flex';
                             if (reprintBtn) reprintBtn.style.display = 'inline-flex';
                         }
@@ -18505,8 +18508,10 @@ window.viewMerchandiseDetails = function(txnId, btn) {
                 var rBg = (pendingReq.request_type === 'Void') ? '#fee2e2' : '#fef3c7';
                 if (statusBadges) statusBadges.innerHTML = '<span style="padding:4px 10px;border-radius:6px;background:' + rBg + ';color:' + rColor + ';font-size:11px;font-weight:800;"><i class="fas fa-clock"></i> ' + (pendingReq.request_type ? pendingReq.request_type.toUpperCase() : 'REQUEST') + ' PENDING</span>';
             } else {
+                var wfStatusLower = (txn.status || txn.workflow_status || '').toLowerCase();
+                var isFinished = (valStatus === 'released' || valStatus === 'completed' || wfStatusLower === 'released' || wfStatusLower === 'completed');
                 if (settleBtn) settleBtn.style.display = (balDue > 0.009) ? 'inline-flex' : 'none';
-                if (adjustBtn) adjustBtn.style.display = 'inline-flex';
+                if (adjustBtn) adjustBtn.style.display = isFinished ? 'none' : 'inline-flex';
                 if (voidBtn) voidBtn.style.display = 'inline-flex';
                 if (reprintBtn) reprintBtn.style.display = 'inline-flex';
             }

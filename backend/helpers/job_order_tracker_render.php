@@ -500,25 +500,7 @@ if (!function_exists('render_job_order_tracker_rows')) {
                             <i class="fas fa-print"></i> Reprint
                         </button>
 
-                        <button type="button"
-                                data-jo-id="<?= (int)$job['id'] ?>"
-                                data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
-                                data-jo-total="<?= (float)$jo_total ?>"
-                                data-jo-labor="<?= (float)$labor_fee_val ?>"
-                                data-jo-paid="<?= (float)$jo_paid ?>"
-                                data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
-                                data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
-                                data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
-                                data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
-                                onclick="return openRequestAdjustModal(event, this);"
-                                class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
-                            <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
-                        </button>
+
                         <?php if ($enable_void_transaction): ?>
                         <button type="button"
                                 data-jo-id="<?= (int)$job['id'] ?>"
@@ -570,25 +552,7 @@ if (!function_exists('render_job_order_tracker_rows')) {
                             </button>
                         <?php endif; ?>
 
-                        <button type="button"
-                                data-jo-id="<?= (int)$job['id'] ?>"
-                                data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
-                                data-jo-total="<?= (float)$jo_total ?>"
-                                data-jo-labor="<?= (float)$labor_fee_val ?>"
-                                data-jo-paid="<?= (float)$jo_paid ?>"
-                                data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
-                                data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
-                                data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
-                                data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
-                                onclick="return openRequestAdjustModal(event, this);"
-                                class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
-                            <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
-                        </button>
+
                         <?php if ($enable_void_transaction): ?>
                         <button type="button"
                                 data-jo-id="<?= (int)$job['id'] ?>"

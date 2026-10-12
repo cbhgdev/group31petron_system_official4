@@ -66,6 +66,9 @@ try {
     if (in_array($txn_status, ['voided','cancelled'])) {
         $pdo->rollBack(); echo json_encode(['success'=>false,'error'=>'Transaction is already voided/cancelled.']); exit;
     }
+    if ($action_type === 'Adjustment' && in_array($txn_status, ['released', 'completed'])) {
+        $pdo->rollBack(); echo json_encode(['success'=>false,'error'=>"Adjustment cannot be applied to a transaction that is already {$txn_status}. Only Void can be performed."]); exit;
+    }
 
     $admin_name   = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Admin');
     $full_reason  = $reason;

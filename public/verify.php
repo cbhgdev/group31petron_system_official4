@@ -18,14 +18,20 @@ if ($id === '') {
         $stmt = $pdo->prepare("
             SELECT mt.*,
                    COALESCE(NULLIF(TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))),''), u.name, u.username, 'Staff') AS staff_name,
-                   COALESCE(NULLIF(mt.job_order_mechanic_name,''), NULLIF(TRIM(CONCAT(COALESCE(m.first_name,''),' ',COALESCE(m.last_name,''))),''), m.name, m.username) AS resolved_mechanic_name,
+                   COALESCE(
+                       NULLIF(TRIM(mt.job_order_mechanic_name),''),
+                       NULLIF(TRIM(m.full_name),''),
+                       NULLIF(TRIM(CONCAT(COALESCE(m.first_name,''),' ',COALESCE(m.last_name,''))),''),
+                       NULLIF(TRIM(CONCAT(COALESCE(u_m.first_name,''),' ',COALESCE(u_m.last_name,''))),'')
+                   ) AS resolved_mechanic_name,
                    COALESCE(s.name, 'Petron Station') AS station_name,
                    COALESCE(s.location, '') AS station_location,
                    COALESCE(s.address, 'Vamenta Blvd., Carmen, CDO') AS station_address,
                    COALESCE(s.vat_tin, '236-002-207-0000') AS station_vat_tin
             FROM   merchandise_transactions mt
             LEFT JOIN users    u ON mt.staff_id   = u.id
-            LEFT JOIN users    m ON (mt.job_order_mechanic_id IS NOT NULL AND mt.job_order_mechanic_id = m.id)
+            LEFT JOIN mechanics m ON (mt.job_order_mechanic_id IS NOT NULL AND mt.job_order_mechanic_id = m.id)
+            LEFT JOIN users    u_m ON (mt.job_order_mechanic_id IS NOT NULL AND mt.job_order_mechanic_id = u_m.id AND LOWER(COALESCE(u_m.role,'')) = 'mechanic')
             LEFT JOIN stations s ON mt.station_id = s.id
             WHERE  mt.transaction_id = ? OR mt.id = ?
             LIMIT  1
@@ -57,14 +63,22 @@ if ($id === '') {
             $stmt_jo = $pdo->prepare("
                 SELECT jo.*,
                        COALESCE(NULLIF(TRIM(CONCAT(COALESCE(cb.first_name,''),' ',COALESCE(cb.last_name,''))),''), cb.name, cb.username, 'Staff') AS staff_name,
-                       COALESCE(NULLIF(jo.mechanic_name,''), NULLIF(jo.assigned_mechanic,''), NULLIF(TRIM(CONCAT(COALESCE(mech.first_name,''),' ',COALESCE(mech.last_name,''))),''), mech.name, mech.username) AS resolved_mechanic_name,
+                       COALESCE(
+                           NULLIF(TRIM(jo.mechanic_name),''),
+                           NULLIF(TRIM(jo.assigned_mechanic),''),
+                           NULLIF(TRIM(mech.full_name),''),
+                           NULLIF(TRIM(CONCAT(COALESCE(mech.first_name,''),' ',COALESCE(mech.last_name,''))),''),
+                           NULLIF(TRIM(CONCAT(COALESCE(u.first_name,''),' ',COALESCE(u.last_name,''))),''),
+                           u.name, u.username
+                       ) AS resolved_mechanic_name,
                        s.name  AS station_name,
                        s.location AS station_location,
                        s.address  AS station_address,
                        s.vat_tin  AS station_vat_tin
                 FROM   job_orders jo
                 LEFT JOIN users    cb   ON cb.id   = jo.created_by
-                LEFT JOIN users    mech ON (mech.id = jo.assigned_mechanic_id OR mech.id = jo.mechanic_id)
+                LEFT JOIN mechanics mech ON (mech.id = jo.assigned_mechanic_id OR mech.id = jo.mechanic_id)
+                LEFT JOIN users    u    ON ((u.id = jo.assigned_mechanic_id OR u.id = jo.mechanic_id) AND LOWER(COALESCE(u.role,'')) = 'mechanic')
                 LEFT JOIN stations s    ON s.id    = jo.station_id
                 WHERE  jo.job_order_id = ? OR jo.job_order_number = ? OR jo.id = ?
                 LIMIT  1

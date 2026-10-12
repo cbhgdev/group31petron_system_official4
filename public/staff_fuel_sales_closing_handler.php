@@ -331,7 +331,64 @@ if ($action === 'save_closing') {
             $shift_label
         );
 
-// 2. Manager notification for fuel sales closing removed (handled by Fuel Readings pending validation)
+        // 2. Notify Manager and Admin: Fuel Sales Closing Submitted
+        try {
+            $staff_stmt = $pdo->prepare("SELECT first_name, last_name, name, username FROM users WHERE id = ?");
+            $staff_stmt->execute([$user_id]);
+            $s_user = $staff_stmt->fetch(PDO::FETCH_ASSOC);
+            $staff_name = trim(($s_user['first_name'] ?? '') . ' ' . ($s_user['last_name'] ?? '')) ?: ($s_user['name'] ?? $s_user['username'] ?? 'Staff');
+
+            $date_lbl   = date('M d, Y', strtotime($report_date));
+            $closing_msg = "{$staff_name} submitted Fuel Sales Closing for {$date_lbl} ({$shift_label}). Ready for validation.";
+            $base_closing_key = 'mgr_fuel_closing_' . $station_id . '_' . date('Ymd', strtotime($report_date)) . '_' . ($shift_key ?: 'shift');
+
+            $mgr_stmt = $pdo->prepare("
+                SELECT id, role FROM users
+                WHERE (station_id = ? OR station_id IS NULL OR station_id = 0)
+                  AND LOWER(TRIM(role)) IN ('manager', 'admin', 'superadmin', 'supervisor')
+                  AND (status = 'Active' OR status = 'active' OR status IS NULL)
+            ");
+            $mgr_stmt->execute([$station_id]);
+            $managers = $mgr_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+            foreach ($managers as $mgr) {
+                $mgr_id = (int)$mgr['id'];
+                $mgr_role = strtolower(trim((string)$mgr['role']));
+                $user_closing_key = $base_closing_key . '_u' . $mgr_id;
+
+                try {
+                    $chk_closing = $pdo->prepare("
+                        SELECT id FROM notifications 
+                        WHERE user_id = ? AND (source_key = ? OR source_key = ?)
+                        LIMIT 1
+                    ");
+                    $chk_closing->execute([$mgr_id, $user_closing_key, $base_closing_key]);
+                    $existing_cls_id = $chk_closing->fetchColumn();
+
+                    if ($existing_cls_id) {
+                        $upd_cls = $pdo->prepare("
+                            UPDATE notifications
+                            SET title = 'Fuel Sales Closing Submitted — Pending Validation',
+                                message = ?,
+                                recipient_role = ?,
+                                redirect_url = 'manager_fuel_transaction_validation.php',
+                                source_key = ?,
+                                status = 'unread',
+                                created_at = NOW()
+                            WHERE id = ?
+                        ");
+                        $upd_cls->execute([$closing_msg, $mgr_role, $user_closing_key, $existing_cls_id]);
+                    } else {
+                        $ins_cls = $pdo->prepare("
+                            INSERT INTO notifications 
+                                (user_id, recipient_role, type, event_type, severity, title, message, source_key, redirect_url, reference_type, reference_id, shift_period, status, created_at)
+                            VALUES (?, ?, 'info', 'fuel_sales_closing', 'high', 'Fuel Sales Closing Submitted — Pending Validation', ?, ?, 'manager_fuel_transaction_validation.php', 'fuel_sales_closing', ?, ?, 'unread', NOW())
+                        ");
+                        $ins_cls->execute([$mgr_id, $mgr_role, $closing_msg, $user_closing_key, (int)$saved_id, $shift_label]);
+                    }
+                } catch (Exception $ne) {}
+            }
+        } catch (Exception $e) {}
 
         $report_url = 'staff_transactions_hub.php?section=fuel&closing_saved=1';
 

@@ -71,6 +71,10 @@ try {
         echo json_encode(['success'=>false,'error'=>"Transaction is already {$txn_status}"]); exit;
     }
 
+    if ($request_type === 'Adjustment' && in_array(strtolower($txn_status), ['released', 'completed'])) {
+        echo json_encode(['success'=>false,'error'=>"Adjustment cannot be requested for a transaction that is already {$txn_status}. Only Void can be requested."]); exit;
+    }
+
     $dup = $pdo->prepare("SELECT id FROM transaction_requests WHERE transaction_id=? AND record_source=? AND request_type=? AND status='Pending' LIMIT 1");
     $dup->execute([$transaction_id, $record_source, $request_type]);
     if ($dup->fetchColumn()) { echo json_encode(['success'=>false,'error'=>"A pending {$request_type} request already exists for this transaction"]); exit; }

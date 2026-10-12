@@ -138,20 +138,25 @@ try {
 function notify_manager_delivery_recorded(PDO $pdo, int $station_id, string $title, string $message): void
 {
     try {
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE station_id = ? AND role = 'manager' AND status = 'Active'");
+        $stmt = $pdo->prepare("
+            SELECT id, role FROM users 
+            WHERE (station_id = ? OR station_id IS NULL OR station_id = 0)
+              AND LOWER(TRIM(role)) IN ('manager', 'admin', 'superadmin', 'supervisor') 
+              AND (status = 'Active' OR status = 'active' OR status IS NULL)
+        ");
         $stmt->execute([$station_id]);
-        $manager_ids = $stmt->fetchAll(PDO::FETCH_COLUMN);
-        if (empty($manager_ids)) {
+        $recipients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        if (empty($recipients)) {
             return;
         }
 
         $notify = $pdo->prepare("
             INSERT INTO notifications
-                (user_id, type, title, message, event_type, severity, redirect_url, status, created_at)
-            VALUES (?, 'info', ?, ?, 'delivery', 'high', 'manager_stock_in.php', 'unread', NOW())
+                (user_id, recipient_role, type, title, message, event_type, severity, redirect_url, status, created_at)
+            VALUES (?, ?, 'info', ?, ?, 'delivery', 'high', 'manager_stock_in.php', 'unread', NOW())
         ");
-        foreach ($manager_ids as $manager_id) {
-            $notify->execute([(int)$manager_id, $title, $message]);
+        foreach ($recipients as $r) {
+            $notify->execute([(int)$r['id'], strtolower(trim((string)$r['role'])), $title, $message]);
         }
     } catch (Exception $e) {
         error_log('Manager delivery notification failed: ' . $e->getMessage());

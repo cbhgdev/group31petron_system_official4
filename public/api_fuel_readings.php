@@ -182,10 +182,6 @@ try {
                 $station_id = (int)(user_station_id() ?: 1253);
             }
 
-            if (empty($fuel_type)) respond(false, 'Fuel type is required.');
-            if ($present  <= 0)   respond(false, 'Ending meter reading must be greater than 0.');
-            if ($tanker_num <= 0) respond(false, 'Tanker/pump number is required.');
-
             // ── Beginning (Previous) reading — pump-specific for 24-hour continuous cycle ──
             // Form posts 'beginning_reading'; fallback fetches last present_reading for same pump.
             $previous = 0.0;
@@ -222,6 +218,16 @@ try {
                     if ($row_prev !== false) $previous = (float)$row_prev;
                 } catch (Exception $e) {}
             }
+
+            // Auto-default: if ending reading was left blank or 0, but previous reading exists,
+            // default Ending = Previous (no sales during this shift, "walay halin")
+            if ($present <= 0 && $previous > 0) {
+                $present = $previous;
+            }
+
+            if (empty($fuel_type)) respond(false, 'Fuel type is required.');
+            if ($present < 0)     respond(false, 'Ending meter reading cannot be negative.');
+            if ($tanker_num <= 0) respond(false, 'Tanker/pump number is required.');
 
             // ── Re-pull calibration from DB ──
             // Priority: fuel_calibration_records table (technician record) → fuel_inventory.latest_calibration
@@ -321,15 +327,8 @@ try {
                 respond(false, "Calibration cannot be negative. Value entered: {$calibration}.");
             }
 
-            // ── Compute Gross Volume first ──
-            $gross_volume = round($present - $previous, 4);   // Ending − Beginning
-
-            // ── Validation Rule 3: Calibration cannot exceed Gross Volume ──
-            if ($gross_volume > 0 && $calibration > $gross_volume) {
-                respond(false, "Calibration ({$calibration}L) cannot be greater than Gross Volume ({$gross_volume}L).");
-            }
-
             // ── Formula: Net Volume = Gross Volume − Calibration ──
+            // Even if calibration exceeds gross volume or gross is 0, net volume floors safely at 0.00 (walay halin)
             $liters_sold  = round($gross_volume - $calibration, 4);
             if ($liters_sold < 0) $liters_sold = 0.0;   // safety floor
 
@@ -587,31 +586,72 @@ try {
                     "{$fuel_type} Pump#{$tanker_num}: Ending={$present}, Beginning={$previous}, Calib={$calibration}, Volume={$liters_sold}L, Amount=₱{$total_amount}");
             } catch (Exception $e) {}
 
-                        // ── Notify all managers at this station (1 Consolidated Notification Per Shift) ──
+                        // ── Notify all managers and admins at this station (1 Consolidated Notification Per Shift) ──
             try {
                 $staff_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['name'] ?? $me['username'] ?? 'Staff');
                 $shift_lbl  = !empty($shift_period_safe) ? (ucfirst($shift_period_safe) . ' Shift') : 'First Shift';
                 $date_lbl   = date('M d, Y', strtotime($reading_date));
-                $notif_msg  = "{$staff_name} submitted Fuel Readings for {$date_lbl} ({$shift_lbl}). Ready for manager validation.";
-                $source_key = 'mgr_fuel_shift_' . $station_id . '_' . date('Ymd', strtotime($reading_date)) . '_' . strtolower($shift_period_safe);
+
+                // Count submitted readings for this shift and date
+                $cnt_stmt = $pdo->prepare("
+                    SELECT COUNT(*) FROM fuel_transactions
+                    WHERE station_id = ?
+                      AND DATE(transaction_date) = ?
+                      AND (shift_period = ? OR shift_name = ? OR ? = '')
+                      AND LOWER(COALESCE(status, '')) NOT IN ('voided', 'rejected', 'cancelled', 'canceled')
+                ");
+                $cnt_stmt->execute([$station_id, $reading_date, $shift_period_safe, $shift_name_safe, $shift_period_safe]);
+                $reading_count = (int)$cnt_stmt->fetchColumn();
+                $count_text = $reading_count > 0 ? " {$reading_count}" : "";
+
+                $notif_msg = "{$staff_name} submitted{$count_text} Fuel Readings for {$date_lbl} ({$shift_lbl}). Ready for validation.";
+                $base_source_key = 'mgr_fuel_shift_' . $station_id . '_' . date('Ymd', strtotime($reading_date)) . '_' . strtolower($shift_period_safe);
 
                 $mgr_stmt = $pdo->prepare("
-                    SELECT id FROM users
-                    WHERE station_id = ?
-                      AND LOWER(TRIM(role)) IN ('manager','admin')
-                      AND (is_active = 1 OR status = 'active')
+                    SELECT id, role FROM users
+                    WHERE (station_id = ? OR station_id IS NULL OR station_id = 0)
+                      AND LOWER(TRIM(role)) IN ('manager', 'admin', 'superadmin', 'supervisor')
+                      AND (status = 'Active' OR status = 'active' OR status IS NULL)
                 ");
                 $mgr_stmt->execute([$station_id]);
-                $mgr_ids = $mgr_stmt->fetchAll(PDO::FETCH_COLUMN);
+                $managers = $mgr_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-                foreach ($mgr_ids as $mgr_id) {
+                foreach ($managers as $mgr) {
+                    $mgr_id = (int)$mgr['id'];
+                    $mgr_role = strtolower(trim((string)$mgr['role']));
+                    $user_source_key = $base_source_key . '_u' . $mgr_id;
+
                     try {
-                        $ins_notif = $pdo->prepare("
-                            INSERT INTO notifications (user_id, type, event_type, severity, title, message, source_key, redirect_url, status, created_at)
-                            VALUES (?, 'info', 'transaction', 'high', 'New Fuel Reading — Pending Validation', ?, ?, 'manager_fuel_transaction_validation.php', 'unread', NOW())
-                            ON DUPLICATE KEY UPDATE title = VALUES(title), message = VALUES(message), redirect_url = VALUES(redirect_url)
+                        // Check if an existing notification exists for this user and this shift
+                        $chk_stmt = $pdo->prepare("
+                            SELECT id FROM notifications 
+                            WHERE user_id = ? AND (source_key = ? OR source_key = ?)
+                            LIMIT 1
                         ");
-                        $ins_notif->execute([$mgr_id, $notif_msg, $source_key]);
+                        $chk_stmt->execute([$mgr_id, $user_source_key, $base_source_key]);
+                        $existing_id = $chk_stmt->fetchColumn();
+
+                        if ($existing_id) {
+                            $upd = $pdo->prepare("
+                                UPDATE notifications
+                                SET title = 'New Fuel Reading — Pending Validation',
+                                    message = ?,
+                                    recipient_role = ?,
+                                    redirect_url = 'manager_fuel_transaction_validation.php',
+                                    source_key = ?,
+                                    status = 'unread',
+                                    created_at = NOW()
+                                WHERE id = ?
+                            ");
+                            $upd->execute([$notif_msg, $mgr_role, $user_source_key, $existing_id]);
+                        } else {
+                            $ins = $pdo->prepare("
+                                INSERT INTO notifications 
+                                    (user_id, recipient_role, type, event_type, severity, title, message, source_key, redirect_url, status, created_at)
+                                VALUES (?, ?, 'info', 'transaction', 'high', 'New Fuel Reading — Pending Validation', ?, ?, 'manager_fuel_transaction_validation.php', 'unread', NOW())
+                            ");
+                            $ins->execute([$mgr_id, $mgr_role, $notif_msg, $user_source_key]);
+                        }
                     } catch (Exception $ne) {}
                 }
             } catch (Exception $e) {}
