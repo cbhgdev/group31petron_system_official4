@@ -580,7 +580,7 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
   <link rel="apple-touch-icon" sizes="180x180" href="<?php echo $app_base_path; ?>/assets/img/apple-touch-icon.png?v=2.2" />
   <link rel="icon" type="image/png" sizes="192x192" href="<?php echo $app_base_path; ?>/assets/img/android-chrome-192x192.png?v=2.2" />
   <link rel="icon" type="image/png" sizes="512x512" href="<?php echo $app_base_path; ?>/assets/img/android-chrome-512x512.png?v=2.2" />
-  <link rel="manifest" href="<?php echo $public_base_url; ?>/manifest.json?v=2.2" />
+  <link rel="manifest" href="<?php echo $app_base_path; ?>/manifest.json?v=2.2" />
   <link rel="stylesheet" href="<?php echo $app_base_path; ?>/assets/css/style.css?v=2.0.2" />
   <link rel="stylesheet" href="<?php echo $app_base_path; ?>/assets/css/manager_table_design.css?v=2.0.2" />
   <link rel="stylesheet" href="<?php echo $app_base_path; ?>/assets/css/manager_customer_management.css?v=2.0.2" />
