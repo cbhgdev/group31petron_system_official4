@@ -21,7 +21,18 @@ $po_id     = (int)($_GET['id'] ?? 0);
 $po_date   = $_GET['date']     ?? null;
 $raw_param = trim($_GET['batch_id'] ?? $_GET['po_id'] ?? $_GET['po_number'] ?? $_GET['po'] ?? (isset($_GET['id']) && !is_numeric($_GET['id']) ? $_GET['id'] : ''));
 $batch_id  = preg_replace('/\s+/', '-', $raw_param);
-$base_po   = preg_replace('/-\d{2,}$/', '', $batch_id);
+
+// Derive the parent PO number. Only strip a trailing line suffix when the ID has
+// an extra segment (e.g. PO-2026-0008-01 → PO-2026-0008). Never strip the main
+// sequence number itself (PO-2026-0008 must stay PO-2026-0008), otherwise the
+// LIKE 'PO-2026%' lookups below would match every PO of the year.
+function po_base_number(string $id): string {
+    if (preg_match('/^([A-Za-z]+-\d{4}-\d+)-\d+$/', $id, $m)) {
+        return $m[1];
+    }
+    return $id;
+}
+$base_po   = po_base_number($batch_id);
 $raw_type  = $_GET['type']     ?? '';
 $po_type   = (strpos(strtolower($raw_type), 'fuel') !== false) ? 'fuel' : ((strpos(strtolower($raw_type), 'merch') !== false) ? 'merch' : '');
 
@@ -32,7 +43,7 @@ if ($batch_id === '' && $po_id > 0) {
         $rf = $stmt_find_f->fetch(PDO::FETCH_ASSOC);
         if ($rf) {
             $batch_id = $rf['batch_id'] ?: $rf['po_number'];
-            $base_po  = preg_replace('/-\d{2,}$/', '', $batch_id);
+            $base_po  = po_base_number($batch_id);
             $po_type  = 'fuel';
         } else {
             $stmt_find_m = $pdo->prepare("SELECT batch_id, po_number FROM purchase_orders WHERE id = ? LIMIT 1");
@@ -40,7 +51,7 @@ if ($batch_id === '' && $po_id > 0) {
             $rm = $stmt_find_m->fetch(PDO::FETCH_ASSOC);
             if ($rm) {
                 $batch_id = $rm['batch_id'] ?: $rm['po_number'];
-                $base_po  = preg_replace('/-\d{2,}$/', '', $batch_id);
+                $base_po  = po_base_number($batch_id);
                 $po_type  = 'merch';
             }
         }
@@ -111,30 +122,36 @@ try {
         ])));
         $cand_ph = !empty($candidates) ? implode(',', array_fill(0, count($candidates), '?')) : "''";
 
+        // Sub-line pattern: matches PO-2026-0008-01 but NOT PO-2026-0001 / PO-2026-00081
+        $like_sub = $base_po . '-%';
+
         $matched_fuel_parent = '';
-        try {
-            $stmt_f_chk = $pdo->prepare("
-                SELECT DISTINCT batch_id, po_number 
-                FROM fuel_purchase_orders 
-                WHERE (station_id = ? OR ? = 0)
-                  AND (batch_id IN ($cand_ph) OR po_number IN ($cand_ph) OR batch_id LIKE ? OR po_number LIKE ?)
-            ");
-            $stmt_f_chk->execute(array_merge([$station_id, $station_id], $candidates, $candidates, [$base_po . '%', $base_po . '%']));
-            $f_matches = $stmt_f_chk->fetchAll(PDO::FETCH_ASSOC);
-            if (!empty($f_matches)) {
-                foreach ($f_matches as $fm) {
-                    if (!empty($fm['batch_id'])) {
-                        $matched_fuel_parent = $fm['batch_id'];
-                        break;
+        // Only probe fuel tables when the caller did NOT explicitly ask for merchandise
+        if ($po_type !== 'merch') {
+            try {
+                $stmt_f_chk = $pdo->prepare("
+                    SELECT DISTINCT batch_id, po_number 
+                    FROM fuel_purchase_orders 
+                    WHERE (station_id = ? OR ? = 0)
+                      AND (batch_id IN ($cand_ph) OR po_number IN ($cand_ph) OR batch_id LIKE ? OR po_number LIKE ?)
+                ");
+                $stmt_f_chk->execute(array_merge([$station_id, $station_id], $candidates, $candidates, [$like_sub, $like_sub]));
+                $f_matches = $stmt_f_chk->fetchAll(PDO::FETCH_ASSOC);
+                if (!empty($f_matches)) {
+                    foreach ($f_matches as $fm) {
+                        if (!empty($fm['batch_id'])) {
+                            $matched_fuel_parent = $fm['batch_id'];
+                            break;
+                        }
+                    }
+                    if (!$matched_fuel_parent) {
+                        $matched_fuel_parent = $base_po ?: $batch_id;
                     }
                 }
-                if (!$matched_fuel_parent) {
-                    $matched_fuel_parent = $base_po ?: $batch_id;
-                }
-            }
-        } catch (Exception $e) {}
+            } catch (Exception $e) {}
+        }
 
-        if ($matched_fuel_parent !== '' || $po_type === 'fuel') {
+        if ($po_type !== 'merch' && ($matched_fuel_parent !== '' || $po_type === 'fuel')) {
             $fuel_key = $matched_fuel_parent ?: ($base_po ?: $batch_id);
             $stmt = $pdo->prepare("
                 SELECT fpo.*,
@@ -163,7 +180,7 @@ try {
                   AND (fpo.batch_id = ? OR fpo.po_number = ? OR fpo.batch_id = ? OR fpo.po_number LIKE ? OR fpo.batch_id LIKE ?)
                 ORDER BY fpo.id ASC
             ");
-            $stmt->execute([$station_id, $station_id, $fuel_key, $batch_id, $batch_id, $fuel_key . '%', $fuel_key . '%']);
+            $stmt->execute([$station_id, $station_id, $fuel_key, $batch_id, $batch_id, $fuel_key . '-%', $fuel_key . '-%']);
             $po_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
             if (!empty($po_items)) {
                 $po_type = 'fuel';
@@ -199,7 +216,7 @@ try {
                   AND (po.batch_id IN ($cand_ph) OR po.po_number IN ($cand_ph) OR po.batch_id LIKE ? OR po.po_number LIKE ?)
                 ORDER BY po.id ASC
             ");
-            $stmt->execute(array_merge([$station_id, $station_id], $candidates, $candidates, [$base_po . '%', $base_po . '%']));
+            $stmt->execute(array_merge([$station_id, $station_id], $candidates, $candidates, [$like_sub, $like_sub]));
             $po_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
             if (!empty($po_items)) {
                 $po_type = 'merch';
