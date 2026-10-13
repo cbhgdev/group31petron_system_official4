@@ -9,6 +9,9 @@ if (session_status() === PHP_SESSION_NONE) {
 header('Content-Type: text/html; charset=utf-8');
 require_once __DIR__ . '/../backend/lib.php';
 require_once __DIR__ . '/db_connect.php';
+if (function_exists('petron_init_dynamic_timezone')) {
+    petron_init_dynamic_timezone();
+}
 require_login();
 
 // Authentication check
@@ -17,16 +20,19 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-$me         = $_SESSION['user'] ?? [];
-$station_id = (int)($_SESSION['station_id'] ?? $me['station_id'] ?? 1);
-$user_id    = (int)$_SESSION['user_id'];
-$user_name  = $_SESSION['full_name'] ?? $_SESSION['username'] ?? 'JUDY LASTIMOSA';
+$me         = function_exists('current_user') ? current_user() : ($_SESSION['user'] ?? []);
+$station_id = function_exists('user_station_id') ? (int)user_station_id() : (int)($_SESSION['station_id'] ?? $me['station_id'] ?? 1);
+if ($station_id <= 0) $station_id = 1;
+$user_id    = (int)($_SESSION['user_id'] ?? $me['id'] ?? 0);
+$user_name  = $_SESSION['full_name'] ?? $me['name'] ?? $_SESSION['username'] ?? 'JUDY LASTIMOSA';
 
 $page_title = "Fuel Sales Closing";
 include __DIR__ . '/../partials/header.php';
 
+$__closing_hour = (int)date('G');
+$__default_shift = ($__closing_hour >= 6 && $__closing_hour < 14) ? 'Shift 1' : 'Shift 2';
 $report_date = $_GET['date'] ?? date('Y-m-d');
-$shift       = $_GET['shift'] ?? 'Second Shift';
+$shift       = $_GET['shift'] ?? $__default_shift;
 ?>
 
 <div class="main-content" style="padding: 20px; background: #f8fafc; min-height: 100vh; box-sizing: border-box; overflow-x: hidden;">
@@ -426,24 +432,24 @@ $shift       = $_GET['shift'] ?? 'Second Shift';
                     <?php if ($is_mgr_admin || $is_s1): ?>
                     <div class="form-row-custom" id="row_cash_shift1">
                         <label>Shift 1 Cash (₱)</label>
-                        <input type="text" id="cash_shift1" name="cash_shift1" value="0.00" placeholder="0.00" onfocus="formatClosingFocus(this)" oninput="formatClosingInput(this); calculateClosingTotals()" onblur="formatClosingBlur(this); calculateClosingTotals()" onkeydown="handleClosingKeydown(event, this)" autocomplete="off">
+                        <input type="text" id="cash_shift1" name="cash_shift1" value="" placeholder="0.00" onfocus="formatClosingFocus(this)" oninput="formatClosingInput(this); calculateClosingTotals()" onblur="formatClosingBlur(this); calculateClosingTotals()" onkeydown="handleClosingKeydown(event, this)" autocomplete="off">
                     </div>
                     <?php else: ?>
-                        <input type="hidden" id="cash_shift1" name="cash_shift1" value="0.00">
+                        <input type="hidden" id="cash_shift1" name="cash_shift1" value="">
                     <?php endif; ?>
 
                     <?php if ($is_mgr_admin || $is_s2): ?>
                     <div class="form-row-custom" id="row_cash_shift2">
                         <label>Shift 2 Cash (₱)</label>
-                        <input type="text" id="cash_shift2" name="cash_shift2" value="0.00" placeholder="0.00" onfocus="formatClosingFocus(this)" oninput="formatClosingInput(this); calculateClosingTotals()" onblur="formatClosingBlur(this); calculateClosingTotals()" onkeydown="handleClosingKeydown(event, this)" autocomplete="off">
+                        <input type="text" id="cash_shift2" name="cash_shift2" value="" placeholder="0.00" onfocus="formatClosingFocus(this)" oninput="formatClosingInput(this); calculateClosingTotals()" onblur="formatClosingBlur(this); calculateClosingTotals()" onkeydown="handleClosingKeydown(event, this)" autocomplete="off">
                     </div>
                     <?php else: ?>
-                        <input type="hidden" id="cash_shift2" name="cash_shift2" value="0.00">
+                        <input type="hidden" id="cash_shift2" name="cash_shift2" value="">
                     <?php endif; ?>
 
                     <div class="form-row-custom total-row">
                         <label>Total Cash (₱)</label>
-                        <input type="text" id="total_cash" name="total_cash" readonly value="0.00" style="font-weight:800; color:#002F70;">
+                        <input type="text" id="total_cash" name="total_cash" readonly value="" placeholder="0.00" style="font-weight:800; color:#002F70;">
                     </div>
                 </div>
 
@@ -455,24 +461,24 @@ $shift       = $_GET['shift'] ?? 'Second Shift';
                     <?php if ($is_mgr_admin || $is_s1): ?>
                     <div class="form-row-custom" id="row_ar_shift1">
                         <label>Shift 1 A/R (₱)</label>
-                        <input type="text" id="ar_shift1" name="ar_shift1" value="0.00" placeholder="0.00" onfocus="formatClosingFocus(this)" oninput="formatClosingInput(this); calculateClosingTotals()" onblur="formatClosingBlur(this); calculateClosingTotals()" onkeydown="handleClosingKeydown(event, this)" autocomplete="off">
+                        <input type="text" id="ar_shift1" name="ar_shift1" value="" placeholder="0.00" onfocus="formatClosingFocus(this)" oninput="formatClosingInput(this); calculateClosingTotals()" onblur="formatClosingBlur(this); calculateClosingTotals()" onkeydown="handleClosingKeydown(event, this)" autocomplete="off">
                     </div>
                     <?php else: ?>
-                        <input type="hidden" id="ar_shift1" name="ar_shift1" value="0.00">
+                        <input type="hidden" id="ar_shift1" name="ar_shift1" value="">
                     <?php endif; ?>
 
                     <?php if ($is_mgr_admin || $is_s2): ?>
                     <div class="form-row-custom" id="row_ar_shift2">
                         <label>Shift 2 A/R (₱)</label>
-                        <input type="text" id="ar_shift2" name="ar_shift2" value="0.00" placeholder="0.00" onfocus="formatClosingFocus(this)" oninput="formatClosingInput(this); calculateClosingTotals()" onblur="formatClosingBlur(this); calculateClosingTotals()" onkeydown="handleClosingKeydown(event, this)" autocomplete="off">
+                        <input type="text" id="ar_shift2" name="ar_shift2" value="" placeholder="0.00" onfocus="formatClosingFocus(this)" oninput="formatClosingInput(this); calculateClosingTotals()" onblur="formatClosingBlur(this); calculateClosingTotals()" onkeydown="handleClosingKeydown(event, this)" autocomplete="off">
                     </div>
                     <?php else: ?>
-                        <input type="hidden" id="ar_shift2" name="ar_shift2" value="0.00">
+                        <input type="hidden" id="ar_shift2" name="ar_shift2" value="">
                     <?php endif; ?>
 
                     <div class="form-row-custom total-row">
                         <label>Total A/R (₱)</label>
-                        <input type="text" id="total_ar" name="total_ar" readonly value="0.00" style="font-weight:800; color:#002F70;">
+                        <input type="text" id="total_ar" name="total_ar" readonly value="" placeholder="0.00" style="font-weight:800; color:#002F70;">
                     </div>
                 </div>
 
@@ -568,7 +574,7 @@ function formatClosingInput(input) {
 function formatClosingBlur(input) {
     const clean = input.value.toString().replace(/,/g, '').trim();
     if (clean === '' || isNaN(parseFloat(clean))) {
-        input.value = '0.00';
+        input.value = '';
     } else {
         const num = parseFloat(clean);
         input.value = formatNum(num);
@@ -702,15 +708,11 @@ async function fetchSummary() {
             });
             document.getElementById('tankTotalLiters').textContent = formatNum(sumTankLiters) + ' L';
 
-            // Populate existing saved fields if any
-            if (result.existing_closing) {
-                const ex = result.existing_closing;
-                document.getElementById('cash_shift1').value = formatNum(parseFloat(ex.cash_shift1 || 0));
-                document.getElementById('cash_shift2').value = formatNum(parseFloat(ex.cash_shift2 || 0));
-                
-                document.getElementById('ar_shift1').value   = formatNum(parseFloat(ex.ar_shift1 || 0));
-                document.getElementById('ar_shift2').value   = formatNum(parseFloat(ex.ar_shift2 || 0));
-            }
+            // Cash Summary & A/R Summary are strictly manual input — always start blank
+            if (document.getElementById('cash_shift1')) document.getElementById('cash_shift1').value = '';
+            if (document.getElementById('cash_shift2')) document.getElementById('cash_shift2').value = '';
+            if (document.getElementById('ar_shift1'))   document.getElementById('ar_shift1').value   = '';
+            if (document.getElementById('ar_shift2'))   document.getElementById('ar_shift2').value   = '';
 
             calculateClosingTotals();
         }
@@ -722,20 +724,22 @@ async function fetchSummary() {
 function calculateClosingTotals() {
     const elCash1 = document.getElementById('cash_shift1');
     const elCash2 = document.getElementById('cash_shift2');
+    const hasCashInput = (elCash1 && elCash1.value.trim() !== '') || (elCash2 && elCash2.value.trim() !== '');
     const cashS1 = elCash1 ? parseVal(elCash1.value) : 0;
     const cashS2 = elCash2 ? parseVal(elCash2.value) : 0;
     const totalCash = cashS1 + cashS2;
     if (document.getElementById('total_cash')) {
-        document.getElementById('total_cash').value = formatNum(totalCash);
+        document.getElementById('total_cash').value = hasCashInput ? formatNum(totalCash) : '';
     }
 
     const elAr1 = document.getElementById('ar_shift1');
     const elAr2 = document.getElementById('ar_shift2');
+    const hasArInput = (elAr1 && elAr1.value.trim() !== '') || (elAr2 && elAr2.value.trim() !== '');
     const arS1 = elAr1 ? parseVal(elAr1.value) : 0;
     const arS2 = elAr2 ? parseVal(elAr2.value) : 0;
     const totalAr = arS1 + arS2;
     if (document.getElementById('total_ar')) {
-        document.getElementById('total_ar').value = formatNum(totalAr);
+        document.getElementById('total_ar').value = hasArInput ? formatNum(totalAr) : '';
     }
 
     const totalFuelAmountElem = document.getElementById('summary_total_amount');
@@ -758,7 +762,7 @@ function calculateClosingTotals() {
     }
 
     if (document.getElementById('total_cash_bank')) {
-        document.getElementById('total_cash_bank').value = formatNum(totalCash > 0 ? totalCash : netSales);
+        document.getElementById('total_cash_bank').value = formatNum(totalCash);
     }
 }
 
@@ -791,6 +795,7 @@ async function saveClosingData() {
 
         if (result.success) {
             try {
+                sessionStorage.removeItem('petron_fuel_reading_cache');
                 sessionStorage.removeItem('petron_fuel_readings_submitted');
                 sessionStorage.removeItem('petron_fuel_reading_shift');
                 sessionStorage.removeItem('petron_fuel_reading_date');

@@ -814,12 +814,55 @@ body .main,
 .si-btn.outline{background:#fff!important;color:#475569!important;border-color:#cbd5e1!important;}
 .si-btn.success{background:#16a34a!important;color:#fff!important;border-color:#16a34a!important;}
 .si-btn:disabled{opacity:.55;cursor:not-allowed;}
-.table-card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow-x:auto;overflow-y:visible;box-shadow:0 2px 8px rgba(15,23,42,.04);width:100%;box-sizing:border-box;}
+.table-card{background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow-x:auto;overflow-y:visible;box-shadow:0 2px 8px rgba(15,23,42,.04);width:100%;box-sizing:border-box;position:relative;}
+.si-table-responsive{width:100%;max-width:100%;overflow-x:auto;overflow-y:visible;-webkit-overflow-scrolling:touch;box-sizing:border-box;}
+.si-table-responsive::-webkit-scrollbar{height:7px;}
+.si-table-responsive::-webkit-scrollbar-track{background:#f1f5f9;border-radius:4px;}
+.si-table-responsive::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px;}
+.si-table-responsive::-webkit-scrollbar-thumb:hover{background:#94a3b8;}
 .table-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-bottom:1px solid #e2e8f0;}
 .table-title{font-size:15px;font-weight:850;color:#002F70;display:flex;align-items:center;gap:8px;}
 .stock-table{width:100%;border-collapse:collapse;font-size:12px;}
 .stock-table th{background:#002F70;color:#fff;text-align:left;padding:11px 12px;text-transform:uppercase;letter-spacing:.45px;font-size:10px;}
 .stock-table td{padding:11px 12px;border-bottom:1px solid #eef2f7;vertical-align:middle;overflow-wrap:anywhere;}
+
+/* ── Stock-In History Table Full Width & Clean Sticky Action Column ── */
+table.si-history-table{width:100%!important;min-width:0!important;max-width:100%!important;border-collapse:collapse!important;table-layout:auto!important;font-size:12px!important;}
+table.si-history-table th{background:#002F70!important;color:#fff!important;padding:11px 9px!important;font-size:10.5px!important;font-weight:800!important;text-transform:uppercase!important;letter-spacing:.35px!important;border:none!important;vertical-align:middle!important;white-space:nowrap!important;}
+table.si-history-table td{padding:10px 9px!important;border-bottom:1px solid #eef2f7!important;vertical-align:middle!important;color:#1e293b!important;white-space:normal!important;overflow-wrap:break-word!important;}
+table.si-history-table .col-ref{white-space:nowrap!important;font-family:Consolas,monospace!important;font-weight:800!important;color:#002F70!important;font-size:12px!important;}
+table.si-history-table .col-po{white-space:nowrap!important;font-size:12px!important;}
+table.si-history-table .col-cat{text-align:center!important;white-space:nowrap!important;}
+table.si-history-table .col-supplier{white-space:normal!important;font-weight:600!important;color:#1e293b!important;line-height:1.25!important;max-width:140px!important;}
+table.si-history-table .col-date{white-space:nowrap!important;font-size:11.5px!important;}
+table.si-history-table .col-stocked-by{white-space:normal!important;line-height:1.25!important;font-weight:600!important;color:#334155!important;max-width:150px!important;word-break:break-word!important;}
+table.si-history-table .col-items{text-align:center!important;white-space:normal!important;line-height:1.25!important;font-size:11.5px!important;max-width:110px!important;}
+table.si-history-table .col-status{text-align:center!important;white-space:nowrap!important;}
+
+/* Sticky Action Column so Print button is ALWAYS 100% visible and NEVER covered */
+table.si-history-table th.col-action,
+table.si-history-table td.col-action{text-align:center!important;white-space:nowrap!important;min-width:175px!important;width:175px!important;position:sticky!important;right:0!important;z-index:5!important;}
+table.si-history-table th.col-action{background:#002F70!important;box-shadow:-3px 0 6px rgba(0,47,112,0.25)!important;}
+table.si-history-table td.col-action{background:#ffffff!important;box-shadow:-3px 0 6px rgba(0,0,0,0.05)!important;}
+table.si-history-table tr:hover td.col-action{background:#eff6ff!important;}
+
+/* Action Buttons Styling */
+.si-action-btns-wrap{display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:6px!important;flex-wrap:nowrap!important;}
+.si-btn-view-act{height:32px!important;padding:0 9px!important;font-size:11px!important;font-weight:700!important;color:#002F70!important;background:#ffffff!important;border:1px solid #cbd5e1!important;border-radius:6px!important;display:inline-flex!important;align-items:center!important;gap:5px!important;cursor:pointer!important;transition:all .15s ease!important;white-space:nowrap!important;box-sizing:border-box!important;}
+.si-btn-view-act:hover{background:#f1f5f9!important;border-color:#002F70!important;}
+.si-btn-print-act{height:32px!important;padding:0 10px!important;font-size:11px!important;font-weight:700!important;color:#002F70!important;background:#f8fafc!important;border:1.5px solid #002F70!important;border-radius:6px!important;display:inline-flex!important;align-items:center!important;gap:5px!important;cursor:pointer!important;text-decoration:none!important;transition:all .15s ease!important;white-space:nowrap!important;box-sizing:border-box!important;}
+.si-btn-print-act:hover{background:#002F70!important;color:#ffffff!important;border-color:#002F70!important;}
+.si-btn-print-act:hover i{color:#ffffff!important;}
+
+/* Dark Mode Overrides for Stock-In History Table & Sticky Action Column */
+body.dark-theme table.si-history-table th.col-action{background:#1a2035!important;box-shadow:-3px 0 6px rgba(0,0,0,0.45)!important;}
+body.dark-theme table.si-history-table td.col-action{background:#1e2130!important;box-shadow:-3px 0 6px rgba(0,0,0,0.35)!important;}
+body.dark-theme table.si-history-table tr:hover td.col-action{background:#2a3150!important;}
+body.dark-theme .si-btn-view-act{background:#252840!important;border-color:#3d4a5c!important;color:#93c5fd!important;}
+body.dark-theme .si-btn-view-act:hover{background:#2a3150!important;border-color:#60a5fa!important;}
+body.dark-theme .si-btn-print-act{background:#1a2035!important;border-color:#3b82f6!important;color:#93c5fd!important;}
+body.dark-theme .si-btn-print-act:hover{background:#2563eb!important;border-color:#2563eb!important;color:#ffffff!important;}
+body.dark-theme .si-btn-print-act:hover i{color:#ffffff!important;}
 .click-row{cursor:pointer;}
 .click-row:hover td{background:#eff6ff;}
 .po-link{font-family:Consolas,monospace;font-weight:850;color:#002F70;}
@@ -850,15 +893,31 @@ body .main,
 #stockToast.stock-toast.is-visible{display:block!important;opacity:1;transform:translateX(0)!important;}
 #stockToast.stock-toast.toast-ok{background:#16a34a!important;}
 #stockToast.stock-toast.toast-err{background:#dc2626!important;}
-/* Confirm Modal Overlay and Buttons (Override global button styling) */
-#siConfirmOverlay {
+/* Confirm Modal & Stock-In View Details Modal Overlay (Centered in Workspace) */
+#siConfirmOverlay,
+#stockInViewModal {
     display: none;
-    position: fixed;
-    inset: 0;
+    position: fixed !important;
+    inset: 0 !important;
     background: rgba(15, 23, 42, 0.65) !important;
+    backdrop-filter: blur(5px) !important;
+    -webkit-backdrop-filter: blur(5px) !important;
     z-index: 99999 !important;
-    align-items: center;
-    justify-content: center;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 94px 24px 64px 274px !important; /* 70px header + 24px top, 40px footer + 24px bottom, 250px sidebar + 24px left */
+    box-sizing: border-box !important;
+    overflow-y: auto !important;
+}
+body.sidebar-collapsed #siConfirmOverlay,
+body.sidebar-collapsed #stockInViewModal {
+    padding-left: 94px !important; /* 70px collapsed sidebar + 24px left */
+}
+@media (max-width: 991px) {
+    #siConfirmOverlay,
+    #stockInViewModal {
+        padding: 80px 16px 60px 16px !important;
+    }
 }
 #siConfirmOverlay .confirm-card {
     background: #ffffff !important;
@@ -868,6 +927,40 @@ body .main,
     width: 90% !important;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35) !important;
     position: relative !important;
+    margin: auto !important;
+}
+#stockInViewModal .si-view-modal-card {
+    background: #ffffff !important;
+    border-radius: 14px !important;
+    width: 100% !important;
+    max-width: min(920px, calc(100vw - 310px)) !important;
+    max-height: calc(100vh - 165px) !important;
+    display: flex !important;
+    flex-direction: column !important;
+    box-shadow: 0 25px 60px rgba(0, 0, 0, 0.35) !important;
+    overflow: hidden !important;
+    margin: auto !important;
+    position: relative !important;
+}
+body.sidebar-collapsed #stockInViewModal .si-view-modal-card {
+    max-width: min(940px, calc(100vw - 120px)) !important;
+}
+@media (max-width: 991px) {
+    #stockInViewModal .si-view-modal-card {
+        max-width: 100% !important;
+        max-height: calc(100vh - 145px) !important;
+    }
+}
+#stockInViewModal table.si-breakdown-table {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: collapse !important;
+}
+#stockInViewModal table.si-breakdown-table th,
+#stockInViewModal table.si-breakdown-table td {
+    box-sizing: border-box !important;
 }
 #siConfirmOverlay #siConfirmCancelBtn {
     padding: 10px 22px !important;
@@ -1355,19 +1448,19 @@ body .main,
                 </span>
             </div>
 
-            <div style="overflow-x:auto;">
-                <table class="stock-table" id="stockInHistoryTable">
+            <div class="si-table-responsive" style="overflow-x:auto;">
+                <table class="stock-table no-min-width si-history-table" id="stockInHistoryTable">
                     <thead>
                         <tr>
-                            <th>Reference / Batch No.</th>
-                            <th>PO / DR No.</th>
-                            <th style="text-align:center;">Category</th>
-                            <th>Supplier</th>
-                            <th>Date Stocked-In</th>
-                            <th>Stocked By</th>
-                            <th style="text-align:center;">Delivered Items</th>
-                            <th style="text-align:center;">Status</th>
-                            <th style="text-align:center; width:170px;">Action</th>
+                            <th class="col-ref">Reference / Batch No.</th>
+                            <th class="col-po">PO / DR No.</th>
+                            <th class="col-cat" style="text-align:center;">Category</th>
+                            <th class="col-supplier">Supplier</th>
+                            <th class="col-date">Date Stocked-In</th>
+                            <th class="col-stocked-by">Stocked By</th>
+                            <th class="col-items" style="text-align:center;">Delivered Items</th>
+                            <th class="col-status" style="text-align:center;">Status</th>
+                            <th class="col-action" style="text-align:center; min-width:175px; width:175px;">Action</th>
                         </tr>
                     </thead>
                     <tbody id="stockInHistoryBody">
@@ -1400,7 +1493,7 @@ body .main,
                                     $si_row['supplier'] ?? '',
                                     $si_row['stocked_by'] ?? '',
                                     $si_row['received_by'] ?? '',
-                                ];
+                                    ];
                                 foreach ($si_row['items'] as $it) {
                                     $h_search_parts[] = $it['name'] ?? '';
                                 }
@@ -1432,16 +1525,16 @@ body .main,
                                 data-supplier="<?= htmlspecialchars(strtolower($si_row['supplier'])) ?>"
                                 data-date="<?= $row_date_ymd ?>"
                                 data-details='<?= $h_json_attr ?>'>
-                                <td style="font-weight:800; color:#002F70; font-family:Consolas, monospace; font-size:12.5px;">
+                                <td class="col-ref" style="font-weight:800; color:#002F70; font-family:Consolas, monospace; font-size:12.5px;">
                                     <?= htmlspecialchars($si_row['batch_id'] ?: ($si_row['delivery_ref'] ?: '—')) ?>
                                 </td>
-                                <td>
+                                <td class="col-po">
                                     <div style="font-weight:700; color:#0f172a; font-family:Consolas, monospace;"><?= htmlspecialchars($si_row['po_number'] ?: '—') ?></div>
                                     <?php if (!empty($si_row['dr_number'])): ?>
                                         <div style="font-size:11px; color:#64748b;">DR: <?= htmlspecialchars($si_row['dr_number']) ?></div>
                                     <?php endif; ?>
                                 </td>
-                                <td style="text-align:center;">
+                                <td class="col-cat" style="text-align:center;">
                                     <?php if ($h_is_fuel): ?>
                                         <span style="background:#e0f2fe; color:#0369a1; font-weight:800; font-size:11px; padding:3px 9px; border-radius:12px; display:inline-flex; align-items:center; gap:4px;">
                                             <i class="fas fa-gas-pump" style="font-size:10px;"></i> Fuel
@@ -1452,18 +1545,18 @@ body .main,
                                         </span>
                                     <?php endif; ?>
                                 </td>
-                                <td style="font-weight:600; color:#1e293b;"><?= htmlspecialchars($si_row['supplier']) ?></td>
-                                <td style="color:#334155; white-space:nowrap;">
+                                <td class="col-supplier" style="font-weight:600; color:#1e293b;"><?= htmlspecialchars($si_row['supplier']) ?></td>
+                                <td class="col-date" style="color:#334155; white-space:nowrap;">
                                     <div style="font-weight:700;"><?= $h_dt_fmt ?></div>
                                     <?php if ($h_tm_fmt): ?>
                                         <div style="font-size:11px; color:#64748b;"><?= $h_tm_fmt ?></div>
                                     <?php endif; ?>
                                 </td>
-                                <td style="font-weight:600; color:#334155;">
+                                <td class="col-stocked-by" style="font-weight:600; color:#334155;">
                                     <div><?= htmlspecialchars($si_row['stocked_by']) ?></div>
                                     <div style="font-size:11px; color:#64748b;">Rec: <?= htmlspecialchars($si_row['received_by']) ?></div>
                                 </td>
-                                <td style="text-align:center;">
+                                <td class="col-items" style="text-align:center;">
                                     <div style="font-weight:800; color:#002F70;"><?= $h_item_count ?> Item<?= $h_item_count === 1 ? '' : 's' ?></div>
                                     <div style="font-size:11px; color:#64748b; line-height:1.2; margin-top:2px;">
                                         <?= htmlspecialchars($h_first_item) ?>
@@ -1473,18 +1566,20 @@ body .main,
                                         <?= $h_is_fuel ? number_format($si_row['total_qty'], 2) : number_format($si_row['total_qty']) ?> <?= htmlspecialchars($h_unit) ?>
                                     </div>
                                 </td>
-                                <td style="text-align:center;">
+                                <td class="col-status" style="text-align:center;">
                                     <span style="display:inline-flex; align-items:center; gap:4px; background:#dcfce7; color:#15803d; font-weight:800; font-size:11px; padding:4px 9px; border-radius:12px;">
                                         <i class="fas fa-check-circle" style="font-size:10px;"></i> <?= htmlspecialchars($si_row['status']) ?>
                                     </span>
                                 </td>
-                                <td style="text-align:center; white-space:nowrap;">
-                                    <button type="button" class="si-btn outline" style="height:32px; padding:0 10px; font-size:11.5px; display:inline-flex; align-items:center; gap:5px;" onclick="openStockInViewModal(this)">
-                                        <i class="fas fa-eye" style="color:#002F70;"></i> View Details
-                                    </button>
-                                    <a href="print_supplier_invoice.php?batch_id=<?= urlencode($si_row['batch_id'] ?: $si_row['po_number']) ?>&type=<?= urlencode($si_row['delivery_type']) ?>" target="_blank" class="si-btn outline" style="height:32px; padding:0 8px; font-size:11.5px; display:inline-flex; align-items:center;" title="Print Invoice">
-                                        <i class="fas fa-print" style="color:#64748b;"></i>
-                                    </a>
+                                <td class="col-action" style="text-align:center; white-space:nowrap;">
+                                    <div class="si-action-btns-wrap">
+                                        <button type="button" class="si-btn-view-act" onclick="openStockInViewModal(this)" title="View Details">
+                                            <i class="fas fa-eye" style="color:#002F70;"></i> View Details
+                                        </button>
+                                        <a href="print_supplier_invoice.php?batch_id=<?= urlencode($si_row['batch_id'] ?: $si_row['po_number']) ?>&type=<?= urlencode($si_row['delivery_type']) ?>" target="_blank" class="si-btn-print-act" title="Print Invoice">
+                                            <i class="fas fa-print"></i> Print
+                                        </a>
+                                    </div>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
@@ -1549,8 +1644,8 @@ body .main,
 </div>
 
 <!-- Stock-In View Details Modal -->
-<div id="stockInViewModal" style="display:none; position:fixed; inset:0; z-index:99999; background:rgba(15,23,42,0.65); backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); align-items:flex-start; justify-content:center; padding:70px 16px 30px 16px; box-sizing:border-box; overflow-y:auto;" onclick="if(event.target===this) closeStockInViewModal();">
-    <div style="background:#fff; border-radius:14px; width:96%; max-width:1020px; max-height:calc(100vh - 100px); display:flex; flex-direction:column; box-shadow:0 25px 60px rgba(0,0,0,0.35); overflow:hidden; margin:0 auto;" onclick="event.stopPropagation();">
+<div id="stockInViewModal" class="modal-overlay" style="display:none; position:fixed; inset:0; z-index:99999; background:rgba(15,23,42,0.65); backdrop-filter:blur(5px); -webkit-backdrop-filter:blur(5px); align-items:center; justify-content:center; box-sizing:border-box; overflow-y:auto;" onclick="if(event.target===this) closeStockInViewModal();">
+    <div class="si-view-modal-card" style="background:#fff; border-radius:14px; width:100%; max-width:min(920px, calc(100vw - 310px)); max-height:calc(100vh - 165px); display:flex; flex-direction:column; box-shadow:0 25px 60px rgba(0,0,0,0.35); overflow:hidden; margin:auto;" onclick="event.stopPropagation();">
         <div style="background:#002F70; padding:18px 24px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
             <div style="display:flex; align-items:center; gap:12px;">
                 <i class="fas fa-boxes" style="color:#fff; font-size:18px;"></i>
@@ -1559,9 +1654,6 @@ body .main,
                     <div style="color:rgba(255,255,255,0.75); font-size:11.5px; margin-top:1px;" id="siv_subtitle">Completed Stock-In Verification Record</div>
                 </div>
             </div>
-            <button type="button" onclick="closeStockInViewModal()" style="background:transparent; border:none; color:#fff; font-size:18px; cursor:pointer; padding:4px 8px; border-radius:4px; opacity:0.85;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.85'">
-                <i class="fas fa-times"></i>
-            </button>
         </div>
         <div style="overflow-y:auto; flex:1; padding:20px 22px;">
             <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(155px,1fr)); gap:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:14px; margin-bottom:16px;">
@@ -1595,16 +1687,16 @@ body .main,
                 <i class="fas fa-list" style="margin-right:5px;"></i> Stocked Items Breakdown
             </div>
             <div style="border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; margin-bottom:16px; background:#fff; width:100%; box-sizing:border-box;">
-                <table style="width:100%; border-collapse:collapse; table-layout:fixed; font-size:11.5px; box-sizing:border-box; margin:0;">
+                <table class="no-min-width si-breakdown-table" style="width:100% !important; min-width:0 !important; max-width:100% !important; border-collapse:collapse; table-layout:fixed !important; font-size:11.5px; box-sizing:border-box; margin:0;">
                     <thead style="background:#002F70;">
                         <tr>
                             <th style="width:22%; padding:9px 8px; text-align:left; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Item / Product</th>
-                            <th style="width:12.5%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Ordered</th>
-                            <th style="width:13.5%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Received</th>
-                            <th style="width:11%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Unit Cost</th>
-                            <th style="width:11.5%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Selling Price</th>
-                            <th style="width:18.5%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Total Cost</th>
-                            <th style="width:11%; padding:9px 6px; text-align:center; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Condition</th>
+                            <th style="width:12%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Ordered</th>
+                            <th style="width:13%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Received</th>
+                            <th style="width:12%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Unit Cost</th>
+                            <th style="width:12%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Selling Price</th>
+                            <th style="width:16%; padding:9px 6px; text-align:right; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Total Cost</th>
+                            <th style="width:13%; padding:9px 6px; text-align:center; color:#fff; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.3px; white-space:nowrap; box-sizing:border-box;">Condition</th>
                         </tr>
                     </thead>
                     <tbody id="siv_items_body"></tbody>
@@ -1616,11 +1708,8 @@ body .main,
                 <div id="siv_remarks" style="font-size:12.5px; color:#78350f; line-height:1.45;"></div>
             </div>
         </div>
-        <div style="padding:14px 24px; border-top:1px solid #e2e8f0; background:#f8fafc; display:flex; justify-content:space-between; align-items:center; flex-shrink:0;">
-            <a id="siv_print_btn" href="#" target="_blank" class="si-btn primary" style="font-size:12.5px; height:36px;">
-                <i class="fas fa-print"></i> Print Invoice
-            </a>
-            <button type="button" onclick="closeStockInViewModal()" style="background:#64748b; color:#fff; border:none; padding:8px 22px; border-radius:7px; font-weight:700; font-size:13px; cursor:pointer;">
+        <div style="padding:14px 24px; border-top:1px solid #e2e8f0; background:#f8fafc; display:flex; justify-content:flex-end; align-items:center; flex-shrink:0;">
+            <button type="button" onclick="closeStockInViewModal()" style="background:#002F70; color:#fff; border:none; padding:9px 26px; border-radius:7px; font-weight:700; font-size:13px; cursor:pointer; transition:all 0.2s;" onmouseover="this.style.background='#001f4d'" onmouseout="this.style.background='#002F70'">
                 Close
             </button>
         </div>
@@ -2195,12 +2284,12 @@ function openStockInViewModal(btn) {
 
             return '<tr>' +
                 '<td style="width:22%; padding:8px 8px; border-bottom:1px solid #f1f5f9; font-weight:700; color:#1e293b; font-size:11.5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; box-sizing:border-box;" title="' + siEscapeHtml(it.name) + '">' + siEscapeHtml(it.name) + '</td>' +
-                '<td style="width:12.5%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#64748b; font-weight:600; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + ordText + '</td>' +
-                '<td style="width:13.5%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#002F70; font-weight:800; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + recText + '</td>' +
-                '<td style="width:11%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#475569; font-weight:600; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + uCostText + '</td>' +
-                '<td style="width:11.5%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#002F70; font-weight:700; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + sPriceText + '</td>' +
-                '<td style="width:18.5%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#16a34a; font-weight:800; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + tCostText + '</td>' +
-                '<td style="width:11%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:center; white-space:nowrap; box-sizing:border-box;">' +
+                '<td style="width:12%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#64748b; font-weight:600; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + ordText + '</td>' +
+                '<td style="width:13%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#002F70; font-weight:800; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + recText + '</td>' +
+                '<td style="width:12%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#475569; font-weight:600; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + uCostText + '</td>' +
+                '<td style="width:12%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#002F70; font-weight:700; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + sPriceText + '</td>' +
+                '<td style="width:16%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:right; color:#16a34a; font-weight:800; font-size:11.5px; white-space:nowrap; box-sizing:border-box;">' + tCostText + '</td>' +
+                '<td style="width:13%; padding:8px 6px; border-bottom:1px solid #f1f5f9; text-align:center; white-space:nowrap; box-sizing:border-box;">' +
                     '<span style="display:inline-block; padding:2px 7px; border-radius:8px; font-size:10.5px; font-weight:700; background:' + (isDamaged ? '#fee2e2;color:#b91c1c;' : '#dcfce7;color:#15803d;') + '">' +
                         siEscapeHtml(it.condition || 'Good') +
                     '</span>' +
@@ -2228,6 +2317,9 @@ function openStockInViewModal(btn) {
         printBtn.href = 'print_supplier_invoice.php?batch_id=' + encodeURIComponent(batchRef) + '&type=' + encodeURIComponent(bType);
     }
 
+    if (modal.parentElement !== document.body) {
+        document.body.appendChild(modal);
+    }
     modal.style.display = 'flex';
     document.body.style.overflow = 'hidden';
 }
@@ -2239,6 +2331,12 @@ function closeStockInViewModal() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    ['stockInViewModal', 'siConfirmOverlay', 'stockToast'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el && el.parentElement !== document.body) {
+            document.body.appendChild(el);
+        }
+    });
     siRender();
     renderSiHistPagination();
 

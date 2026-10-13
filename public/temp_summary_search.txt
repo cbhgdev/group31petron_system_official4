@@ -1,0 +1,8 @@
+1375: $total_liters = 0.0;
+1378: $total_liters += (float)$r['liters_sold'];
+1393: echo '<td style="text-align:right"><strong>' . number_format($total_liters, 2) . ' L</strong></td>';
+1407: $total_liters = array_sum(array_column($recent_fuel, 'liters_sold'));
+1462: echo '<td style="text-align:right">' . number_format($total_liters, 2) . ' L</td>';
+5261: <!-- TOTAL AMOUNT Column (Auto-calculated: Net Volume × Price/Liter) -->
+5271: title="Total Amount = Net Volume Sold × Price per Liter">
+6664: // Pagination Footer (Only if Total Records > 10)

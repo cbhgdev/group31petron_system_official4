@@ -1,5 +1,92 @@
 <?php
 
+// ── AUTO-ORGANIZE ROOT DIRECTORY (KEEP ROOT CLEAN — ALL FILES INSIDE FOLDERS) ──
+if (!function_exists('petron_organize_root_directory')) {
+    function petron_organize_root_directory(): void {
+        try {
+            $rootDir = realpath(__DIR__ . '/..');
+            if (!$rootDir || !is_dir($rootDir)) {
+                return;
+            }
+            $items = @scandir($rootDir);
+            if (!is_array($items)) {
+                return;
+            }
+            foreach ($items as $item) {
+                if ($item === '.' || $item === '..') {
+                    continue;
+                }
+                $fullPath = $rootDir . DIRECTORY_SEPARATOR . $item;
+                if (!is_file($fullPath)) {
+                    continue;
+                }
+
+                $lower = strtolower($item);
+                $targetSubdir = 'scratch';
+                $targetFilename = $item;
+
+                if (substr($lower, -4) === '.sql') {
+                    $targetSubdir = 'backups';
+                } elseif (strpos($lower, 'test_') === 0 || $lower === 'temp_test.php') {
+                    $targetSubdir = 'tests';
+                } elseif ($lower === 'start_nodejs_service.bat') {
+                    $targetSubdir = 'nodejs_service';
+                } elseif ($lower === 'composer.json' || $lower === 'composer.lock' || $lower === 'installed.json') {
+                    $targetSubdir = 'vendor';
+                } elseif ($lower === 'manifest.json' || $lower === 'robots.txt' || $lower === 'sitemap.xml') {
+                    $targetSubdir = 'public';
+                } elseif ($lower === 'index.php') {
+                    $targetSubdir = 'config';
+                    $targetFilename = 'root_index.php';
+                } elseif ($lower === 'package.json' || $lower === '.htaccess' || $lower === '.gitignore' || $lower === '.gitattributes') {
+                    $targetSubdir = 'config';
+                } else {
+                    $targetSubdir = 'scratch';
+                }
+
+                $destDir = $rootDir . DIRECTORY_SEPARATOR . $targetSubdir;
+                if (!is_dir($destDir)) {
+                    @mkdir($destDir, 0775, true);
+                }
+                $destPath = $destDir . DIRECTORY_SEPARATOR . $targetFilename;
+
+                if (file_exists($destPath)) {
+                    @unlink($destPath);
+                }
+                if (!@rename($fullPath, $destPath)) {
+                    if (@copy($fullPath, $destPath)) {
+                        @unlink($fullPath);
+                    }
+                }
+            }
+
+            // Keep backups/ clean with only .sql files (move any .php scripts to scratch/)
+            $backupsDir = $rootDir . DIRECTORY_SEPARATOR . 'backups';
+            $scratchDir = $rootDir . DIRECTORY_SEPARATOR . 'scratch';
+            foreach (['backup_data.php', 'verify_backup.php'] as $phpFile) {
+                $srcPhp = $backupsDir . DIRECTORY_SEPARATOR . $phpFile;
+                if (is_file($srcPhp)) {
+                    if (!is_dir($scratchDir)) {
+                        @mkdir($scratchDir, 0775, true);
+                    }
+                    $dstPhp = $scratchDir . DIRECTORY_SEPARATOR . $phpFile;
+                    if (file_exists($dstPhp)) {
+                        @unlink($dstPhp);
+                    }
+                    if (!@rename($srcPhp, $dstPhp)) {
+                        if (@copy($srcPhp, $dstPhp)) {
+                            @unlink($srcPhp);
+                        }
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            // Fail silently
+        }
+    }
+    petron_organize_root_directory();
+}
+
 // ── DYNAMIC TIMEZONE & REGIONAL SYSTEM SETTINGS HELPERS ──
 if (!function_exists('petron_get_setting_value')) {
     function petron_get_setting_value(string $key, ?int $station_id = null, string $default = ''): string {
@@ -662,6 +749,7 @@ if (!function_exists('get_allowed_payment_types')) {
             'E-Wallet',
             'Petron Value Card (PVC Points)',
             'Credit Account',
+            'Partial Payment',
         ];
     }
 }
@@ -767,6 +855,16 @@ if (!function_exists('normalize_payment_type')) {
         if (strpos($lowerMethod, 'credit') !== false || strpos($lowerMethod, 'utang') !== false || strpos($lowerMethod, 'receivable') !== false) {
             return [
                 'payment_type' => 'Credit Account',
+                'provider'     => null,
+                'card_type'    => null,
+                'is_ewallet'   => false,
+            ];
+        }
+
+        // Partial Payment
+        if (strpos($lowerMethod, 'partial') !== false) {
+            return [
+                'payment_type' => 'Partial Payment',
                 'provider'     => null,
                 'card_type'    => null,
                 'is_ewallet'   => false,
@@ -2719,10 +2817,10 @@ function generateSecurePassword(int $length = 12): string {
 function create_role_notification($pdo, $targetRole, $type, $title, $message, $specificUserId = null, $redirect_url = '') {
   try {
     ensure_notifications_table($pdo);
-    $sql = "INSERT INTO notifications (user_id, type, title, message, redirect_url) 
-            SELECT u.id, ?, ?, ?, ? FROM users u 
-            WHERE u.role = ? AND u.status = 'Active'";
-    $params = [$type, $title, $message, $redirect_url, $targetRole];
+    $sql = "INSERT INTO notifications (user_id, recipient_role, type, title, message, redirect_url) 
+            SELECT u.id, ?, ?, ?, ?, ? FROM users u 
+            WHERE LOWER(TRIM(u.role)) = LOWER(TRIM(?)) AND LOWER(COALESCE(u.status, 'active')) = 'active'";
+    $params = [$targetRole, $type, $title, $message, $redirect_url, $targetRole];
     
     if ($specificUserId) {
       $sql .= " AND u.id = ?";
@@ -2731,11 +2829,373 @@ function create_role_notification($pdo, $targetRole, $type, $title, $message, $s
     
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
-    return $stmt->rowCount();
+    $count = $stmt->rowCount();
+
+    // Mirror manager and staff notifications to station Admin users as well
+    $normTarget = strtolower(trim((string)$targetRole));
+    if (in_array($normTarget, ['manager', 'supervisor', 'staff', 'cashier', 'pump_attendant'], true)) {
+      $admin_url = function_exists('remap_notification_url_for_admin')
+        ? remap_notification_url_for_admin((string)$redirect_url, (string)$title, (string)$message)
+        : $redirect_url;
+      $station_id = 0;
+      if ($specificUserId) {
+        $st = $pdo->prepare("SELECT station_id FROM users WHERE id = ? LIMIT 1");
+        $st->execute([$specificUserId]);
+        $station_id = (int)$st->fetchColumn();
+      }
+      if ($station_id <= 0 && function_exists('user_station_id')) {
+        $station_id = (int)(user_station_id() ?? 0);
+      }
+      $adm_sql = "INSERT INTO notifications (user_id, recipient_role, type, title, message, redirect_url)
+                  SELECT u.id, 'admin', ?, ?, ?, ? FROM users u
+                  WHERE LOWER(TRIM(u.role)) = 'admin'
+                    AND LOWER(COALESCE(u.status, 'active')) = 'active'";
+      $adm_params = [$type, $title, $message, $admin_url];
+      if ($station_id > 0) {
+        $adm_sql .= " AND (u.station_id = ? OR u.station_id IS NULL OR u.station_id = 0)";
+        $adm_params[] = $station_id;
+      }
+      $adm_stmt = $pdo->prepare($adm_sql);
+      $adm_stmt->execute($adm_params);
+      $count += $adm_stmt->rowCount();
+    }
+
+    return $count;
   } catch (Exception $e) {
     error_log("Failed to create role notification: " . $e->getMessage());
     return 0;
   }
+}
+
+if (!function_exists('remap_notification_url_for_admin')) {
+function remap_notification_url_for_admin(
+    string $url,
+    string $title = '',
+    string $message = '',
+    string $event_type = '',
+    string $ref_type = '',
+    int    $ref_id = 0
+): string {
+    $url = trim($url);
+    $t   = strtolower(trim($title));
+    $m   = strtolower(trim($message));
+    $e   = strtolower(trim($event_type));
+    $rt  = strtolower(trim($ref_type));
+
+    // 1. Merchandise Stock Adjustments
+    $is_merch_adj = (
+        strpos($t, 'stock adjustment') !== false ||
+        strpos($t, 'merchandise adjustment') !== false ||
+        in_array($e, ['inventory_adjustment', 'stock_adjustment', 'merchandise_adjustment'], true) ||
+        in_array($rt, ['inventory_adjustment', 'stock_adjustment', 'merchandise_adjustment'], true) ||
+        (strpos($t, 'adjustment') !== false && strpos($t, 'fuel') === false && strpos($m, 'fuel') === false && strpos($t, 'tank') === false && strpos($m, 'tank') === false)
+    );
+    if ($is_merch_adj) {
+        return 'admin_inventory_merchandise.php?tab=adjustments';
+    }
+
+    // 2. Fuel Adjustments / Tank Dip
+    $is_fuel_adj = (
+        strpos($t, 'tank dip') !== false ||
+        strpos($m, 'fuel reading adjustment') !== false ||
+        strpos($m, 'tank dip') !== false ||
+        strpos($m, 'physical dip') !== false ||
+        in_array($e, ['fuel_adjustment', 'fuel_adjustments', 'tank_dip', 'dip_adjustment'], true) ||
+        in_array($rt, ['fuel_adjustment', 'fuel_adjustments', 'tank_dip', 'dip_adjustment'], true) ||
+        (strpos($t, 'fuel') !== false && strpos($t, 'adjustment') !== false) ||
+        strpos($url, 'fuel_adjustments') !== false
+    );
+    if ($is_fuel_adj) {
+        return 'admin_inventory_fuel.php?tab=adjustments';
+    }
+
+    // 3. Purchase Orders & Stock Requests
+    $is_po_or_sr = (
+        strpos($t, 'purchase order') !== false ||
+        strpos($m, 'purchase order') !== false ||
+        strpos($t, 'stock request') !== false ||
+        in_array($e, ['purchase_order', 'stock_request', 'fuel_stock_request'], true) ||
+        in_array($rt, ['purchase_order', 'stock_request', 'fuel_stock_request'], true) ||
+        strpos($url, 'manager_stock_request_review.php') !== false ||
+        strpos($url, 'manager_inventory_stock_requests.php') !== false ||
+        strpos($url, 'admin_approve_stock_requests.php') !== false ||
+        strpos($url, 'manager_purchase_orders.php') !== false ||
+        strpos($url, 'staff_record_delivery.php') !== false
+    );
+    if ($is_po_or_sr) {
+        if (strpos($t, 'pending') !== false && strpos($t, 'stock request') !== false) {
+            return 'manager_stock_request_review.php?tab=pending_requests';
+        }
+        return 'manager_stock_request_review.php';
+    }
+
+    // 4. Fuel Sales Closing / Fuel Readings / Fuel Transaction Validation
+    $is_fuel_val = (
+        strpos($t, 'fuel sales closing') !== false ||
+        strpos($t, 'fuel reading') !== false ||
+        strpos($t, 'fuel meter') !== false ||
+        strpos($t, 'invalid meter reading') !== false ||
+        strpos($t, 'fuel transaction') !== false ||
+        in_array($e, ['fuel_sales_closing', 'fuel_reading', 'fuel_transaction'], true) ||
+        in_array($rt, ['fuel_sales_closing', 'fuel_reading', 'fuel_transaction'], true) ||
+        strpos($url, 'manager_fuel_transaction_validation.php') !== false ||
+        strpos($url, 'staff_fuel_sales_closing.php') !== false ||
+        strpos($url, 'admin_fuel_management.php') !== false ||
+        (strpos($url, 'staff_transactions_hub.php') !== false && strpos($url, 'section=fuel') !== false)
+    );
+    if ($is_fuel_val) {
+        if (strpos($url, 'manager_fuel_transaction_validation.php') !== false && strpos($url, '?') !== false) {
+            return $url;
+        }
+        $is_approved = (
+            strpos($t, 'approved') !== false ||
+            strpos($t, 'validated') !== false ||
+            strpos($m, 'approved') !== false ||
+            strpos($m, 'validated') !== false
+        );
+        return $is_approved
+            ? 'manager_fuel_transaction_validation.php?status_filter=validated'
+            : 'manager_fuel_transaction_validation.php?status_filter=pending';
+    }
+
+    // 5. Stock-In & Deliveries
+    if (
+        in_array($e, ['stock_in', 'merchandise_stock_in', 'fuel_stock_in'], true) ||
+        in_array($rt, ['stock_in', 'merchandise_stock_in', 'fuel_stock_in'], true) ||
+        strpos($url, 'manager_stock_in.php') !== false ||
+        strpos($url, 'admin_stock_confirmation.php') !== false ||
+        strpos($t, 'stock-in') !== false ||
+        strpos($t, 'stock in') !== false
+    ) {
+        return 'manager_stock_in.php' . ($ref_id > 0 ? "?id={$ref_id}" : '');
+    }
+    if (
+        in_array($e, ['delivery', 'fuel_delivery', 'merchandise_delivery'], true) ||
+        in_array($rt, ['delivery', 'fuel_delivery', 'merchandise_delivery'], true) ||
+        strpos($url, 'manager_merchandise_deliveries.php') !== false ||
+        strpos($url, 'admin_deliveries_oversight.php') !== false ||
+        strpos($t, 'delivery') !== false
+    ) {
+        if (strpos($url, 'admin_deliveries_oversight.php') !== false) {
+            return $url;
+        }
+        return 'manager_stock_in.php';
+    }
+
+    // 6. Low Fuel Alert / Fuel Inventory
+    if (
+        $e === 'fuel_management' ||
+        strpos($t, 'low fuel') !== false ||
+        strpos($url, 'staff_inventory_fuel.php') !== false ||
+        strpos($url, 'manager_inventory_fuel.php') !== false
+    ) {
+        return 'admin_inventory_fuel.php';
+    }
+
+    // 7. Low Stock Alert / Merchandise Inventory
+    if (
+        $e === 'inventory' ||
+        strpos($t, 'low stock') !== false ||
+        strpos($t, 'inventory alert') !== false ||
+        strpos($url, 'staff_inventory_merchandise.php') !== false ||
+        strpos($url, 'manager_inventory_merchandise.php') !== false
+    ) {
+        return 'admin_inventory_merchandise.php';
+    }
+
+    // 8. Customer Registration Requests & Customers
+    if (
+        in_array($e, ['customer', 'customer_request'], true) ||
+        in_array($rt, ['customer', 'customer_request'], true) ||
+        strpos($t, 'customer') !== false ||
+        strpos($url, 'staff_customer_list.php') !== false ||
+        strpos($url, 'manager_customers.php') !== false
+    ) {
+        if (strpos($t, 'outstanding') !== false || strpos($t, 'receivable') !== false) {
+            return 'admin_reports.php?tab=receivable';
+        }
+        if (strpos($url, 'manager_customers.php') !== false) {
+            return $url;
+        }
+        return 'manager_customers.php' . ($ref_id > 0 ? "?tab=pending&id={$ref_id}" : '?tab=pending');
+    }
+
+    // 9. Master Data Requests
+    if (
+        $rt === 'master_data_request' ||
+        $e === 'master_data_request' ||
+        strpos($url, 'manager_review_stock_requests.php') !== false ||
+        strpos($url, 'admin_stock_requests_monitor.php') !== false ||
+        strpos($url, 'manager_request_data_management.php') !== false
+    ) {
+        return 'manager_request_data_management.php';
+    }
+
+    // 10. Job Orders & Merchandise / Combined Transactions
+    if (
+        in_array($e, ['job_order', 'transaction', 'merchandise', 'merchandise_transaction', 'combined'], true) ||
+        in_array($rt, ['job_order', 'transaction', 'merchandise_transaction'], true) ||
+        strpos($t, 'job order') !== false ||
+        strpos($t, 'merchandise transaction') !== false ||
+        strpos($url, 'job_order_detail.php') !== false ||
+        strpos($url, 'admin_all_transactions.php') !== false ||
+        strpos($url, 'admin_transactions_oversight.php') !== false ||
+        strpos($url, 'staff_transactions_hub.php') !== false
+    ) {
+        if ($e === 'job_order' || $rt === 'job_order' || strpos($t, 'job order') !== false) {
+            return 'manager_validated_transactions.php?type=job_order';
+        }
+        return 'manager_validated_transactions.php';
+    }
+
+    // 11. Calendar
+    if (
+        $e === 'calendar' ||
+        strpos($url, 'manager_calendar.php') !== false ||
+        strpos($url, 'staff_calendar.php') !== false
+    ) {
+        return 'admin_calendar.php';
+    }
+
+    // 12. Reports & Audit
+    if (strpos($url, 'manager_reports.php') !== false) {
+        return str_replace('manager_reports.php', 'admin_reports.php', $url);
+    }
+    if (strpos($url, 'staff_fuel_sales_summary.php') !== false) {
+        return 'admin_reports.php?cat=sales';
+    }
+
+    return $url !== '' ? $url : 'notifications.php';
+}
+}
+
+if (!function_exists('sync_station_notifications_to_admin')) {
+function sync_station_notifications_to_admin(PDO $pdo, int $admin_user_id, int $station_id): int {
+    if ($admin_user_id <= 0 || $station_id <= 0) return 0;
+    if ($pdo->inTransaction()) return 0;
+
+    static $synced_in_request = [];
+    $req_key = $admin_user_id . '_' . $station_id;
+    if (!empty($synced_in_request[$req_key])) {
+        return 0;
+    }
+    $synced_in_request[$req_key] = true;
+
+    $inserted = 0;
+    try {
+        ensure_notifications_table($pdo);
+
+        // Load existing admin notifications (keys and signatures) to prevent duplicates
+        $existing_keys = [];
+        $existing_sigs = [];
+        $ex_stmt = $pdo->prepare(
+            "SELECT source_key, title, message, DATE_FORMAT(created_at, '%Y-%m-%d %H') AS hr_bucket
+             FROM notifications
+             WHERE user_id = ?
+               AND created_at >= DATE_SUB(NOW(), INTERVAL 35 DAY)"
+        );
+        $ex_stmt->execute([$admin_user_id]);
+        foreach ($ex_stmt->fetchAll(PDO::FETCH_ASSOC) as $ex) {
+            if (!empty($ex['source_key'])) {
+                $existing_keys[trim((string)$ex['source_key'])] = true;
+            }
+            $sig = strtolower(trim((string)($ex['title'] ?? ''))) . '||' . strtolower(trim((string)($ex['message'] ?? ''))) . '||' . ($ex['hr_bucket'] ?? '');
+            $existing_sigs[$sig] = true;
+            // Also store timeless signature for static alerts (low stock, low fuel, etc.)
+            $sig_any = strtolower(trim((string)($ex['title'] ?? ''))) . '||' . strtolower(trim((string)($ex['message'] ?? '')));
+            $existing_sigs[$sig_any] = true;
+        }
+
+        // Fetch all recent Manager and Staff notifications for this station
+        $src_stmt = $pdo->prepare(
+            "SELECT n.id, n.type, n.event_type, n.severity, n.title, n.message,
+                    n.source_key, n.redirect_url, n.reference_type, n.reference_id,
+                    n.shift_period, n.status, n.created_at,
+                    DATE_FORMAT(n.created_at, '%Y-%m-%d %H') AS hr_bucket
+             FROM notifications n
+             INNER JOIN users u ON u.id = n.user_id
+             WHERE u.station_id = ?
+               AND n.user_id <> ?
+               AND LOWER(TRIM(u.role)) IN ('manager', 'supervisor', 'staff', 'cashier', 'pump_attendant')
+               AND n.created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+             ORDER BY n.created_at ASC, n.id ASC
+             LIMIT 300"
+        );
+        $src_stmt->execute([$station_id, $admin_user_id]);
+        $rows = $src_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($rows)) return 0;
+
+        $ins_stmt = $pdo->prepare(
+            "INSERT INTO notifications
+                (user_id, recipient_role, type, event_type, severity, title, message,
+                 source_key, redirect_url, reference_type, reference_id, shift_period, status, created_at)
+             VALUES (?, 'admin', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unread', ?)"
+        );
+
+        foreach ($rows as $r) {
+            $title   = trim((string)($r['title'] ?? ''));
+            $message = trim((string)($r['message'] ?? ''));
+            if ($title === '' && $message === '') continue;
+
+            $raw_key = trim((string)($r['source_key'] ?? ''));
+            $base_key = $raw_key !== ''
+                ? preg_replace('/_(m|s|u|a|adm|mgr|staff)_?\d+$/i', '', $raw_key)
+                : ('sync_' . md5($title . '|' . $message . '|' . substr((string)($r['created_at'] ?? ''), 0, 16)));
+            // Normalize mgr_ prefix so identical manager/staff generator keys map to the same admin key
+            $norm_base_key = preg_replace('/^mgr_/', '', $base_key);
+            $adm_key       = substr($norm_base_key, 0, 175) . '_adm_' . $admin_user_id;
+            $alt_adm_key   = substr($base_key, 0, 175) . '_adm_' . $admin_user_id;
+
+            $sig_hr  = strtolower($title) . '||' . strtolower($message) . '||' . ($r['hr_bucket'] ?? '');
+            $sig_any = strtolower($title) . '||' . strtolower($message);
+
+            if (
+                isset($existing_keys[$adm_key]) ||
+                isset($existing_keys[$alt_adm_key]) ||
+                ($raw_key !== '' && isset($existing_keys[$raw_key])) ||
+                isset($existing_sigs[$sig_hr]) ||
+                isset($existing_sigs[$sig_any])
+            ) {
+                continue;
+            }
+
+            $admin_url = remap_notification_url_for_admin(
+                (string)($r['redirect_url'] ?? ''),
+                $title,
+                $message,
+                (string)($r['event_type'] ?? 'general'),
+                (string)($r['reference_type'] ?? ''),
+                (int)($r['reference_id'] ?? 0)
+            );
+
+            $ins_stmt->execute([
+                $admin_user_id,
+                $r['type'] ?: 'info',
+                $r['event_type'] ?: 'general',
+                $r['severity'] ?: 'medium',
+                $title,
+                $message,
+                $adm_key,
+                $admin_url,
+                !empty($r['reference_type']) ? $r['reference_type'] : null,
+                !empty($r['reference_id']) ? (int)$r['reference_id'] : null,
+                !empty($r['shift_period']) ? $r['shift_period'] : null,
+                $r['created_at'] ?: date('Y-m-d H:i:s'),
+            ]);
+
+            $existing_keys[$adm_key]     = true;
+            $existing_keys[$alt_adm_key] = true;
+            $existing_sigs[$sig_hr]      = true;
+            $existing_sigs[$sig_any]     = true;
+            $inserted++;
+        }
+    } catch (Throwable $e) {
+        error_log('sync_station_notifications_to_admin error: ' . $e->getMessage());
+    }
+
+    return $inserted;
+}
 }
 
 function ensure_notifications_table(PDO $pdo): void {
@@ -4108,19 +4568,48 @@ function get_category_unread_counts(PDO $pdo, int $user_id, string $role = '', i
         $counts['mgr_customers'] = $counts['customers'];
 
     } elseif (in_array($role, ['admin', 'superadmin', 'developer'])) {
-        // ADMIN
+        // ADMIN — Full authority across all Manager and Staff modules
         if ($station_id > 0) {
-            $admin_crit_stock = $safe_count(
-                "SELECT COUNT(*) FROM station_inventory si LEFT JOIN inventory_products ip ON ip.id = si.product_id WHERE si.station_id = ? AND (LOWER(COALESCE(ip.category,'')) NOT IN ('fuel','fuels') OR ip.category IS NULL) AND si.stock_level <= COALESCE(si.critical_level, ip.critical_level, 10)",
+            $admin_pending_jos = $safe_count(
+                "SELECT COUNT(*) FROM job_orders WHERE station_id = ? AND LOWER(COALESCE(status,'')) IN ('pending','pending validation','reviewed','in progress','awaiting parts')",
+                [$station_id]
+            );
+            $admin_pending_merch = $safe_count(
+                "SELECT COUNT(*) FROM merchandise_transactions WHERE station_id = ? AND LOWER(COALESCE(validation_status,'')) IN ('pending','pending validation','pending_validation')",
+                [$station_id]
+            );
+            $admin_pending_adj = $safe_count(
+                "SELECT COUNT(*) FROM fuel_adjustments WHERE station_id = ? AND LOWER(COALESCE(status,'')) IN ('pending','pending validation','pending admin approv','pending admin approval','pending admin review')",
+                [$station_id]
+            );
+            $counts['transactions']       = $admin_pending_jos + $admin_pending_merch + $admin_pending_adj;
+            $counts['admin_transactions'] = $counts['transactions'];
+
+            $admin_low_stock = $safe_count(
+                "SELECT COUNT(*) FROM station_inventory si LEFT JOIN inventory_products ip ON ip.id = si.product_id WHERE si.station_id = ? AND (LOWER(COALESCE(ip.category,'')) NOT IN ('fuel','fuels') OR ip.category IS NULL) AND si.stock_level <= COALESCE(NULLIF(si.reorder_level, 0), NULLIF(ip.min_stock, 0), NULLIF(si.critical_level, 0), 10)",
+                [$station_id]
+            );
+            $admin_stock_reqs = $safe_count(
+                "SELECT COUNT(*) FROM stock_requests WHERE station_id = ? AND status IN ('Pending','pending','Pending Manager Review')",
                 [$station_id]
             );
             $admin_pos = $safe_count(
-                "SELECT COUNT(*) FROM purchase_orders WHERE station_id = ? AND status IN ('Pending Admin Review', 'Submitted', 'Pending Approval')",
+                "SELECT COUNT(*) FROM purchase_orders WHERE station_id = ? AND status IN ('Pending','Pending Admin Review','Submitted','Pending Approval','Pending Admin Validation','Approved','Pending Stock-In')",
                 [$station_id]
             );
-            $admin_inv_total = $admin_crit_stock + $admin_pos;
+            $admin_inv_total = $admin_low_stock + $admin_stock_reqs + $admin_pos;
             $counts['inventory']       = $admin_inv_total;
             $counts['admin_inventory'] = $admin_inv_total;
+
+            $admin_cust_reqs = $safe_count(
+                "SELECT COUNT(*) FROM customer_requests WHERE station_id = ? AND LOWER(status) = 'pending'",
+                [$station_id]
+            ) + $safe_count(
+                "SELECT COUNT(*) FROM customers WHERE station_id = ? AND LOWER(COALESCE(NULLIF(verification_status,''), NULLIF(mgr_status,''), status, 'verified')) IN ('pending','pending verification','pending validation','for review')",
+                [$station_id]
+            );
+            $counts['customers']     = $admin_cust_reqs;
+            $counts['mgr_customers'] = $admin_cust_reqs;
 
             $admin_price_change = $safe_count(
                 "SELECT COUNT(*) FROM pending_price_approvals WHERE station_id = ? AND status = 'pending'",
@@ -4138,15 +4627,25 @@ function get_category_unread_counts(PDO $pdo, int $user_id, string $role = '', i
             $counts['admin_reports'] = $admin_system_alerts;
 
             $admin_fuel_pending = $safe_count(
-                "SELECT COUNT(*) FROM fuel_transactions WHERE station_id = ? AND LOWER(COALESCE(status,'')) IN ('pending','pending validation')",
+                "SELECT COUNT(*) FROM fuel_transactions WHERE station_id = ? AND LOWER(COALESCE(status,'')) IN ('pending','pending validation','pending_validation')",
+                [$station_id]
+            ) + $safe_count(
+                "SELECT COUNT(*) FROM fuel_adjustments WHERE station_id = ? AND LOWER(COALESCE(status,'')) IN ('pending','pending review','pending validation','pending admin approv','pending admin approval','pending admin review')",
+                [$station_id]
+            ) + $safe_count(
+                "SELECT COUNT(*) FROM fuel_inventory WHERE station_id = ? AND current_level >= 0 AND capacity > 0 AND current_level <= COALESCE(NULLIF(reorder_level, 0), capacity * 0.20, 500)",
                 [$station_id]
             );
             $counts['fuel']                  = $admin_fuel_pending;
             $counts['admin_fuel']            = $admin_fuel_pending;
             $counts['admin_fuel_management'] = $admin_fuel_pending;
         } else {
+            $counts['transactions']          = 0;
+            $counts['admin_transactions']    = 0;
             $counts['inventory']             = 0;
             $counts['admin_inventory']       = 0;
+            $counts['customers']             = 0;
+            $counts['mgr_customers']         = 0;
             $counts['prod_pricing']          = 0;
             $counts['mgr_product_pricing']   = 0;
             $counts['admin_product_pricing'] = 0;
@@ -4180,6 +4679,7 @@ function notify(
     int    $ref_id = 0,
     string $shift_period = ''
 ): void {
+    static $is_fanning_out = false;
     if ($user_id <= 0) return;
     $title   = function_exists('clean_mojibake') ? clean_mojibake($title) : $title;
     $message = function_exists('clean_mojibake') ? clean_mojibake($message) : $message;
@@ -4201,19 +4701,22 @@ function notify(
             }
         }
 
+        $userRoleKey = function_exists('role_key') ? role_key($role) : strtolower(trim($role));
+
         if (
             stripos($title, 'Purchase Order') !== false ||
             stripos($message, 'Purchase Order') !== false ||
             $event_type === 'purchase_order' ||
             $ref_type === 'purchase_order'
         ) {
-            $userRoleKey = function_exists('role_key') ? role_key($role) : strtolower($role);
             if (in_array($userRoleKey, ['staff', 'cashier', 'pump_attendant'], true)) {
                 $is_fuel = (stripos($title, 'fuel') !== false || stripos($message, 'fuel') !== false);
                 $redirect_url = $is_fuel ? 'staff_record_delivery.php?tab=fuel' : 'staff_record_delivery.php?tab=merchandise';
             } else {
                 $redirect_url = 'manager_stock_request_review.php';
             }
+        } elseif ($userRoleKey === 'admin' && function_exists('remap_notification_url_for_admin')) {
+            $redirect_url = remap_notification_url_for_admin($redirect_url, $title, $message, $event_type, $ref_type, $ref_id);
         }
 
         $stmt = $pdo->prepare("
@@ -4232,7 +4735,61 @@ function notify(
             $ref_type ?: null, $ref_id > 0 ? $ref_id : null, $shift_period ?: null,
             $user_id, $source_key
         ]);
+
+        // Automatically mirror any Staff or Manager notification to all active Admin users of that station
+        if (!$is_fanning_out && in_array($userRoleKey, ['staff', 'cashier', 'pump_attendant', 'manager', 'supervisor'], true)) {
+            $is_fanning_out = true;
+            try {
+                $st_usr = $pdo->prepare("SELECT station_id FROM users WHERE id = ? LIMIT 1");
+                $st_usr->execute([$user_id]);
+                $target_station_id = (int)$st_usr->fetchColumn();
+                if ($target_station_id <= 0 && function_exists('user_station_id')) {
+                    $target_station_id = (int)(user_station_id() ?? 0);
+                }
+
+                $adm_sql = $target_station_id > 0
+                    ? "SELECT id FROM users WHERE (station_id = ? OR station_id IS NULL OR station_id = 0) AND LOWER(TRIM(role)) = 'admin' AND LOWER(COALESCE(status, 'active')) = 'active'"
+                    : "SELECT id FROM users WHERE LOWER(TRIM(role)) = 'admin' AND LOWER(COALESCE(status, 'active')) = 'active'";
+                $adm_stmt = $pdo->prepare($adm_sql);
+                $adm_stmt->execute($target_station_id > 0 ? [$target_station_id] : []);
+                $admin_ids = $adm_stmt->fetchAll(PDO::FETCH_COLUMN);
+
+                $base_key = $source_key !== ''
+                    ? preg_replace('/_(m|s|u|a|adm|mgr|staff)_?\d+$/i', '', $source_key)
+                    : ('fan_' . md5($title . '|' . $message . '|' . date('YmdHi')));
+                $base_key = preg_replace('/^mgr_/', '', $base_key);
+                $admin_url = function_exists('remap_notification_url_for_admin')
+                    ? remap_notification_url_for_admin($redirect_url, $title, $message, $event_type, $ref_type, $ref_id)
+                    : $redirect_url;
+
+                foreach ($admin_ids as $adm_id) {
+                    $adm_id = (int)$adm_id;
+                    if ($adm_id <= 0 || $adm_id === $user_id) continue;
+                    $adm_source_key = substr($base_key, 0, 175) . '_adm_' . $adm_id;
+                    notify(
+                        $pdo,
+                        $adm_id,
+                        'admin',
+                        $type,
+                        $event_type,
+                        $severity,
+                        $title,
+                        $message,
+                        $adm_source_key,
+                        $admin_url,
+                        $ref_type,
+                        $ref_id,
+                        $shift_period
+                    );
+                }
+            } catch (Throwable $fanErr) {
+                error_log('notify() admin fanout error: ' . $fanErr->getMessage());
+            } finally {
+                $is_fanning_out = false;
+            }
+        }
     } catch (Throwable $e) {
+        $is_fanning_out = false;
         error_log('notify() error: ' . $e->getMessage());
     }
 }
@@ -4438,13 +4995,21 @@ function notify_manager(
     string $shift_period = ''
 ): void {
     try {
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE (station_id = ? OR station_id IS NULL OR station_id = 0) AND LOWER(role) IN ('manager','supervisor','admin') AND status = 'Active'");
+        $stmt = $pdo->prepare("SELECT id, role FROM users WHERE (station_id = ? OR station_id IS NULL OR station_id = 0) AND LOWER(TRIM(role)) IN ('manager','supervisor','admin') AND LOWER(COALESCE(status, 'active')) = 'active'");
         $stmt->execute([$station_id]);
-        $managers = $stmt->fetchAll(PDO::FETCH_COLUMN);
-        foreach ($managers as $mgr_id) {
-            notify($pdo, (int)$mgr_id, 'manager', $type, $event_type, $severity,
-                   $title, $message, $source_key . '_m' . $mgr_id,
-                   $redirect_url, $ref_type, $ref_id, $shift_period);
+        $recipients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($recipients as $rec) {
+            $rec_id   = (int)$rec['id'];
+            $rec_role = strtolower(trim((string)($rec['role'] ?? 'manager')));
+            $is_adm   = ($rec_role === 'admin');
+            $role_lbl = $is_adm ? 'admin' : 'manager';
+            $key_sfx  = $is_adm ? ('_adm_' . $rec_id) : ('_m' . $rec_id);
+            $url_out  = ($is_adm && function_exists('remap_notification_url_for_admin'))
+                ? remap_notification_url_for_admin($redirect_url, $title, $message, $event_type, $ref_type, $ref_id)
+                : $redirect_url;
+            notify($pdo, $rec_id, $role_lbl, $type, $event_type, $severity,
+                   $title, $message, $source_key . $key_sfx,
+                   $url_out, $ref_type, $ref_id, $shift_period);
         }
     } catch (Throwable $e) { error_log('notify_manager error: ' . $e->getMessage()); }
 }
@@ -4469,15 +5034,17 @@ function notify_admin(
 ): void {
     try {
         $sql = $station_id
-            ? "SELECT id FROM users WHERE station_id = ? AND LOWER(role) IN ('admin') AND status = 'Active'"
-            : "SELECT id FROM users WHERE LOWER(role) IN ('admin') AND status = 'Active'";
+            ? "SELECT id, role FROM users WHERE (station_id = ? OR station_id IS NULL OR station_id = 0) AND LOWER(role) IN ('admin', 'superadmin') AND (status = 'Active' OR status = 'active' OR status IS NULL)"
+            : "SELECT id, role FROM users WHERE LOWER(role) IN ('admin', 'superadmin') AND (status = 'Active' OR status = 'active' OR status IS NULL)";
         $params = $station_id ? [$station_id] : [];
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
-        $admins = $stmt->fetchAll(PDO::FETCH_COLUMN);
-        foreach ($admins as $adm_id) {
-            notify($pdo, (int)$adm_id, 'admin', $type, $event_type, $severity,
-                   $title, $message, $source_key . '_a' . $adm_id,
+        $admins = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($admins as $adm) {
+            $adm_id = (int)$adm['id'];
+            $adm_role = strtolower(trim((string)$adm['role']));
+            notify($pdo, $adm_id, $adm_role, $type, $event_type, $severity,
+                   $title, $message, $source_key . '_adm_' . $adm_id,
                    $redirect_url, $ref_type, $ref_id);
         }
     } catch (Throwable $e) { error_log('notify_admin error: ' . $e->getMessage()); }
@@ -4522,33 +5089,33 @@ function notification_redirect_url(string $ref_type, int $ref_id, string $role):
         // Staff
         'stock_request' => [
             'staff'    => "staff_inventory_merchandise.php{$id}",
-            'manager'  => "manager_inventory_stock_requests.php{$id}",
-            'admin'    => "admin_approve_stock_requests.php{$id}",
+            'manager'  => "manager_stock_request_review.php{$id}",
+            'admin'    => "manager_stock_request_review.php{$id}",
         ],
         'master_data_request' => [
             'staff'    => "staff_transactions_hub.php?section=merchandise",
-            'manager'  => "manager_review_stock_requests.php{$id}",
-            'admin'    => "admin_stock_requests_monitor.php{$id}",
+            'manager'  => "manager_request_data_management.php{$id}",
+            'admin'    => "manager_request_data_management.php{$id}",
         ],
-                'transaction' => [
+        'transaction' => [
             'staff'    => "staff_transactions_hub.php",
             'manager'  => "manager_validated_transactions.php",
-            'admin'    => "admin_all_transactions.php",
+            'admin'    => "manager_validated_transactions.php",
         ],
         'merchandise_transaction' => [
             'staff'    => "staff_transactions_hub.php",
             'manager'  => "manager_validated_transactions.php",
-            'admin'    => "admin_all_transactions.php",
+            'admin'    => "manager_validated_transactions.php",
         ],
         'void_request' => [
             'staff'    => "voided_transactions.php{$id}",
             'manager'  => "manager_validated_transactions.php{$id}",
-            'admin'    => "admin_voided_transactions.php{$id}",
+            'admin'    => "manager_validated_transactions.php{$id}",
         ],
         'transaction_adjustment' => [
             'staff'    => "staff_fuel_sales_report.php{$id}",
             'manager'  => "manager_validated_transactions.php{$id}",
-            'admin'    => "admin_voided_transactions.php{$id}",
+            'admin'    => "manager_validated_transactions.php{$id}",
         ],
         'fuel_transaction' => [
             'staff'    => "staff_fuel_sales_closing.php",
@@ -4581,7 +5148,7 @@ function notification_redirect_url(string $ref_type, int $ref_id, string $role):
         ],
         'user_account' => [
             'superadmin' => "superadmin_admin_management.php{$id}",
-            'admin'      => "superadmin_admin_management.php{$id}",
+            'admin'      => "users.php{$id}",
         ],
         'customer_request' => [
             'staff'      => "staff_transactions_hub.php?section=merchandise",
@@ -4592,32 +5159,32 @@ function notification_redirect_url(string $ref_type, int $ref_id, string $role):
         'stock_in' => [
             'staff'    => "staff_inventory_merchandise.php",
             'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
-            'admin'    => "admin_stock_confirmation.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'admin'    => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
         ],
         'merchandise_stock_in' => [
             'staff'    => "staff_inventory_merchandise.php",
             'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
-            'admin'    => "admin_stock_confirmation.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'admin'    => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
         ],
         'fuel_stock_in' => [
             'staff'    => "staff_inventory_fuel.php",
             'manager'  => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
-            'admin'    => "admin_stock_confirmation.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
+            'admin'    => "manager_stock_in.php" . ($ref_id > 0 ? "?id={$ref_id}" : ""),
         ],
         'delivery' => [
             'staff'    => "staff_inventory_merchandise.php",
             'manager'  => "manager_merchandise_deliveries.php",
-            'admin'    => "admin_deliveries_oversight.php",
+            'admin'    => "manager_stock_in.php",
         ],
         'fuel_delivery' => [
             'staff'    => "staff_inventory_fuel.php",
             'manager'  => "manager_merchandise_deliveries.php",
-            'admin'    => "admin_deliveries_oversight.php",
+            'admin'    => "manager_stock_in.php",
         ],
         'merchandise_delivery' => [
             'staff'    => "staff_inventory_merchandise.php",
             'manager'  => "manager_merchandise_deliveries.php",
-            'admin'    => "admin_deliveries_oversight.php",
+            'admin'    => "manager_stock_in.php",
         ],
     ];
     return $map[$ref_type][$role] ?? $map[$ref_type]['staff'] ?? 'notifications.php';

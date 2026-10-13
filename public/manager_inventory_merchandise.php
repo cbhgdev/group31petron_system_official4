@@ -5368,7 +5368,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </div> <!-- /.mim-wrap -->
 
 <script id="merchAutoRefreshScript">
-// ── Silent Background Auto-Refresh for Merchandise Inventory (Dynamic Interval) ──
+// ── Non-Destructive Automatic Data Refresh & Live UI Updates (Manager Merchandise Inventory) ──
 (function() {
     'use strict';
     let _merchRefreshTimer = null;
@@ -5391,26 +5391,50 @@ document.addEventListener('DOMContentLoaded', function() {
             var parser = new DOMParser();
             var doc = parser.parseFromString(html, 'text/html');
             
-            // 1. Update Inventory Overview table body
+            // 1. Update Inventory Overview table body while preserving filters & pagination
             var newTbody = doc.querySelector('#merchTableBody');
             var curTbody = document.querySelector('#merchTableBody');
-            if (newTbody && curTbody) {
-                curTbody.innerHTML = newTbody.innerHTML;
+            if (newTbody && curTbody && newTbody.querySelectorAll('tr').length > 0) {
+                if (curTbody.innerHTML !== newTbody.innerHTML) {
+                    curTbody.innerHTML = newTbody.innerHTML;
+                }
                 if (typeof filterInvTable === 'function') filterInvTable();
+                if (typeof mgrMerchRender === 'function') mgrMerchRender();
             }
 
             // 2. Update Staff Adjustments table body
             var newAdjTbody = doc.querySelector('#mgrStaffAdjTable tbody');
             var curAdjTbody = document.querySelector('#mgrStaffAdjTable tbody');
-            if (newAdjTbody && curAdjTbody) {
+            if (newAdjTbody && curAdjTbody && curAdjTbody.innerHTML !== newAdjTbody.innerHTML) {
                 curAdjTbody.innerHTML = newAdjTbody.innerHTML;
             }
 
-            // 3. Update tab badges
-            var newTabs = doc.querySelector('.tab-nav');
-            var curTabs = document.querySelector('.tab-nav');
+            // 3. Update KPI card values in place without resetting active filter highlight
+            doc.querySelectorAll('.inv-stat-card[id]').forEach(function(nwCard) {
+                var curCard = document.getElementById(nwCard.id);
+                if (!curCard) return;
+                var curVal = curCard.querySelector('.inv-stat-val');
+                var nwVal = nwCard.querySelector('.inv-stat-val');
+                if (curVal && nwVal && curVal.textContent !== nwVal.textContent) {
+                    curVal.textContent = nwVal.textContent;
+                }
+            });
+
+            // 4. Update tab badge counts in place without resetting active tab buttons
+            var newTabs = doc.querySelector('.tab-nav, .inv-tab-nav');
+            var curTabs = document.querySelector('.tab-nav, .inv-tab-nav');
             if (newTabs && curTabs) {
-                curTabs.innerHTML = newTabs.innerHTML;
+                var curBtns = curTabs.querySelectorAll('button, a');
+                var nwBtns = newTabs.querySelectorAll('button, a');
+                curBtns.forEach(function(btn, idx) {
+                    var nwBtn = btn.id ? doc.getElementById(btn.id) : nwBtns[idx];
+                    if (!nwBtn) return;
+                    var curSpan = btn.querySelector('span');
+                    var nwSpan = nwBtn.querySelector('span');
+                    if (curSpan && nwSpan && curSpan.textContent !== nwSpan.textContent) {
+                        curSpan.textContent = nwSpan.textContent;
+                    }
+                });
             }
         })
         .catch(function(e) {

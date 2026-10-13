@@ -1,0 +1,292 @@
+Array
+(
+    [0] => Array
+        (
+            [id] => 1
+            [transaction_date] => 2026-10-12 09:40:11
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 21426
+            [fuel_type] => TURBO DIESEL - 1-1
+            [previous_reading] => 73194.00
+            [present_reading] => 73194.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:11
+        )
+
+    [1] => Array
+        (
+            [id] => 2
+            [transaction_date] => 2026-10-12 09:40:14
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 21427
+            [fuel_type] => TURBO DIESEL - 1-2
+            [previous_reading] => 497741.00
+            [present_reading] => 497741.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:14
+        )
+
+    [2] => Array
+        (
+            [id] => 3
+            [transaction_date] => 2026-10-12 09:40:17
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 21428
+            [fuel_type] => XCS PLUS - 1-1
+            [previous_reading] => 521201.00
+            [present_reading] => 521201.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:17
+        )
+
+    [3] => Array
+        (
+            [id] => 4
+            [transaction_date] => 2026-10-12 09:40:21
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 21429
+            [fuel_type] => XCS PLUS - 1-2
+            [previous_reading] => 1014555.00
+            [present_reading] => 1014555.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:21
+        )
+
+    [4] => Array
+        (
+            [id] => 5
+            [transaction_date] => 2026-10-12 09:40:24
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => XCS PLUS - 1-3
+            [previous_reading] => 1310942.00
+            [present_reading] => 1310942.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:24
+        )
+
+    [5] => Array
+        (
+            [id] => 6
+            [transaction_date] => 2026-10-12 09:40:28
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => XCS PLUS - 1-4
+            [previous_reading] => 1128082.00
+            [present_reading] => 1128082.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:28
+        )
+
+    [6] => Array
+        (
+            [id] => 7
+            [transaction_date] => 2026-10-12 09:40:32
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => XTRA UNL - 1-1
+            [previous_reading] => 1505885.00
+            [present_reading] => 1505885.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:32
+        )
+
+    [7] => Array
+        (
+            [id] => 8
+            [transaction_date] => 2026-10-12 09:40:37
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => XTRA UNL - 1-2
+            [previous_reading] => 2878315.00
+            [present_reading] => 2878315.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:37
+        )
+
+    [8] => Array
+        (
+            [id] => 9
+            [transaction_date] => 2026-10-12 09:40:41
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => XTRA UNL - 2-1
+            [previous_reading] => 1311620.00
+            [present_reading] => 1311620.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:41
+        )
+
+    [9] => Array
+        (
+            [id] => 10
+            [transaction_date] => 2026-10-12 09:40:46
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => XTRA UNL - 2-2
+            [previous_reading] => 801298.00
+            [present_reading] => 801298.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:46
+        )
+
+    [10] => Array
+        (
+            [id] => 11
+            [transaction_date] => 2026-10-12 09:40:47
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 21425
+            [fuel_type] => KEROSENE - 1-1
+            [previous_reading] => 528576.00
+            [present_reading] => 528576.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:40:47
+        )
+
+    [11] => Array
+        (
+            [id] => 12
+            [transaction_date] => 2026-10-12 09:59:25
+            [shift_period] => first
+            [shift_name] => Shift 1 (6:00 AM - 2:00 PM)
+            [pump_id] => 
+            [fuel_type] => DIESEL - 1-1
+            [previous_reading] => 986796.00
+            [present_reading] => 986796.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 09:59:25
+        )
+
+    [12] => Array
+        (
+            [id] => 13
+            [transaction_date] => 2026-10-12 10:01:35
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => DIESEL - 1-2
+            [previous_reading] => 1706432.00
+            [present_reading] => 1706845.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 10:01:35
+        )
+
+    [13] => Array
+        (
+            [id] => 14
+            [transaction_date] => 2026-10-12 10:01:35
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => DIESEL - 1-3
+            [previous_reading] => 2708849.00
+            [present_reading] => 2709356.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 10:01:35
+        )
+
+    [14] => Array
+        (
+            [id] => 15
+            [transaction_date] => 2026-10-12 10:01:36
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => DIESEL - 1-4
+            [previous_reading] => 2072771.00
+            [present_reading] => 2073839.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 10:01:36
+        )
+
+    [15] => Array
+        (
+            [id] => 16
+            [transaction_date] => 2026-10-12 10:01:39
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => DIESEL - 2-1
+            [previous_reading] => 931591.00
+            [present_reading] => 931925.00
+            [calibration] => 518.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 10:01:39
+        )
+
+    [16] => Array
+        (
+            [id] => 17
+            [transaction_date] => 2026-10-12 10:01:41
+            [shift_period] => first
+            [shift_name] => Shift 1
+            [pump_id] => 
+            [fuel_type] => DIESEL - 2-2
+            [previous_reading] => 2380437.00
+            [present_reading] => 2380621.00
+            [calibration] => 518.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+            [created_at] => 2026-10-12 10:01:41
+        )
+
+)

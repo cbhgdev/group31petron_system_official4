@@ -1892,7 +1892,9 @@ function showFsrBanner(title, msg) {
 function closeFsrSuccess() {
     document.getElementById('fsrSuccessPopup').style.display  = 'none';
     document.getElementById('fsrSuccessOverlay').style.display = 'none';
-    location.reload();
+    if (window.PetronRealtime && typeof window.PetronRealtime.refreshActiveView === 'function') {
+        window.PetronRealtime.refreshActiveView({ force: true });
+    }
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -2389,51 +2391,16 @@ document.addEventListener('DOMContentLoaded', function() {
     if (typeof setupTablePagination === 'function') {
         setupTablePagination('fuelTable', 'fuelRowsLimit', 'fuelPagination', 20);
     }
+    window.filterFuelTable = filterFuelTable;
     filterFuelTable();
 
-    // ── 15-SECOND SILENT BACKGROUND AUTO-FETCH FOR FUEL INVENTORY ──────────
-    function autoRefreshFuelInventory() {
-        // Do not refresh if user has any modal open or is typing
-        var modals = ['tankModal', 'movementModal', 'fuelSrModal', 'fsrSuccessOverlay', 'fsrSuccessPopup'];
-        for (var i = 0; i < modals.length; i++) {
-            var el = document.getElementById(modals[i]);
-            if (el && (el.classList.contains('open') || el.style.display === 'flex' || el.style.display === 'block')) return;
+    // ── BACKGROUND AUTO-FETCH FOR FUEL INVENTORY ──────────
+    function autoRefreshFuelInventory(force) {
+        if (window.PetronRealtime && typeof window.PetronRealtime.refreshActiveView === 'function') {
+            window.PetronRealtime.refreshActiveView({ force: !!force });
         }
-        var searchInput = document.getElementById('sq');
-        if (searchInput && searchInput === document.activeElement && searchInput.value.trim() !== '') return;
-
-        // Fetch fresh HTML in background and update table & KPI cards seamlessly
-        fetch(window.location.href, {
-            headers: { 'X-Requested-With': 'XMLHttpRequest' },
-            cache: 'no-store'
-        })
-        .then(function(res) { return res.text(); })
-        .then(function(html) {
-            var parser = new DOMParser();
-            var doc = parser.parseFromString(html, 'text/html');
-            
-            // Update table body
-            var newTbody = doc.querySelector('#fuelTable tbody') || doc.querySelector('table tbody');
-            var curTbody = document.querySelector('#fuelTable tbody') || document.querySelector('table tbody');
-            if (newTbody && curTbody) {
-                curTbody.innerHTML = newTbody.innerHTML;
-                if (typeof filterFuelTable === 'function') filterFuelTable();
-            }
-            
-            // Update top KPI cards if present
-            var newCards = doc.querySelectorAll('.kpi-card, .metric-card, [class*="summary-card"]');
-            var curCards = document.querySelectorAll('.kpi-card, .metric-card, [class*="summary-card"]');
-            if (newCards.length > 0 && curCards.length === newCards.length) {
-                for (var j = 0; j < newCards.length; j++) {
-                    curCards[j].innerHTML = newCards[j].innerHTML;
-                }
-            }
-        })
-        .catch(function(e) {
-            console.warn('Fuel inventory auto-fetch notice:', e);
-        });
     }
-    setInterval(autoRefreshFuelInventory, 10000);
+    window.autoRefreshFuelInventory = autoRefreshFuelInventory;
 
     // Auto-switch tab if passed in URL (e.g. ?tab=overview or ?tab=deliveries)
     var urlParams = new URLSearchParams(window.location.search);

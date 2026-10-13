@@ -3,10 +3,46 @@ require_once __DIR__ . '/../backend/lib.php';
 petron_init_dynamic_timezone();
 require_login();
 
-$id   = $_GET['id']   ?? '';
-$type = $_GET['type'] ?? 'sale';
+$id             = $_GET['id']   ?? '';
+$type           = $_GET['type'] ?? 'sale';
+$payment_id     = (int)($_GET['payment_id'] ?? ($type === 'payment' && is_numeric($id) ? (int)$id : 0));
+$payment_rec_no = trim($_GET['receipt_no'] ?? ($type === 'payment' && !is_numeric($id) ? (string)$id : ''));
+$payment_record = null;
 
 $sale = null;
+
+// Lookup payment_audit_log if payment_id or receipt_no is provided
+if ($payment_id > 0 || !empty($payment_rec_no)) {
+    require_once __DIR__ . '/db_connect.php';
+    try {
+        if ($payment_id > 0) {
+            $p_stmt = $pdo->prepare("SELECT * FROM payment_audit_log WHERE id = ? LIMIT 1");
+            $p_stmt->execute([$payment_id]);
+        } else {
+            $p_stmt = $pdo->prepare("SELECT * FROM payment_audit_log WHERE receipt_no = ? LIMIT 1");
+            $p_stmt->execute([$payment_rec_no]);
+        }
+        $payment_record = $p_stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($payment_record) {
+            // Station Isolation Check
+            $curr_st_id = $_SESSION['station_id'] ?? null;
+            $curr_role  = strtolower($_SESSION['role'] ?? 'staff');
+            if (!in_array($curr_role, ['admin', 'superadmin'], true) && $curr_st_id && (int)$payment_record['station_id'] !== (int)$curr_st_id) {
+                die("Access denied: This receipt belongs to another station.");
+            }
+
+            // Auto-resolve $id and $type from payment_record if not explicitly passed
+            if (empty($id) || $type === 'payment' || $type === 'sale') {
+                $src = $payment_record['record_source'] ?? 'job_orders';
+                $type = ($src === 'merchandise_transactions') ? 'merchandise' : 'job_order';
+                $id   = !empty($payment_record['transaction_ref']) ? $payment_record['transaction_ref'] : $payment_record['record_id'];
+            }
+        }
+    } catch (Exception $e_pay) {
+        error_log("Receipt payment lookup error: " . $e_pay->getMessage());
+    }
+}
 
 if ($type === 'job_order') {
     require_once __DIR__ . '/db_connect.php';
@@ -35,7 +71,8 @@ if ($type === 'job_order') {
             WHERE jo.job_order_id = ? OR jo.job_order_number = ? OR jo.id = ?
             LIMIT 1
         ");
-        $numeric_id = is_numeric($id) ? (int)$id : 0;
+        $clean_id_str = ltrim(trim((string)$id), '#');
+        $numeric_id = is_numeric($clean_id_str) ? (int)$clean_id_str : (int)($payment_record['record_id'] ?? 0);
         $stmt->execute([$id, $id, $numeric_id]);
         $jo = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -379,7 +416,8 @@ if ($type === 'job_order') {
             LIMIT 1
         ");
         
-        $numeric_id = is_numeric($id) ? (int)$id : 0;
+        $clean_id_str = ltrim(trim((string)$id), '#');
+        $numeric_id = is_numeric($clean_id_str) ? (int)$clean_id_str : (int)($payment_record['record_id'] ?? 0);
         $stmt->execute([$id, $id.'%', $numeric_id]);
         $txn = $stmt->fetch(PDO::FETCH_ASSOC);
         
@@ -744,6 +782,57 @@ if (!$sale && !empty($id)) {
     }
 }
 
+// ── FALLBACK FOR PAYMENT LOG RECORD: Build $sale from payment_record if parent row was not found ──
+if (!$sale && !empty($payment_record)) {
+    $st_row = null;
+    try {
+        if (!empty($payment_record['station_id'])) {
+            $st_stmt = $pdo->prepare("SELECT * FROM stations WHERE id = ? LIMIT 1");
+            $st_stmt->execute([$payment_record['station_id']]);
+            $st_row = $st_stmt->fetch(PDO::FETCH_ASSOC);
+        }
+    } catch (Exception $e_st) {}
+
+    $total_val = (float)($payment_record['total_amount'] ?? 0);
+    $paid_val  = (float)($payment_record['amount_paid'] ?? 0);
+    $bal_val   = (float)($payment_record['balance_due'] ?? 0);
+    if ($total_val <= 0) $total_val = $paid_val + $bal_val;
+
+    $sale = [
+        'transaction_id'      => $payment_record['transaction_ref'] ?: ($payment_record['receipt_no'] ?: ('PR-' . $payment_record['id'])),
+        'id'                  => $payment_record['record_id'] ?: $payment_record['id'],
+        'or_number'           => $payment_record['or_number'] ?: ('OR-' . $payment_record['id']),
+        'created_at'          => $payment_record['logged_at'] ?? date('Y-m-d H:i:s'),
+        'staff_name'          => $payment_record['staff_name'] ?: 'Staff',
+        'customer_name'       => $payment_record['customer_name'] ?: 'Walk-in Customer',
+        'payment_method'      => $payment_record['payment_method'] ?: 'Cash',
+        'payment_status'      => $payment_record['payment_status'] ?: ($bal_val <= 0.009 ? 'PAID' : 'PARTIALLY PAID'),
+        'amount_paid'         => $paid_val,
+        'balance_due'         => $bal_val,
+        'total_amount'        => $total_val,
+        'subtotal_amount'     => $total_val,
+        'vat_amount'          => 0,
+        'amount_tendered'     => (float)($payment_record['amount_tendered'] ?? 0),
+        'change_amount'       => (float)($payment_record['change_amount'] ?? 0),
+        'card_reference'      => $payment_record['reference_no'] ?? '',
+        'ewallet_reference'   => $payment_record['reference_no'] ?? '',
+        'station_id'          => $payment_record['station_id'] ?? 0,
+        'station_name'        => $st_row['name'] ?? 'Petron Station',
+        'station_address'     => $st_row['address'] ?? ($st_row['location'] ?? ''),
+        'station_location'    => $st_row['location'] ?? '',
+        'station_vat_tin'     => $st_row['vat_tin'] ?? '',
+        'items'               => [
+            [
+                'product_name' => 'Payment Settlement (' . ($payment_record['receipt_no'] ?: ('PR-' . $payment_record['id'])) . ')',
+                'quantity' => 1,
+                'unit_price' => $paid_val,
+                'subtotal' => $paid_val
+            ]
+        ],
+        'transaction_type'    => ($payment_record['record_source'] === 'merchandise_transactions' ? 'merchandise' : 'job_order'),
+    ];
+}
+
 // DEBUG: Show if $sale was set
 if (isset($_GET['debug'])) {
     echo "<!-- DEBUG: \$sale is " . (isset($sale) ? "SET" : "NULL") . " -->";
@@ -834,10 +923,12 @@ h2{color:#c0392b}a{color:#002F6C}.debug{font-size:11px;color:#999;margin-top:15p
 $ts           = $sale['created_at'] ?? $sale['transaction_timestamp'] ?? date('Y-m-d H:i:s');
 $disp_date    = date('F j, Y',  strtotime($ts));
 $disp_time    = date('h:i A',   strtotime($ts));
+$pay_disp_date = (!empty($payment_record['logged_at'])) ? date('F j, Y', strtotime($payment_record['logged_at'])) : $disp_date;
+$pay_disp_time = (!empty($payment_record['logged_at'])) ? date('h:i A', strtotime($payment_record['logged_at'])) : $disp_time;
 $txn_id       = $sale['transaction_id'] ?? $sale['id'] ?? 'N/A';
 $customer     = trim(($sale['customer_first_name'] ?? '') . ' ' . ($sale['customer_last_name'] ?? ''))
                 ?: ($sale['customer_name'] ?? $sale['customer'] ?? 'Walk-in Customer');
-$staff_name   = $sale['staff_name']     ?? 'N/A';
+$staff_name   = (!empty($payment_record['staff_name'])) ? $payment_record['staff_name'] : ($sale['staff_name'] ?? 'N/A');
 $shift_name   = $sale['shift_name'] ?? '';
 if (!$shift_name && !empty($sale['shift_period'])) {
     $shift_map  = [
@@ -870,9 +961,11 @@ $or_num_clean = preg_replace('/[^0-9]/', '', (string)($sale['numeric_id'] ?? $sa
 if (strlen($or_num_clean) > 6) {
     $or_num_clean = substr($or_num_clean, -6);
 }
-$or_number    = !empty($sale['or_number']) 
-                ? $sale['or_number'] 
-                : 'OR-' . date('Ymd', strtotime($ts)) . '-' . str_pad($or_num_clean ?: '000001', 6, '0', STR_PAD_LEFT);
+$or_number    = !empty($payment_record['or_number'])
+                ? $payment_record['or_number']
+                : (!empty($sale['or_number']) 
+                    ? $sale['or_number'] 
+                    : 'OR-' . date('Ymd', strtotime($ts)) . '-' . str_pad($or_num_clean ?: '000001', 6, '0', STR_PAD_LEFT));
 // ── Station Details & Receipt Config ──────────────────────────────────────────
 $st_id = (int)($sale['station_id'] ?? $jo['station_id'] ?? $txn['station_id'] ?? 0);
 if ($st_id <= 0 && function_exists('user_station_id')) {
@@ -923,10 +1016,11 @@ $paper_size           = $receipt_cfg['paper_size'] ?? 'thermal_80mm';
 
 // ── Payment status derivation ────────────────────────────────────────────────
 $stored_pay_status = strtolower(trim($sale['payment_status'] ?? ''));
+$stored_pay_method = strtolower(trim($sale['payment_method'] ?? ''));
 $amount_paid_db    = (float)($sale['amount_paid'] ?? $tendered ?? 0);
 $balance_due_db    = (float)($sale['balance_due'] ?? 0);
 
-if (in_array($stored_pay_status, ['partially paid', 'partial payment', 'partial'])) {
+if (in_array($stored_pay_status, ['partially paid', 'partial payment', 'partial']) || strpos($stored_pay_method, 'partial') !== false) {
     $pay_status_norm = 'partial';
 } elseif (in_array($stored_pay_status, ['pending', 'pending payment', 'unpaid']) || ($stored_pay_status === '' && $amount_paid_db <= 0)) {
     $pay_status_norm = 'pending';
@@ -941,8 +1035,13 @@ if ($balance_due_db <= 0 && $pay_status_norm === 'partial') {
 }
 
 // ── Transaction type label ─────────────────────────────────────────────────────
-$txn_type_label    = !empty($receipt_cfg['receipt_title']) ? $receipt_cfg['receipt_title'] : 'SALES INVOICE';
-$txn_type_sublabel = 'Official Merchandise & Service Invoice';
+if (!empty($payment_record)) {
+    $txn_type_label    = 'OFFICIAL PAYMENT RECEIPT';
+    $txn_type_sublabel = 'Payment Collection & Settlement Receipt';
+} else {
+    $txn_type_label    = !empty($receipt_cfg['receipt_title']) ? $receipt_cfg['receipt_title'] : 'SALES INVOICE';
+    $txn_type_sublabel = 'Official Merchandise & Service Invoice';
+}
 
 // ── Station Tax Config & VAT-Inclusive Calculation ───────────────────────────
 $st_tax_cfg = function_exists('petron_get_station_tax_config') 
@@ -1509,7 +1608,8 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
 <!-- Toolbar (hidden on print) -->
 <div class="jo-toolbar no-print">
   <button class="btn-back" onclick="window.close()"><i class="fas fa-arrow-left"></i> Back</button>
-  <button class="btn-print" onclick="window.open('receipt.pdf.php?id=<?php echo urlencode($txn_id); ?>&type=<?php echo urlencode($sale['transaction_type'] ?? $type); ?>','_blank')"><i class="fas fa-print"></i> Print</button>
+  <button class="btn-print" onclick="window.print()"><i class="fas fa-print"></i> Print</button>
+  <button class="btn-print" onclick="window.open('receipt.pdf.php?id=<?php echo urlencode($txn_id); ?>&type=<?php echo urlencode($sale['transaction_type'] ?? $type); ?><?php echo !empty($payment_record['id']) ? '&payment_id=' . (int)$payment_record['id'] : ''; ?>','_blank')"><i class="fas fa-file-pdf"></i> PDF</button>
 </div>
 
 <div class="jo-page">
@@ -1542,13 +1642,16 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
   <div class="jo-r-lbl">Transaction Details</div>
 
   <div class="jo-r-row"><span class="jo-r-key">OR / Invoice No</span><span class="jo-r-val jo-r-bold"><?php echo htmlspecialchars($or_number); ?></span></div>
+  <?php if (!empty($payment_record['receipt_no'])): ?>
+  <div class="jo-r-row"><span class="jo-r-key">Payment Receipt No</span><span class="jo-r-val jo-r-bold" style="color:#002F70;"><?php echo htmlspecialchars($payment_record['receipt_no']); ?></span></div>
+  <?php endif; ?>
   <div class="jo-r-row"><span class="jo-r-key">Transaction ID</span><span class="jo-r-val jo-r-bold"><?php echo htmlspecialchars($txn_id); ?></span></div>
-  <div class="jo-r-row"><span class="jo-r-key">Date & Time</span><span class="jo-r-val"><?php echo $disp_date . ' ' . $disp_time; ?></span></div>
+  <div class="jo-r-row"><span class="jo-r-key"><?php echo !empty($payment_record) ? 'Payment Date' : 'Date & Time'; ?></span><span class="jo-r-val"><?php echo (!empty($payment_record) ? $pay_disp_date . ' ' . $pay_disp_time : $disp_date . ' ' . $disp_time); ?></span></div>
   <?php if ($show_customer): ?>
   <div class="jo-r-row"><span class="jo-r-key">Customer Name</span><span class="jo-r-val jo-r-bold"><?php echo htmlspecialchars($customer); ?></span></div>
   <?php endif; ?>
   <?php if ($show_cashier): ?>
-  <div class="jo-r-row"><span class="jo-r-key">Staff</span><span class="jo-r-val"><?php echo htmlspecialchars($staff_name); ?></span></div>
+  <div class="jo-r-row"><span class="jo-r-key"><?php echo !empty($payment_record) ? 'Collecting Staff' : 'Staff'; ?></span><span class="jo-r-val"><?php echo htmlspecialchars($staff_name); ?></span></div>
   <?php endif; ?>
   <?php if (!empty($mechanic_name)): ?>
   <div class="jo-r-row"><span class="jo-r-key">Mechanic</span><span class="jo-r-val jo-r-bold"><?php echo htmlspecialchars($mechanic_name); ?></span></div>
@@ -1570,6 +1673,10 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
     <?php foreach ($items as $it):
       $iname  = $it['product_name'] ?? $it['name'] ?? 'Item';
       $icat   = $it['category']     ?? '';
+      if (stripos($iname, 'labor') !== false || strtolower(trim($icat)) === 'labor') {
+          $iname = 'Tip';
+          $icat  = 'Tip';
+      }
       $isize  = $it['size_variant'] ?? $it['size'] ?? '';
       $iqty   = (float)($it['quantity'] ?? $it['qty'] ?? 1);
       $iprice = (float)($it['unit_price'] ?? $it['price'] ?? 0);
@@ -1680,6 +1787,71 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
   <?php if ($show_payment_details): ?>
   <div class="jo-r-lbl">Totals & Payment</div>
 
+  <?php if (!empty($payment_record)): ?>
+    <!-- ══ PAYMENT SETTLEMENT DETAILS (for Payment Collections / Balances) ════ -->
+    <?php
+      $pr_method = $payment_record['payment_method'] ?? 'Cash';
+      $pr_method_norm = function_exists('normalize_payment_type') ? normalize_payment_type($pr_method) : ['payment_type'=>$pr_method, 'provider'=>''];
+      $pr_method_label = strtoupper($pr_method_norm['payment_type'] ?? $pr_method);
+      $pr_total = (float)($payment_record['total_amount'] ?? $total);
+      $pr_prev = (float)($payment_record['previous_paid'] ?? 0);
+      $pr_paid = (float)($payment_record['amount_paid'] ?? 0);
+      $pr_bal = (float)($payment_record['balance_due'] ?? 0);
+      $pr_tendered = (float)($payment_record['amount_tendered'] ?? 0);
+      $pr_change = (float)($payment_record['change_amount'] ?? 0);
+      $pr_ref = trim($payment_record['reference_no'] ?? '');
+      $pr_status = strtoupper(trim($payment_record['payment_status'] ?? ($pr_bal <= 0.009 ? 'PAID' : 'PARTIALLY PAID')));
+    ?>
+    <div class="jo-r-row">
+      <span class="jo-r-key">Payment Type</span>
+      <span class="jo-r-val jo-r-bold"><?php echo htmlspecialchars($pr_method_label); ?></span>
+    </div>
+    <?php if (!empty($pr_ref)): ?>
+    <div class="jo-r-row">
+      <span class="jo-r-key">Ref / Auth No.</span>
+      <span class="jo-r-val jo-r-bold"><?php echo htmlspecialchars($pr_ref); ?></span>
+    </div>
+    <?php endif; ?>
+    <div class="jo-r-row">
+      <span class="jo-r-key">Total Order Amount</span>
+      <span class="jo-r-val">&#8369;<?php echo number_format($pr_total, 2); ?></span>
+    </div>
+    <?php if ($pr_prev > 0.009): ?>
+    <div class="jo-r-row">
+      <span class="jo-r-key">Previously Paid</span>
+      <span class="jo-r-val">&#8369;<?php echo number_format($pr_prev, 2); ?></span>
+    </div>
+    <?php endif; ?>
+    <div class="jo-r-div"></div>
+    <div class="jo-r-row" style="font-size:12px;font-weight:800;color:#002F70;">
+      <span>AMOUNT PAID (THIS TXN)</span>
+      <span>&#8369;<?php echo number_format($pr_paid, 2); ?></span>
+    </div>
+    <div class="jo-r-div"></div>
+    <?php if (strtolower($pr_method) === 'cash' || strtolower($pr_method_label) === 'CASH'): ?>
+      <?php if ($pr_tendered > 0): ?>
+      <div class="jo-r-row">
+        <span class="jo-r-key">Cash Tendered</span>
+        <span class="jo-r-val">&#8369;<?php echo number_format($pr_tendered, 2); ?></span>
+      </div>
+      <div class="jo-r-row">
+        <span class="jo-r-key">Sukli / Change</span>
+        <span class="jo-r-val jo-r-bold">&#8369;<?php echo number_format($pr_change, 2); ?></span>
+      </div>
+      <?php endif; ?>
+    <?php endif; ?>
+    <div class="jo-r-row" style="<?php echo ($pr_bal > 0.009) ? 'color:#9a3412;font-weight:700;' : 'color:#166534;font-weight:700;'; ?>">
+      <span class="jo-r-key">Remaining Balance Due</span>
+      <span class="jo-r-val">&#8369;<?php echo number_format($pr_bal, 2); ?></span>
+    </div>
+    <div class="jo-r-row">
+      <span class="jo-r-key">Payment Status</span>
+      <span class="jo-r-val jo-r-bold" style="<?php echo ($pr_bal <= 0.009) ? 'color:#166534;' : 'color:#9a3412;'; ?>">
+        <?php echo htmlspecialchars($pr_status); ?>
+      </span>
+    </div>
+
+  <?php else: ?>
   <?php
     $pay_type_disp = $norm_pay_info['payment_type'] ?? $pay_method;
     $provider_disp = $norm_pay_info['provider'] ?? ($sale['ewallet_provider'] ?? '');
@@ -1821,6 +1993,7 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
     <?php endif; ?>
 
   <?php endif; // end of payment methods ?>
+  <?php endif; // end of payment_record check ?>
   <?php endif; // end of show_payment_details ?>
   
   <?php if (!empty($sale['remarks'])): ?>
@@ -1908,7 +2081,7 @@ $paper_width_val = match($paper_size ?? 'thermal_80mm') {
     </div>
     <?php elseif ($pay_status_norm === 'pending'): ?>
     <div class="jo-r-foot-line" style="color:#9a3412;font-weight:700;border:1px solid #fed7aa;background:#ffedd5;padding:4px 6px;border-radius:4px;margin:4px 0;font-size:9px;">
-      &#9888; No payment collected yet. Full balance of &#8369;<?php echo number_format($total, 2); ?> remains outstanding.
+      &#9888; No payment collected yet. Full balance of &#8369;<?php echo number_format($total, 2); ?> remains balance outstanding.
     </div>
     <?php elseif ($pay_status_norm === 'credit'): ?>
     <div class="jo-r-foot-line" style="color:#6b21a8;font-weight:700;border:1px solid #d8b4fe;background:#f3e8ff;padding:4px 6px;border-radius:4px;margin:4px 0;font-size:9px;">

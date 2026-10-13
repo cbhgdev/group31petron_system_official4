@@ -145,6 +145,116 @@ function is_pending_validation_status($status_str) {
         || in_array($s, ['closing_completed', 'submitted', 'adjusted', 'awaiting_fuel_sales_closing', 'awaiting_validation']);
 }
 
+// ── Admin Notification Dispatcher for Fuel Transaction Validation ─────
+if (!function_exists('notify_admins_fuel_validation')) {
+function notify_admins_fuel_validation(
+    PDO $pdo,
+    int $station_id,
+    string $mgr_name,
+    string $mgr_role,
+    string $rep_date,
+    string $shift,
+    float $total_liters,
+    float $total_amount,
+    int $count,
+    string $action_type = 'Validated',
+    string $remarks = '',
+    int $single_tx_id = 0,
+    string $single_txn_id = '',
+    string $fuel_type = '',
+    int $exclude_user_id = 0
+): void {
+    try {
+        $adm_stmt = $pdo->prepare("
+            SELECT id, role FROM users
+            WHERE (station_id = ? OR station_id IS NULL OR station_id = 0)
+              AND LOWER(TRIM(role)) IN ('admin', 'superadmin')
+              AND (status = 'Active' OR status = 'active' OR status IS NULL)
+        ");
+        $adm_stmt->execute([$station_id]);
+        $admins = $adm_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        if (empty($admins)) {
+            return;
+        }
+
+        $date_lbl = !empty($rep_date) ? date('M d, Y', strtotime($rep_date)) : date('M d, Y');
+        $shift_lbl = !empty($shift) ? $shift : 'Shift';
+
+        if ($action_type === 'Adjusted') {
+            $title = 'Fuel Meter Reading Validation — Manager Adjusted & Approved';
+            if ($single_tx_id > 0 && !empty($single_txn_id)) {
+                $msg = "{$mgr_name} ({$mgr_role}) adjusted and validated fuel meter reading for TXN {$single_txn_id} ({$fuel_type}, " . number_format($total_liters, 2) . " L, ₱" . number_format($total_amount, 2) . ") in {$shift_lbl}." . (!empty($remarks) ? " Reason: {$remarks}" : "");
+            } else {
+                $msg = "{$mgr_name} ({$mgr_role}) adjusted and validated {$count} fuel meter reading transaction(s) for {$date_lbl} ({$shift_lbl}). Total: " . number_format($total_liters, 2) . " L (₱" . number_format($total_amount, 2) . ")." . (!empty($remarks) ? " Reason: {$remarks}" : "");
+            }
+            $target_status = 'adjusted';
+        } else {
+            $title = 'Fuel Meter Reading Validation — Manager Approved';
+            if ($single_tx_id > 0 && !empty($single_txn_id)) {
+                $msg = "{$mgr_name} ({$mgr_role}) approved and validated fuel meter reading for TXN {$single_txn_id} ({$fuel_type}, " . number_format($total_liters, 2) . " L, ₱" . number_format($total_amount, 2) . ") in {$shift_lbl}." . (!empty($remarks) ? " Remarks: {$remarks}" : "");
+            } else {
+                $msg = "{$mgr_name} ({$mgr_role}) approved and validated {$count} fuel meter reading(s) for {$date_lbl} ({$shift_lbl}). Total: " . number_format($total_liters, 2) . " L (₱" . number_format($total_amount, 2) . ")." . (!empty($remarks) ? " Remarks: {$remarks}" : "");
+            }
+            $target_status = 'validated';
+        }
+
+        $red_url = "manager_fuel_transaction_validation.php?date_from={$rep_date}&date_to={$rep_date}&status_filter={$target_status}";
+        if ($single_tx_id > 0 && !empty($single_txn_id)) {
+            $red_url .= "&search_query=" . urlencode($single_txn_id);
+        }
+
+        $base_key = 'adm_fuel_appr_' . $station_id . '_' . date('Ymd', strtotime($rep_date ?: 'now')) . '_' . strtolower(preg_replace('/[^a-z0-9]/i', '', $shift_lbl)) . '_' . ($single_tx_id > 0 ? 'tx' . $single_tx_id : 'batch' . time());
+
+        foreach ($admins as $adm) {
+            $adm_id = (int)$adm['id'];
+            if ($adm_id <= 0 || $adm_id === $exclude_user_id) {
+                continue;
+            }
+            $adm_role = strtolower(trim((string)$adm['role']));
+            $u_key = $base_key . '_u' . $adm_id;
+
+            if (function_exists('notify')) {
+                notify(
+                    $pdo,
+                    $adm_id,
+                    $adm_role,
+                    'success',
+                    'fuel_transaction',
+                    'medium',
+                    $title,
+                    $msg,
+                    $u_key,
+                    $red_url,
+                    $single_tx_id > 0 ? 'fuel_transaction' : 'fuel_sales_closing',
+                    $single_tx_id > 0 ? $single_tx_id : 0,
+                    $shift_lbl
+                );
+            } else {
+                $ins = $pdo->prepare("
+                    INSERT INTO notifications 
+                        (user_id, recipient_role, type, event_type, severity, title, message, source_key, redirect_url, reference_type, reference_id, shift_period, status, created_at)
+                    VALUES (?, ?, 'success', 'fuel_transaction', 'medium', ?, ?, ?, ?, ?, ?, ?, 'unread', NOW())
+                ");
+                $ins->execute([
+                    $adm_id,
+                    $adm_role,
+                    $title,
+                    $msg,
+                    $u_key,
+                    $red_url,
+                    $single_tx_id > 0 ? 'fuel_transaction' : 'fuel_sales_closing',
+                    $single_tx_id > 0 ? $single_tx_id : null,
+                    $shift_lbl
+                ]);
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('notify_admins_fuel_validation error: ' . $e->getMessage());
+    }
+}
+}
+
 // ─── Filters & Inputs ──────────────────────────────────────────
 $date_from          = trim($_GET['date_from']          ?? date('Y-m-d', strtotime('-30 days')));
 $date_to            = trim($_GET['date_to']            ?? date('Y-m-d'));
@@ -296,9 +406,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (in_array($_POST['action'] ?? '', [
         $pdo->beginTransaction();
 
         // 1. Check or Insert/Update fuel_sales_closing
-        $stmt_chk = $pdo->prepare("SELECT id FROM fuel_sales_closing WHERE station_id = ? AND report_date = ? AND (shift = ? OR shift_period = ?) LIMIT 1");
-        $stmt_chk->execute([$station_id, $rep_date, $shift, $shift_period]);
+        $stmt_chk = $pdo->prepare("SELECT id FROM fuel_sales_closing WHERE station_id = ? AND report_date = ? AND (shift = ? OR shift_period = ? OR LOWER(shift) LIKE ? OR LOWER(shift_period) LIKE ?) LIMIT 1");
+        $stmt_chk->execute([$station_id, $rep_date, $shift, $shift_period, '%' . strtolower($shift_period) . '%', '%' . strtolower($shift_period) . '%']);
         $closing_id = $stmt_chk->fetchColumn();
+        if (!$closing_id) {
+            $stmt_chk2 = $pdo->prepare("SELECT id FROM fuel_sales_closing WHERE station_id = ? AND report_date = ? LIMIT 1");
+            $stmt_chk2->execute([$station_id, $rep_date]);
+            $closing_id = $stmt_chk2->fetchColumn();
+        }
 
         if ($closing_id) {
             $stmt_upd = $pdo->prepare("
@@ -334,6 +449,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (in_array($_POST['action'] ?? '', [
             ]);
             $closing_id = $pdo->lastInsertId();
         }
+
+        // Also ensure all fuel_sales_closing rows for this station and report_date are set to VERIFIED
+        try {
+            $pdo->prepare("
+                UPDATE fuel_sales_closing
+                SET status = 'VERIFIED', verified_by = COALESCE(verified_by, ?)
+                WHERE station_id = ? AND report_date = ?
+                  AND LOWER(COALESCE(status, '')) NOT IN ('rejected','voided')
+            ")->execute([$me['id'], $station_id, $rep_date]);
+        } catch (Exception $e) {}
 
         // 2. Validate all transactions in $tx_id_arr
         $in_pl = implode(',', $tx_id_arr);
@@ -422,6 +547,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (in_array($_POST['action'] ?? '', [
             }
         }
 
+        // Notify Admins: Fuel Meter Reading Validation — Manager Approved
+        try {
+            $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+            $mgr_role = normalize_role($me['role'] ?? 'Manager');
+            notify_admins_fuel_validation(
+                $pdo,
+                (int)$station_id,
+                $mgr_name,
+                $mgr_role,
+                (string)$rep_date,
+                (string)$shift,
+                (float)$total_liters,
+                (float)$total_fuel_sales,
+                $validated_count,
+                'Validated',
+                (string)$manager_remarks,
+                0,
+                '',
+                '',
+                (int)$me['id']
+            );
+        } catch (Throwable $ane) {
+            error_log("Admin notification error in save_closing_and_validate: " . $ane->getMessage());
+        }
+
         echo json_encode([
             'success' => true,
             'message' => "Fuel Sales Closing for {$rep_date} ({$shift}) saved and {$validated_count} transaction(s) approved successfully!"
@@ -477,6 +627,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->beginTransaction();
 
             $adjusted_count = 0;
+            $batch_adj_total_liters = 0.0;
+            $batch_adj_total_amount = 0.0;
             $notifications_to_send = [];
             $logs_to_send = [];
 
@@ -593,8 +745,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ];
                 }
 
+                $batch_adj_total_liters += $liters_sold;
+                $batch_adj_total_amount += $total_amount;
                 $adjusted_count++;
             }
+
+            // Check if all pending fuel transactions for today are now processed
+            try {
+                $pending_cnt_stmt = $pdo->prepare("
+                    SELECT COUNT(*) FROM fuel_transactions
+                    WHERE station_id = ? AND (DATE(transaction_date) = CURDATE() OR (transaction_date IS NULL AND DATE(created_at) = CURDATE()))
+                      AND LOWER(COALESCE(status,'')) IN ('pending','readings_submitted','closing_completed','submitted')
+                ");
+                $pending_cnt_stmt->execute([$station_id]);
+                if ((int)$pending_cnt_stmt->fetchColumn() === 0) {
+                    $pdo->prepare("
+                        UPDATE fuel_sales_closing
+                        SET status = 'VERIFIED', verified_by = COALESCE(verified_by, ?)
+                        WHERE station_id = ? AND report_date = CURDATE()
+                          AND LOWER(COALESCE(status, '')) NOT IN ('rejected','voided')
+                    ")->execute([$me['id'], $station_id]);
+                }
+            } catch (Exception $e) {}
 
             // Commit database transaction first before logging and notifications
             if ($pdo->inTransaction()) {
@@ -630,6 +802,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         );
                     } catch (Throwable $t) {}
                 }
+            }
+
+            // Notify Admins: Fuel Meter Reading Validation — Manager Adjusted & Approved
+            try {
+                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                notify_admins_fuel_validation(
+                    $pdo,
+                    (int)$station_id,
+                    $mgr_name,
+                    $mgr_role,
+                    date('Y-m-d'),
+                    'Assigned Shift',
+                    (float)$batch_adj_total_liters,
+                    (float)$batch_adj_total_amount,
+                    $adjusted_count,
+                    'Adjusted',
+                    (string)$remarks,
+                    0,
+                    '',
+                    '',
+                    (int)$me['id']
+                );
+            } catch (Throwable $ane) {
+                error_log("Admin notification error in batch_adjust: " . $ane->getMessage());
             }
 
             if ($is_ajax) {
@@ -872,24 +1069,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ];
             }
 
-            // Check if all transactions for this shift/date are now verified, and if so, mark fuel_sales_closing as VERIFIED
+            // Check if all transactions for this date are now verified/processed, and if so, mark fuel_sales_closing as VERIFIED
             try {
                 $tx_date = date('Y-m-d', strtotime($tx['transaction_date'] ?: $tx['created_at']));
-                $tx_shift = $tx['shift_period'] ?: ($tx['shift_name'] ?? '');
                 $pending_cnt_stmt = $pdo->prepare("
                     SELECT COUNT(*) FROM fuel_transactions
                     WHERE station_id = ? AND (DATE(transaction_date) = ? OR (transaction_date IS NULL AND DATE(created_at) = ?))
-                      AND (shift_period = ? OR shift_name = ? OR ? = '')
-                      AND LOWER(COALESCE(status,'')) NOT IN ('verified','approved','adjusted','rejected','voided','cancelled','canceled')
+                      AND LOWER(COALESCE(status,'')) IN ('pending','readings_submitted','closing_completed','submitted')
                 ");
-                $pending_cnt_stmt->execute([$station_id, $tx_date, $tx_date, $tx_shift, $tx_shift, $tx_shift]);
+                $pending_cnt_stmt->execute([$station_id, $tx_date, $tx_date]);
                 if ((int)$pending_cnt_stmt->fetchColumn() === 0) {
                     $pdo->prepare("
                         UPDATE fuel_sales_closing
                         SET status = 'VERIFIED', verified_by = COALESCE(verified_by, ?)
-                        WHERE station_id = ? AND report_date = ? AND (shift = ? OR shift_period = ?)
+                        WHERE station_id = ? AND report_date = ?
                           AND LOWER(COALESCE(status, '')) NOT IN ('rejected','voided')
-                    ")->execute([$me['id'], $station_id, $tx_date, $tx_shift, $tx_shift]);
+                    ")->execute([$me['id'], $station_id, $tx_date]);
                 }
             } catch (Exception $e) {}
 
@@ -1140,6 +1335,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $success_msg = "Transaction <strong>{$tx['transaction_id']}</strong> marked for adjustment.";
             }
+
+            // Check if all transactions for this date are now verified/processed, and if so, mark fuel_sales_closing as VERIFIED
+            try {
+                $tx_date = date('Y-m-d', strtotime($tx['transaction_date'] ?: $tx['created_at']));
+                $pending_cnt_stmt = $pdo->prepare("
+                    SELECT COUNT(*) FROM fuel_transactions
+                    WHERE station_id = ? AND (DATE(transaction_date) = ? OR (transaction_date IS NULL AND DATE(created_at) = ?))
+                      AND LOWER(COALESCE(status,'')) IN ('pending','readings_submitted','closing_completed','submitted')
+                ");
+                $pending_cnt_stmt->execute([$station_id, $tx_date, $tx_date]);
+                if ((int)$pending_cnt_stmt->fetchColumn() === 0) {
+                    $pdo->prepare("
+                        UPDATE fuel_sales_closing
+                        SET status = 'VERIFIED', verified_by = COALESCE(verified_by, ?)
+                        WHERE station_id = ? AND report_date = ?
+                          AND LOWER(COALESCE(status, '')) NOT IN ('rejected','voided')
+                    ")->execute([$me['id'], $station_id, $tx_date]);
+                }
+            } catch (Exception $e) {}
         }
 
         // Commit database transaction first before logging and notifications
@@ -1175,6 +1389,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $n['shift_lbl']
                     );
                 } catch (Throwable $t) {}
+            }
+        }
+
+        // Notify Admins: Fuel Meter Reading Validation — Manager Approved or Adjusted
+        if ($action === 'validate' || $action === 'adjust') {
+            try {
+                $mgr_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? 'Station Manager');
+                $mgr_role = normalize_role($me['role'] ?? 'Manager');
+                $tx_date = date('Y-m-d', strtotime($tx['transaction_date'] ?: $tx['created_at']));
+                $tx_shift = $tx['shift_name'] ?: ($tx['shift_period'] ?: 'Assigned Shift');
+                $act_type = ($action === 'adjust') ? 'Adjusted' : 'Validated';
+                notify_admins_fuel_validation(
+                    $pdo,
+                    (int)$station_id,
+                    $mgr_name,
+                    $mgr_role,
+                    $tx_date,
+                    $tx_shift,
+                    (float)($liters_sold ?? $tx['liters_sold'] ?? 0),
+                    (float)($total_amount ?? $tx['total_amount'] ?? 0),
+                    1,
+                    $act_type,
+                    (string)$remarks,
+                    (int)$tx['id'],
+                    (string)$tx['transaction_id'],
+                    (string)$tx['fuel_type'],
+                    (int)$me['id']
+                );
+            } catch (Throwable $ane) {
+                error_log("Admin notification error in single {$action}: " . $ane->getMessage());
             }
         }
 
@@ -1322,7 +1566,7 @@ if ($status_filter !== 'all') {
     if ($status_filter === 'pending') {
         // Show pending closing and adjusted transactions awaiting manager's final approval
         $where[] = "(LOWER(ft.status) LIKE '%pending%' OR LOWER(ft.status) IN ('closing_completed', 'submitted', 'adjusted', 'readings_submitted'))";
-    } elseif ($status_filter === 'validated') {
+    } elseif ($status_filter === 'validated' || $status_filter === 'verified') {
         $where[] = "LOWER(ft.status) IN ('verified', 'approved', 'validated')";
     } elseif ($status_filter === 'adjusted') {
         $where[] = "LOWER(ft.status) = 'adjusted'";
@@ -3491,24 +3735,21 @@ async function confirmBatchReject() {
         
         const jsonRes = await response.json().catch(() => null);
         if (jsonRes && jsonRes.success) {
-            sessionStorage.removeItem('petron_post_reload_toast_msg');
-            sessionStorage.removeItem('petron_post_reload_toast_type');
-            sessionStorage.setItem('petron_post_reload_toast_msg', jsonRes.message || `${txIds.length} transaction(s) rejected successfully.`);
-            sessionStorage.setItem('petron_post_reload_toast_type', 'warning');
-            location.reload();
+            if (typeof window.showGlobalToast === 'function') {
+                window.showGlobalToast(jsonRes.message || `${txIds.length} transaction(s) rejected successfully.`, 'warning');
+            }
+            if (window.PetronRealtime && typeof window.PetronRealtime.refreshActiveView === 'function') {
+                window.PetronRealtime.refreshActiveView({ force: true });
+            }
         } else {
-            sessionStorage.removeItem('petron_post_reload_toast_msg');
-            sessionStorage.removeItem('petron_post_reload_toast_type');
-            sessionStorage.setItem('petron_post_reload_toast_msg', 'Rejection failed: ' + (jsonRes?.message || 'Server error'));
-            sessionStorage.setItem('petron_post_reload_toast_type', 'error');
-            location.reload();
+            if (typeof window.showGlobalToast === 'function') {
+                window.showGlobalToast('Rejection failed: ' + (jsonRes?.message || 'Server error'), 'error');
+            }
         }
     } catch (error) {
-        sessionStorage.removeItem('petron_post_reload_toast_msg');
-        sessionStorage.removeItem('petron_post_reload_toast_type');
-        sessionStorage.setItem('petron_post_reload_toast_msg', 'Network error: ' + error.message);
-        sessionStorage.setItem('petron_post_reload_toast_type', 'error');
-        location.reload();
+        if (typeof window.showGlobalToast === 'function') {
+            window.showGlobalToast('Network error: ' + error.message, 'error');
+        }
     }
 }
 
@@ -3887,24 +4128,21 @@ async function confirmBatchAdjust() {
         
         const jsonRes = await response.json().catch(() => null);
         if (jsonRes && jsonRes.success) {
-            sessionStorage.removeItem('petron_post_reload_toast_msg');
-            sessionStorage.removeItem('petron_post_reload_toast_type');
-            sessionStorage.setItem('petron_post_reload_toast_msg', jsonRes.message || `${adjustments.length} transaction(s) adjusted and validated successfully.`);
-            sessionStorage.setItem('petron_post_reload_toast_type', 'success');
-            location.reload();
+            if (typeof window.showGlobalToast === 'function') {
+                window.showGlobalToast(jsonRes.message || `${adjustments.length} transaction(s) adjusted and validated successfully.`, 'success');
+            }
+            if (window.PetronRealtime && typeof window.PetronRealtime.refreshActiveView === 'function') {
+                window.PetronRealtime.refreshActiveView({ force: true });
+            }
         } else {
-            sessionStorage.removeItem('petron_post_reload_toast_msg');
-            sessionStorage.removeItem('petron_post_reload_toast_type');
-            sessionStorage.setItem('petron_post_reload_toast_msg', 'Adjustment failed: ' + (jsonRes?.message || 'Server error'));
-            sessionStorage.setItem('petron_post_reload_toast_type', 'error');
-            location.reload();
+            if (typeof window.showGlobalToast === 'function') {
+                window.showGlobalToast('Adjustment failed: ' + (jsonRes?.message || 'Server error'), 'error');
+            }
         }
     } catch (error) {
-        sessionStorage.removeItem('petron_post_reload_toast_msg');
-        sessionStorage.removeItem('petron_post_reload_toast_type');
-        sessionStorage.setItem('petron_post_reload_toast_msg', 'Network error: ' + error.message);
-        sessionStorage.setItem('petron_post_reload_toast_type', 'error');
-        location.reload();
+        if (typeof window.showGlobalToast === 'function') {
+            window.showGlobalToast('Network error: ' + error.message, 'error');
+        }
     }
 }
 
@@ -3957,9 +4195,11 @@ async function autoRefreshFuelValidationPage() {
             if (elLit)  elLit.textContent  = data.kpis.liters;
             if (elSal)  elSal.textContent  = data.kpis.sales;
 
-            // If pending count changed, reload seamlessly to update the table log
+            // If pending count changed, refresh active table view live without whole page reload
             if (currentPending !== -1 && currentPending !== newPending) {
-                location.reload();
+                if (window.PetronRealtime && typeof window.PetronRealtime.refreshActiveView === 'function') {
+                    window.PetronRealtime.refreshActiveView({ force: true });
+                }
             }
         }
     } catch (e) {

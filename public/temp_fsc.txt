@@ -1,0 +1,65 @@
+Array
+(
+    [0] => Array
+        (
+            [id] => 1
+            [station_id] => 1253
+            [report_date] => 2026-10-12
+            [shift] => Shift 1
+            [shift_period] => first
+            [total_fuel_sales] => 0.00
+            [total_liters] => 0.00
+            [diesel_sales] => 0.00
+            [turbo_diesel_sales] => 0.00
+            [xcs_plus_sales] => 0.00
+            [xtra_advance_sales] => 0.00
+            [kerosene_sales] => 0.00
+            [olg_sales] => 0.00
+            [tba_sales] => 0.00
+            [service_income] => 0.00
+            [other_sales] => 0.00
+            [ar_collected] => 0.00
+            [total_store_sales] => 0.00
+            [cash_shift1] => 78430.00
+            [cash_shift2] => 0.00
+            [total_cash] => 78430.00
+            [ar_shift1] => 160883.00
+            [ar_shift2] => 0.00
+            [total_ar] => 160883.00
+            [gross_sales] => 0.00
+            [expected_cash] => 0.00
+            [total_cash_bank] => 78430.00
+            [encoded_by] => 9
+            [encoded_at] => 2026-10-12 10:02:52
+            [status] => CLOSING_COMPLETED
+            [beginning_cash] => 0.00
+            [cash_sales] => 0.00
+            [cash_expenses] => 0.00
+            [actual_cash] => 0.00
+            [cash_variance] => 0.00
+            [new_ar] => 0.00
+            [outstanding_ar] => 0.00
+            [total_ar_balance] => 0.00
+            [beginning_bank_balance] => 0.00
+            [bank_deposits] => 0.00
+            [bank_movements] => 0.00
+            [total_adjustments] => 0.00
+            [overall_total] => 0.00
+            [merchandise_sales] => 0.00
+            [job_order_sales] => 0.00
+            [total_sales_revenue] => 0.00
+            [other_bank_in] => 0.00
+            [bank_withdrawals] => 0.00
+            [bank_expenses] => 0.00
+            [beginning_ar] => 0.00
+            [ar_adjustments] => 0.00
+            [ar_voided] => 0.00
+            [ending_ar] => 0.00
+            [other_cash_in] => 0.00
+            [bank_withdrawal] => 0.00
+            [net_sales] => -160883.00
+            [verified_by] => 
+            [checked_by] => 
+        )
+
+)

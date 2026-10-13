@@ -34,89 +34,161 @@ include __DIR__ . '/../partials/header.php';
 ?>
 
 <style>
-/* ABSOLUTE NO TEXT OVERLAPPING RULE — main page sections only */
-.cust-section, .table-wrap, .table-responsive, .table-card, .card {
-    overflow-x: auto !important;
+/* ══════════════════════════════════════════════════════════════════════════════
+   CUSTOMER MANAGEMENT — ZERO HORIZONTAL SCROLL & PERFECT RESPONSIVE COMPRESSION
+   Strict Rule: Table fits 100% inside container with NO horizontal scrollbar.
+   Large, high-contrast, easily legible text for senior/elderly station managers.
+   ══════════════════════════════════════════════════════════════════════════════ */
+html, body,
+.cust-page,
+.cust-section,
+.table-wrap,
+.table-responsive,
+.table-card {
+    overflow-x: hidden !important;
     width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
 }
 
-/* min-width ONLY for main page tables — NOT inside modal */
+/* Strict 100% fixed layout — zero overflow, zero horizontal scrollbar */
 .cust-section table.cust-table,
-.cust-section #mgrMerchTable,
-.cust-section table.pricing-table,
-.cust-section table.tbl-requests,
 .cust-section table.table {
-    table-layout: auto !important;
+    table-layout: fixed !important;
     width: 100% !important;
-    min-width: 1050px !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
     border-collapse: collapse !important;
+    box-sizing: border-box !important;
 }
 
-/* th white-space nowrap — main page only */
-.cust-section table th {
-    padding: 9px 8px !important;
-    font-size: 12.5px !important;
+/* Table headers — prominent, clear, readable uppercase */
+.cust-section table.cust-table th {
+    background: #002f70 !important;
+    color: #ffffff !important;
+    padding: 9px 5px !important;
+    font-size: 13px !important;
     font-weight: 800 !important;
-    letter-spacing: 0.2px !important;
+    letter-spacing: 0.3px !important;
     text-transform: uppercase !important;
-    white-space: nowrap !important;
-}
-
-/* td — main page only */
-.cust-section table td {
-    padding: 9px 8px !important;
-    font-size: 13.5px !important;
-    line-height: 1.3 !important;
+    line-height: 1.2 !important;
+    vertical-align: middle !important;
+    box-sizing: border-box !important;
+    white-space: normal !important;
     word-break: normal !important;
     overflow-wrap: break-word !important;
 }
 
-/* Customer ID Monospace Code — main page only */
-.cust-section .cust-table td:first-child, .cust-section .cust-table td code {
-    font-size: 12.5px !important;
-    font-weight: 800 !important;
-    font-family: monospace !important;
-    white-space: nowrap !important;
+/* Table cells — large, comfortable font for elderly eyes with compressed padding */
+.cust-section table.cust-table td {
+    padding: 7px 5px !important;
+    font-size: 13.5px !important;
+    color: #0f172a !important;
+    line-height: 1.25 !important;
+    vertical-align: middle !important;
+    border-bottom: 1px solid #f1f5f9 !important;
+    box-sizing: border-box !important;
+    word-break: normal !important;
+    overflow-wrap: break-word !important;
 }
 
-/* Customer Name High Legibility — main page only */
-.cust-section .cust-table td:nth-child(2) strong {
-    font-size: 14px !important;
+.cust-section table.cust-table tr:hover td {
+    background: #f8fafc !important;
+}
+
+/* Customer ID: monospace bold, high contrast */
+.cust-section table.cust-table td.col-cust-id,
+.cust-section table.cust-table td:first-child {
+    font-size: 13px !important;
+    font-weight: 800 !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    letter-spacing: -0.2px !important;
+    color: #00264D !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+/* Customer Name: deep brand blue, readable bold wrap */
+.cust-section table.cust-table td.col-cust-name strong,
+.cust-section table.cust-table td:nth-child(2) strong {
+    font-size: 14.5px !important;
     font-weight: 800 !important;
     color: #002F6C !important;
+    display: block !important;
+    line-height: 1.25 !important;
+    word-break: break-word !important;
+}
+
+/* Contact Number */
+.cust-section table.cust-table td.col-contact {
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    color: #1e293b !important;
     white-space: nowrap !important;
 }
 
-/* Vehicles, Amounts & Dates Never Overlap — main page only */
-.cust-section td:nth-child(3), .cust-section td:nth-child(4), .cust-section td:nth-child(5),
-.cust-section td:nth-child(6), .cust-section td:nth-child(7), .cust-section td:nth-child(8),
-.cust-section td:nth-child(9), .cust-section td:nth-child(10),
-.cust-section th:nth-child(3), .cust-section th:nth-child(4), .cust-section th:nth-child(5),
-.cust-section th:nth-child(6), .cust-section th:nth-child(7), .cust-section th:nth-child(8),
-.cust-section th:nth-child(9), .cust-section th:nth-child(10) {
+/* Vehicles */
+.cust-section table.cust-table td.col-vehicles {
+    font-size: 12.5px !important;
+    line-height: 1.25 !important;
+}
+
+/* Amounts: Credit Limit & Outstanding Balance */
+.cust-section table.cust-table td.col-amount {
+    font-size: 13.5px !important;
+    font-weight: 800 !important;
     white-space: nowrap !important;
 }
 
 /* Status Pill */
+.cust-section table.cust-table td.col-status {
+    text-align: center !important;
+}
+.cust-section table.cust-table td.col-status .pill,
 .pill, .pill.active, .pill.inactive, .pill.archived, .pill.regular, .pill.credit, .status-pill, .badge {
     white-space: nowrap !important;
     display: inline-block !important;
-    padding: 3px 8px !important;
+    padding: 3px 6px !important;
     font-size: 11.5px !important;
     font-weight: 800 !important;
     text-transform: uppercase !important;
-    border-radius: 5px !important;
-    line-height: 1.1 !important;
+    border-radius: 4px !important;
+    line-height: 1.15 !important;
 }
 
-/* Action Buttons */
-.cust-actions button, .cust-table .btn-plain, .act-btn, .tbl-btn {
+/* Action Buttons Stack — clean, bold, comfortably clickable, zero cell blowout */
+.cust-section table.cust-table td.col-actions {
+    text-align: center !important;
+    padding: 4px 2px !important;
+}
+
+.cust-section table.cust-table .btn-action-stack {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 3px !important;
+    align-items: center !important;
+    justify-content: center !important;
+    margin: 0 auto !important;
+    width: 66px !important;
+    max-width: 100% !important;
+}
+
+.cust-section table.cust-table .btn-action-stack .btn-plain {
+    height: 25px !important;
+    padding: 0 4px !important;
     font-size: 11.5px !important;
-    font-weight: 700 !important;
-    height: 26px !important;
-    padding: 0 8px !important;
+    font-weight: 800 !important;
+    border-radius: 4px !important;
+    width: 66px !important;
+    max-width: 100% !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 3px !important;
+    line-height: 1 !important;
     white-space: nowrap !important;
-    border-radius: 5px !important;
+    box-shadow: none !important;
 }
 </style>
 
@@ -144,13 +216,13 @@ include __DIR__ . '/../partials/header.php';
 
 <style>
 .cust-page { color:#0f172a; padding: 0 0 35px 0 !important; margin: 0 !important; width: 100%; max-width: 100%; box-sizing: border-box; overflow-x: hidden !important; }
-.cust-head { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-top:0 !important; margin-bottom:25px !important; padding:0 !important; border:none !important; width:100%; }
-.cust-head h1 { margin:0; color:#002f70; font-size:24px !important; font-weight:700 !important; text-transform:uppercase !important; letter-spacing:0.5px !important; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif !important; display:flex; align-items:center; gap:10px; }
+.cust-head { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-top:0 !important; margin-bottom:20px !important; padding:0 !important; border:none !important; width:100%; }
+.cust-head h1 { margin:0; color:#002f70; font-size:26px !important; font-weight:800 !important; text-transform:uppercase !important; letter-spacing:0.5px !important; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif !important; display:flex; align-items:center; gap:10px; }
 
 /* Dashboard Cards - 6 Cards Grid */
 .cust-cards { display:grid; grid-template-columns:repeat(6, minmax(130px, 1fr)); gap:12px; margin-bottom:18px; }
 .cust-card { background:#fff; border:1px solid #cbd5e1; border-radius:8px; padding:14px 16px; box-shadow:0 2px 6px rgba(15,23,42,.04); }
-.cust-card .label { color:#64748b; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:.3px; }
+.cust-card .label { color:#475569; font-size:12px; font-weight:800; text-transform:uppercase; letter-spacing:.3px; }
 .cust-card .value { color:#002f70; font-size:26px; line-height:1.1; font-weight:900; margin-top:6px; }
 .cust-card.green .value { color:#16a34a; }
 .cust-card.gray .value { color:#64748b; }
@@ -159,24 +231,24 @@ include __DIR__ . '/../partials/header.php';
 
 /* Filter Toolbar */
 .cust-toolbar { background:#fff; border:1px solid #cbd5e1; border-radius:8px; padding:14px 18px; display:grid; grid-template-columns:2fr 1fr 1fr 1fr auto; gap:12px; align-items:end; margin-bottom:18px; box-shadow:0 2px 6px rgba(15,23,42,.04); }
-.cust-field label { display:block; font-size:11px; font-weight:800; color:#475569; text-transform:uppercase; margin-bottom:4px; }
-.cust-field input, .cust-field select, .cust-field textarea { width:100%; height:38px; border:1px solid #cbd5e1; border-radius:6px; padding:6px 10px; font-size:13px; color:#0f172a; background:#fff; font-family:inherit; }
-.cust-field textarea { height:70px; resize:vertical; }
+.cust-field label { display:block; font-size:13px; font-weight:800; color:#1e293b; text-transform:uppercase; margin-bottom:4px; }
+.cust-field input, .cust-field select, .cust-field textarea { width:100%; height:40px; border:1px solid #cbd5e1; border-radius:6px; padding:6px 10px; font-size:14px; font-weight:600; color:#0f172a; background:#fff; font-family:inherit; }
+.cust-field textarea { height:75px; resize:vertical; }
 .cust-field input:focus, .cust-field select:focus, .cust-field textarea:focus { outline:none; border-color:#002f70; box-shadow:0 0 0 3px rgba(0,47,112,.12); }
 
 /* Navigation Tabs - Matches Reports sub-tab design */
 .cust-tabs { display: flex !important; flex-wrap: wrap !important; margin-bottom: 0 !important; border: 1px solid #d1d9e6 !important; border-radius: 0 !important; overflow: hidden !important; border-bottom: 3px solid #00264D !important; gap: 0 !important; background: transparent !important; padding: 0 !important; width: 100% !important; flex: 1 !important; }
-.cust-tab, button.cust-tab { flex: 1 !important; min-width: 140px !important; padding: 12px 16px !important; font-size: 11.5px !important; font-weight: 700 !important; color: #334155 !important; background: #ffffff !important; border: none !important; border-right: 1px solid #d1d9e6 !important; border-radius: 0 !important; text-decoration: none !important; transition: all 0.15s ease !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; gap: 7px !important; text-transform: uppercase !important; letter-spacing: 0.3px !important; text-align: center !important; cursor: pointer !important; margin-bottom: 0 !important; box-shadow: none !important; }
+.cust-tab, button.cust-tab { flex: 1 !important; min-width: 140px !important; padding: 12px 16px !important; font-size: 13.5px !important; font-weight: 800 !important; color: #334155 !important; background: #ffffff !important; border: none !important; border-right: 1px solid #d1d9e6 !important; border-radius: 0 !important; text-decoration: none !important; transition: all 0.15s ease !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; gap: 8px !important; text-transform: uppercase !important; letter-spacing: 0.3px !important; text-align: center !important; cursor: pointer !important; margin-bottom: 0 !important; box-shadow: none !important; }
 .cust-tab:last-child, button.cust-tab:last-child { border-right: none !important; }
 .cust-tab:hover, button.cust-tab:hover { background: #f1f5f9 !important; color: #00264D !important; text-decoration: none !important; }
 .cust-tab.active, button.cust-tab.active { background: #00264D !important; color: #ffffff !important; font-weight: 800 !important; box-shadow: none !important; }
-.cust-tab-badge { font-size: 11px !important; font-weight: 800 !important; padding: 2px 8px !important; border-radius: 20px !important; min-width: 18px !important; text-align: center !important; background: #dc2626 !important; color: #ffffff !important; }
+.cust-tab-badge { font-size: 12px !important; font-weight: 800 !important; padding: 2px 8px !important; border-radius: 20px !important; min-width: 20px !important; text-align: center !important; background: #dc2626 !important; color: #ffffff !important; }
 .cust-tab:not(.active) .cust-tab-badge,
 .cust-tab.active .cust-tab-badge { background: #dc2626 !important; color: #ffffff !important; }
 
 
 /* Buttons - Plain Outline Uniform Style */
-.btn-plain { border:1px solid #cbd5e1; background:transparent !important; color:#002f70; border-radius:6px; height:38px; padding:0 14px; font-weight:700; font-size:13px; display:inline-flex; align-items:center; justify-content:center; gap:6px; cursor:pointer; text-decoration:none; transition:all 0.15s ease; box-shadow:none !important; }
+.btn-plain { border:1px solid #cbd5e1; background:transparent !important; color:#002f70; border-radius:6px; height:40px; padding:0 14px; font-weight:800; font-size:13.5px; display:inline-flex; align-items:center; justify-content:center; gap:6px; cursor:pointer; text-decoration:none; transition:all 0.15s ease; box-shadow:none !important; }
 .btn-plain:hover { background:#f1f5f9 !important; border-color:#002f70; }
 .btn-plain.primary { border-color:#002f70; color:#002f70; }
 .btn-plain.primary:hover { background:#002f70 !important; color:#fff; }
@@ -190,16 +262,16 @@ include __DIR__ . '/../partials/header.php';
 .btn-plain.muted:hover { background:#e2e8f0 !important; color:#0f172a; }
 
 /* Section & Table */
-.cust-section { background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 2px 6px rgba(15,23,42,.04); margin-bottom:18px; overflow-x:auto !important; }
+.cust-section { background:#fff; border:1px solid #cbd5e1; border-radius:8px; box-shadow:0 2px 6px rgba(15,23,42,.04); margin-bottom:18px; overflow-x:hidden !important; width:100% !important; max-width:100% !important; box-sizing:border-box !important; }
 .cust-section-head { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid #e2e8f0; background:#f8fafc; }
-.cust-section-head h2 { margin:0; color:#002f70; font-size:16px; font-weight:800; display:flex; align-items:center; gap:8px; }
-.cust-count { color:#64748b; font-weight:700; font-size:12px; }
+.cust-section-head h2 { margin:0; color:#002f70; font-size:18px; font-weight:800; display:flex; align-items:center; gap:8px; }
+.cust-count { color:#475569; font-weight:700; font-size:13.5px; }
 
-.cust-table { width:100%; border-collapse:collapse; table-layout:fixed; }
-.cust-table th { background:#002f70; color:#fff; padding:10px 12px; text-align:left; font-size:12px; text-transform:uppercase; letter-spacing:.3px; }
-.cust-table td { padding:10px 12px; border-bottom:1px solid #f1f5f9; font-size:13px; vertical-align:middle; word-break:break-word; }
+.cust-table { width:100% !important; max-width:100% !important; border-collapse:collapse !important; table-layout:fixed !important; }
+.cust-table th { background:#002f70; color:#fff; padding:9px 5px !important; text-align:left; font-size:13px !important; text-transform:uppercase; letter-spacing:.3px; }
+.cust-table td { padding:7px 5px !important; border-bottom:1px solid #f1f5f9; font-size:13.5px !important; vertical-align:middle; word-break:break-word; }
 .cust-table tr:hover td { background:#f8fafc; }
-.cust-table .empty { text-align:center; color:#64748b; padding:32px 16px; font-weight:600; }
+.cust-table .empty { text-align:center; color:#64748b; padding:32px 16px; font-weight:700; font-size:14px; }
 .cust-actions { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
 
 /* Pills */
@@ -323,8 +395,8 @@ body.modal-open { overflow: hidden !important; overflow-x: hidden !important; }
 .cust-modal table th {
     background: #002f70 !important;
     color: #fff !important;
-    padding: 7px 6px !important;
-    font-size: 11px !important;
+    padding: 8px 6px !important;
+    font-size: 12.5px !important;
     font-weight: 800 !important;
     text-transform: uppercase !important;
     letter-spacing: 0.2px !important;
@@ -332,11 +404,11 @@ body.modal-open { overflow: hidden !important; overflow-x: hidden !important; }
     word-break: break-word !important;
     overflow-wrap: anywhere !important;
     vertical-align: middle !important;
-    line-height: 1.2 !important;
+    line-height: 1.25 !important;
 }
 .cust-modal table td {
-    padding: 6px 6px !important;
-    font-size: 11.5px !important;
+    padding: 7px 6px !important;
+    font-size: 13px !important;
     line-height: 1.3 !important;
     white-space: normal !important;
     word-break: break-word !important;
@@ -352,7 +424,7 @@ body.modal-open { overflow: hidden !important; overflow-x: hidden !important; }
 }
 .cust-modal table .pill {
     padding: 3px 6px !important;
-    font-size: 10px !important;
+    font-size: 11px !important;
     font-weight: 800 !important;
     white-space: normal !important;
     display: inline-block !important;
@@ -363,9 +435,10 @@ body.modal-open { overflow: hidden !important; overflow-x: hidden !important; }
     word-break: normal !important;
 }
 .cust-modal table .btn-plain {
-    height: 24px !important;
+    height: 25px !important;
     padding: 0 6px !important;
-    font-size: 10px !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
     white-space: nowrap !important;
 }
 
@@ -393,7 +466,7 @@ body.modal-open { overflow: hidden !important; overflow-x: hidden !important; }
 .cust-modal .view-box h4 {
     margin: 0 0 6px !important;
     color: #002f70 !important;
-    font-size: 12px !important;
+    font-size: 13.5px !important;
     font-weight: 800 !important;
     text-transform: uppercase !important;
     border-bottom: 1px solid #f1f5f9 !important;
@@ -496,26 +569,34 @@ button.remove-v-btn i {
 /* View Grid */
 .view-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 .view-box { border:1px solid #e2e8f0; border-radius:8px; padding:12px 14px; background:#fff; }
-.view-box h4 { margin:0 0 8px; color:#002f70; font-size:13px; font-weight:800; text-transform:uppercase; border-bottom:1px solid #f1f5f9; padding-bottom:4px; }
-.info-row { display:flex; justify-content:space-between; gap:10px; border-bottom:1px solid #f1f5f9; padding:5px 0; font-size:13px; }
+.view-box h4 { margin:0 0 8px; color:#002f70; font-size:14px; font-weight:800; text-transform:uppercase; border-bottom:1px solid #f1f5f9; padding-bottom:4px; }
+.info-row { display:flex; justify-content:space-between; gap:10px; border-bottom:1px solid #f1f5f9; padding:6px 0; font-size:13.5px; }
 .info-row:last-child { border-bottom:0; }
-.info-row span:first-child { color:#64748b; font-weight:600; }
-.info-row span:last-child { font-weight:700; text-align:right; }
+.info-row span:first-child { color:#475569; font-weight:700; }
+.info-row span:last-child { font-weight:800; text-align:right; color:#0f172a; }
 
 /* Timeline UI */
 .timeline { position:relative; padding-left:20px; border-left:2px solid #cbd5e1; margin-top:8px; }
-.timeline-item { position:relative; margin-bottom:12px; font-size:13px; }
+.timeline-item { position:relative; margin-bottom:12px; font-size:13.5px; }
 .timeline-item::before { content:''; position:absolute; left:-25px; top:3px; width:10px; height:10px; border-radius:50%; background:#002f70; border:2px solid #fff; }
-.timeline-item .t-time { font-size:11px; color:#64748b; font-weight:600; }
-.timeline-item .t-title { font-weight:700; color:#0f172a; }
+.timeline-item .t-time { font-size:12px; color:#64748b; font-weight:600; }
+.timeline-item .t-title { font-weight:800; color:#0f172a; }
 
 /* Toasts */
 .toast-stack { position:fixed; top:18px; right:18px; z-index:110000; display:flex; flex-direction:column; gap:8px; }
-.toast { min-width:260px; max-width:380px; color:#fff; border-radius:8px; padding:12px 36px 12px 14px; box-shadow:0 8px 24px rgba(15,23,42,.2); font-weight:600; font-size:13px; position:relative; }
+.toast { min-width:260px; max-width:380px; color:#fff; border-radius:8px; padding:12px 36px 12px 14px; box-shadow:0 8px 24px rgba(15,23,42,.2); font-weight:700; font-size:13.5px; position:relative; }
 .toast.success { background:#16a34a; }
 .toast.error { background:#dc2626; }
 .toast button { position:absolute; top:6px; right:9px; border:0; background:transparent; color:#fff; font-size:18px; cursor:pointer; }
 
+@media (max-width:1200px) {
+    .cust-section table.cust-table th { font-size: 12px !important; padding: 7px 4px !important; }
+    .cust-section table.cust-table td { font-size: 12.5px !important; padding: 6px 4px !important; }
+    .cust-section table.cust-table td.col-cust-id { font-size: 12px !important; }
+    .cust-section table.cust-table td.col-cust-name strong { font-size: 13.5px !important; }
+    .cust-section table.cust-table .btn-action-stack { width: 62px !important; }
+    .cust-section table.cust-table .btn-action-stack .btn-plain { width: 62px !important; height: 24px !important; font-size: 11px !important; padding: 0 2px !important; }
+}
 @media (max-width:1100px) {
     .cust-cards { grid-template-columns:repeat(3, 1fr); }
     .cust-toolbar { grid-template-columns:1fr 1fr 1fr; }
@@ -678,7 +759,7 @@ button.remove-v-btn i {
                 <i class="fas fa-inbox"></i> Pending Customer Requests
             </button>
             <button class="cust-tab" id="tab-archived" onclick="switchCustTab('archived')">
-                <i class="fas fa-archive"></i> Archiveived Customers
+                <i class="fas fa-archive"></i> Archived Customers
             </button>
         </div>
     </div>
@@ -696,20 +777,31 @@ button.remove-v-btn i {
             <h2><i class="fas fa-list"></i> Customer List</h2>
             <span class="cust-count" id="customerCount">0 records</span>
         </div>
-        <table class="cust-table">
-            
+        <table class="cust-table" id="customersTable" style="table-layout: fixed; width: 100%;">
+            <colgroup>
+                <col style="width: 13%;">    <!-- Customer ID -->
+                <col style="width: 16%;">    <!-- Customer Name -->
+                <col style="width: 9.5%;">   <!-- Contact No. -->
+                <col style="width: 12%;">    <!-- Vehicles -->
+                <col style="width: 8.5%;">   <!-- Credit Limit -->
+                <col style="width: 9%;">     <!-- Outstanding Balance -->
+                <col style="width: 7%;">     <!-- Last Transaction -->
+                <col style="width: 8.5%;">   <!-- Customer Since -->
+                <col style="width: 7.5%;">   <!-- Status -->
+                <col style="width: 9%;">     <!-- Actions -->
+            </colgroup>
             <thead>
                 <tr>
-                    <th>Customer ID</th>
-                    <th>Customer Name</th>
-                    <th>Contact No.</th>
-                    <th>Vehicles</th>
-                    <th>Credit Limit</th>
-                    <th style="white-space:nowrap !important;">Outstanding Balance</th>
-                    <th>Last Transaction</th>
-                    <th>Customer Since</th>
-                    <th>Status</th>
-                    <th style="text-align:center;">Actions</th>
+                    <th class="col-cust-id">Customer ID</th>
+                    <th class="col-cust-name">Customer Name</th>
+                    <th class="col-contact">Contact No.</th>
+                    <th class="col-vehicles">Vehicles</th>
+                    <th class="col-amount" style="text-align:right;">Credit<br>Limit</th>
+                    <th class="col-amount" style="text-align:right;">Outstanding<br>Balance</th>
+                    <th style="text-align:center;">Last Txn</th>
+                    <th style="text-align:center;">Customer<br>Since</th>
+                    <th class="col-status" style="text-align:center;">Status</th>
+                    <th class="col-actions" style="text-align:center;">Actions</th>
                 </tr>
             </thead>
             <tbody id="customersBody">
@@ -754,8 +846,16 @@ button.remove-v-btn i {
             <h2><i class="fas fa-inbox"></i> Pending Customer Requests (Staff Requests)</h2>
             <span class="cust-count" id="requestCount">0 pending</span>
         </div>
-        <table class="cust-table">
-            
+        <table class="cust-table" id="pendingTable" style="table-layout: fixed; width: 100%;">
+            <colgroup>
+                <col style="width: 14%;">  <!-- Request ID -->
+                <col style="width: 18%;">  <!-- Customer Name -->
+                <col style="width: 12%;">  <!-- Contact No. -->
+                <col style="width: 12%;">  <!-- Plate No. -->
+                <col style="width: 14%;">  <!-- Requested By -->
+                <col style="width: 16%;">  <!-- Date Requested -->
+                <col style="width: 14%;">  <!-- Actions -->
+            </colgroup>
             <thead>
                 <tr>
                     <th>Request ID</th>
@@ -764,7 +864,7 @@ button.remove-v-btn i {
                     <th>Plate No.</th>
                     <th>Requested By</th>
                     <th>Date Requested</th>
-                    <th style="text-align:right;">Actions</th>
+                    <th style="text-align:center;">Actions</th>
                 </tr>
             </thead>
             <tbody id="requestsBody">
@@ -806,11 +906,17 @@ button.remove-v-btn i {
     <!-- TAB 3: ARCHIVED CUSTOMERS -->
     <div class="cust-section" id="section-archived" style="display:none;">
         <div class="cust-section-head">
-            <h2><i class="fas fa-archive"></i> Archiveived Customers</h2>
+            <h2><i class="fas fa-archive"></i> Archived Customers</h2>
             <span class="cust-count" id="archivedCount">0 records</span>
         </div>
-        <table class="cust-table">
-            
+        <table class="cust-table" id="archivedTable" style="table-layout: fixed; width: 100%;">
+            <colgroup>
+                <col style="width: 17%;">  <!-- Customer ID -->
+                <col style="width: 23%;">  <!-- Customer Name -->
+                <col style="width: 18%;">  <!-- Archived Date -->
+                <col style="width: 26%;">  <!-- Reason -->
+                <col style="width: 16%;">  <!-- Actions -->
+            </colgroup>
             <thead>
                 <tr>
                     <th>Customer ID</th>
@@ -1074,16 +1180,17 @@ button.remove-v-btn i {
                         <table class="cust-table no-min-width" style="margin-top:6px;">
                             <thead>
                                 <tr>
-                                    <th style="width:20%;">Plate No.</th>
-                                    <th style="width:20%;">Vehicle Type</th>
-                                    <th style="width:18%;">Brand</th>
-                                    <th style="width:18%;">Model</th>
-                                    <th style="width:12%; text-align:center;">Status</th>
-                                    <th style="width:12%; text-align:right;">Actions</th>
+                                    <th style="width:16%;">Plate No.</th>
+                                    <th style="width:13%;">Vehicle Type</th>
+                                    <th style="width:15%;">Brand / Model</th>
+                                    <th style="width:14%;">Year / Color</th>
+                                    <th style="width:17%;">Engine No.</th>
+                                    <th style="width:17%;">Chassis No.</th>
+                                    <th style="width:8%; text-align:center;">Status</th>
                                 </tr>
                             </thead>
                             <tbody id="vVehiclesBody">
-                                <tr><td colspan="6" class="empty">No vehicles registered.</td></tr>
+                                <tr><td colspan="7" class="empty">No vehicles registered.</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1138,9 +1245,9 @@ button.remove-v-btn i {
                                     <th style="width:16%;">Date</th>
                                     <th style="width:22%;">Reference</th>
                                     <th style="width:18%;">Transaction Type</th>
-                                    <th style="width:14%; text-align:right;">Points Earned</th>
-                                    <th style="width:15%; text-align:right;">Points Redeemed</th>
-                                    <th style="width:15%; text-align:right;">Balance After</th>
+                                    <th style="width:14%; text-align:center !important;">Points Earned</th>
+                                    <th style="width:15%; text-align:center !important;">Points Redeemed</th>
+                                    <th style="width:15%; text-align:center !important;">Balance After</th>
                                 </tr>
                             </thead>
                             <tbody id="vLoyaltyBody">
@@ -1225,7 +1332,7 @@ button.remove-v-btn i {
                 </div>
 
                 <!-- AR History Table -->
-                <div class="view-box" style="overflow-x:auto;">
+                <div class="view-box" style="overflow:hidden;">
                     <h4 style="display:flex; align-items:center; justify-content:space-between;">
                         <span><i class="fas fa-list-alt" style="color:#002f70;"></i> AR History</span>
                         <span id="arRowCount" style="font-size:11px; font-weight:600; color:#64748b;"></span>
@@ -1281,8 +1388,6 @@ button.remove-v-btn i {
 
         <div class="modal-actions">
             <button type="button" class="btn-plain muted" onclick="closeModal('customerViewModal')">Close</button>
-            <button type="button" class="btn-plain primary" onclick="editFromCurrentView()"><i class="fas fa-edit"></i> Edit Customer</button>
-            <button type="button" id="vModalArchiveBtn" class="btn-plain danger" onclick="openArchiveFromView()"><i class="fas fa-archive"></i> Archive Customer</button>
         </div>
     </div>
 </div>
@@ -1459,7 +1564,7 @@ function openModal(id) {
 
 function queueLoad() {
     clearTimeout(loadTimer);
-    loadTimer = setTimeout(loadManagerCustomers, 250);
+    loadTimer = setTimeout(() => loadManagerCustomers(true), 300);
 }
 
 function switchCustTab(tab) {
@@ -1486,7 +1591,7 @@ function resetFilters() {
     loadManagerCustomers();
 }
 
-function loadManagerCustomers() {
+function loadManagerCustomers(silent = false) {
     const search = document.getElementById('filterSearch').value;
     const status = document.getElementById('filterStatus').value;
     const dateFrom = document.getElementById('filterDateFrom').value;
@@ -1499,44 +1604,63 @@ function loadManagerCustomers() {
     });
 
     const bodyId = activeTab === 'archived' ? 'archivedBody' : 'customersBody';
-    document.getElementById(bodyId).innerHTML = `<tr><td colspan="10" class="empty">Loading customers...</td></tr>`;
+    const tbody = document.getElementById(bodyId);
+    const existingRows = tbody ? tbody.querySelectorAll('tr:not(.empty)').length : 0;
+
+    // Only show "Loading..." row if the table currently has NO rows and is not silent.
+    // If data is already on screen, keep it completely steady and visible.
+    if (!silent && existingRows === 0 && tbody) {
+        tbody.innerHTML = `<tr><td colspan="10" class="empty"><i class="fas fa-spinner fa-spin"></i> Loading customers...</td></tr>`;
+    }
 
     fetch(`${apiUrl}?${params.toString()}`)
         .then(r => r.text())
         .then(text => {
+            if (tbody) tbody.style.opacity = '1';
             let res;
             try {
                 const cleanText = text.replace(/^\uFEFF/, '').trim();
                 res = JSON.parse(cleanText);
             } catch (e) {
                 console.error("Non-JSON API output:", text);
-                document.getElementById(bodyId).innerHTML = `<tr><td colspan="10" class="empty">Error loading customers. Please refresh page.</td></tr>`;
+                if (existingRows === 0 && tbody) {
+                    tbody.innerHTML = `<tr><td colspan="10" class="empty">Error loading customers. Please refresh page.</td></tr>`;
+                }
                 return;
             }
             if (!res.success) {
-                toast(res.error || 'Failed to load customers.', 'error');
+                if (!silent) toast(res.error || 'Failed to load customers.', 'error');
                 return;
             }
             updateDashboardCards(res.stats || {});
             if (activeTab === 'archived') {
-                renderArchivedTable(res.customers || []);
+                renderArchivedTable(res.customers || [], silent);
             } else {
-                renderCustomerListTable(res.customers || []);
+                renderCustomerListTable(res.customers || [], silent);
             }
         })
         .catch(err => {
-            document.getElementById(bodyId).innerHTML = `<tr><td colspan="10" class="empty">Network error loading customers.</td></tr>`;
-            toast('Network error loading customers.', 'error');
+            if (tbody) tbody.style.opacity = '1';
+            if (existingRows === 0 && tbody) {
+                tbody.innerHTML = `<tr><td colspan="10" class="empty">Network error loading customers.</td></tr>`;
+            }
+            if (!silent) toast('Network error loading customers.', 'error');
         });
 }
 
 function updateDashboardCards(stats) {
-    document.getElementById('statTotal').innerText = stats.total || 0;
-    document.getElementById('statActive').innerText = stats.active || 0;
-    document.getElementById('statInactive').innerText = stats.inactive || 0;
-    document.getElementById('statCredit').innerText = stats.credit || 0;
-    document.getElementById('statRequests').innerText = stats.pending_requests || 0;
-    document.getElementById('statNewMonth').innerText = stats.new_this_month || 0;
+    function setIfDiff(id, val) {
+        const el = document.getElementById(id);
+        if (el && String(el.innerText).trim() !== String(val).trim()) {
+            el.innerText = val;
+        }
+    }
+    setIfDiff('statTotal', stats.total ?? 0);
+    setIfDiff('statActive', stats.active ?? 0);
+    setIfDiff('statInactive', stats.inactive ?? 0);
+    setIfDiff('statCredit', stats.credit ?? 0);
+    setIfDiff('statRequests', stats.pending_requests ?? 0);
+    setIfDiff('statNewMonth', stats.new_this_month ?? 0);
 }
 
 function formatVehicleCell(c) {
@@ -1544,15 +1668,15 @@ function formatVehicleCell(c) {
         return c.vehicles.map(v => {
             const plate = h(v.plate_number || '');
             const model = h([v.brand, v.model].filter(Boolean).join(' '));
-            return `<div style="font-size:11px; white-space:nowrap; margin-bottom:2px;"><span class="pill regular" style="font-size:10px; padding:2px 5px; background:#eef2ff; color:#3730a3; font-weight:700;">${plate}</span> ${model ? '<small style="color:#555; font-weight:600;">(' + model + ')</small>' : ''}</div>`;
+            return `<div style="font-size:12.5px; line-height:1.2; margin-bottom:3px;"><span class="pill regular" style="font-size:11.5px; padding:2px 6px; background:#eef2ff; color:#3730a3; font-weight:800; display:inline-block;">${plate}</span>${model ? '<div style="color:#475569; font-size:11.5px; font-weight:600; margin-top:2px; word-break:break-word;">' + model + '</div>' : ''}</div>`;
         }).join('');
     }
     if (c.plate_no) {
         const plate = h(c.plate_no);
         const model = h([c.vehicle_make, c.vehicle_model].filter(Boolean).join(' '));
-        return `<div style="font-size:11px; white-space:nowrap;"><span class="pill regular" style="font-size:10px; padding:2px 5px; background:#eef2ff; color:#3730a3; font-weight:700;">${plate}</span> ${model ? '<small style="color:#555; font-weight:600;">(' + model + ')</small>' : ''}</div>`;
+        return `<div style="font-size:12.5px; line-height:1.2;"><span class="pill regular" style="font-size:11.5px; padding:2px 6px; background:#eef2ff; color:#3730a3; font-weight:800; display:inline-block;">${plate}</span>${model ? '<div style="color:#475569; font-size:11.5px; font-weight:600; margin-top:2px; word-break:break-word;">' + model + '</div>' : ''}</div>`;
     }
-    return `<span style="color:#888; font-size:12px;">No Vehicle</span>`;
+    return `<span style="color:#94a3b8; font-size:12px; font-weight:600;">None</span>`;
 }
 
 function formatDateCell(dtStr) {
@@ -1565,9 +1689,20 @@ function formatDateCell(dtStr) {
 // ── CUSTOMER LIST pagination ──────────────────────────────────────────────
 var custListState = { data: [], page: 1, perPage: 10 };
 
-function renderCustomerListTable(customers) {
-    custListState.data = customers || [];
-    custListState.page = 1;
+function renderCustomerListTable(customers, preserveState = false) {
+    const newCustomers = customers || [];
+    const isSame = (custListState.data.length === newCustomers.length) &&
+        (JSON.stringify(custListState.data) === JSON.stringify(newCustomers));
+    if (preserveState && isSame) {
+        return; // Absolute stillness: data is identical, keep table steady
+    }
+    custListState.data = newCustomers;
+    if (!preserveState) {
+        custListState.page = 1;
+    } else {
+        const totalPages = Math.max(1, Math.ceil(newCustomers.length / custListState.perPage));
+        if (custListState.page > totalPages) custListState.page = totalPages;
+    }
     custListRender();
 }
 
@@ -1582,7 +1717,7 @@ function custListRender() {
     document.getElementById('customerCount').innerText = total + ' records';
 
     if (!total) {
-        tbody.innerHTML = `<tr><td colspan="11" class="empty">No customers found matching filters.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="10" class="empty">No customers found matching filters.</td></tr>`;
         document.getElementById('custListShowingText').innerText = 'Showing 0 of 0 entries';
         document.getElementById('custListPageLabel').innerText = 'Page 1 of 1';
         const p = document.getElementById('custListPrevBtn');
@@ -1598,20 +1733,20 @@ function custListRender() {
 
     tbody.innerHTML = slice.map(c => `
         <tr>
-            <td><strong>${h(c.customer_id)}</strong></td>
-            <td><strong>${h(c.customer_name)}</strong></td>
-            <td>${h(c.contact_number)}</td>
-            <td>${formatVehicleCell(c)}</td>
-            <td>${money(c.credit_limit)}</td>
-            <td>${money(c.outstanding_balance)}</td>
-            <td>${c.last_transaction ? h(c.last_transaction) : 'No transactions'}</td>
-            <td><small style="color:#475569; font-weight:600;">${formatDateCell(c.registered_at)}</small></td>
-            <td><span class="pill ${h(c.status)}">${h(c.status)}</span></td>
-            <td style="text-align:center;">
-                <div style="display:flex; flex-direction:column; gap:3px; align-items:center;">
-                    <button type="button" class="btn-plain primary" style="height:26px; padding:0 8px; font-size:11.5px; width:66px;" onclick="viewCustomer(${c.id})"><i class="fas fa-eye"></i> View</button>
-                    <button type="button" class="btn-plain success" style="height:26px; padding:0 8px; font-size:11.5px; width:66px;" onclick="openCustomerForm('edit', ${c.id})"><i class="fas fa-edit"></i> Edit</button>
-                    <button type="button" class="btn-plain danger" style="height:26px; padding:0 8px; font-size:11.5px; width:66px;" onclick="openArchiveModal(${c.id})"><i class="fas fa-archive"></i> Archive</button>
+            <td class="col-cust-id"><strong>${h(c.customer_id)}</strong></td>
+            <td class="col-cust-name"><strong>${h(c.customer_name)}</strong></td>
+            <td class="col-contact">${h(c.contact_number || '-')}</td>
+            <td class="col-vehicles">${formatVehicleCell(c)}</td>
+            <td class="col-amount" style="text-align:right;">${money(c.credit_limit)}</td>
+            <td class="col-amount" style="text-align:right;">${Number(c.outstanding_balance || 0) > 0 ? '<strong style="color:#b91c1c;">' + money(c.outstanding_balance) + '</strong>' : '<span style="color:#64748b;">₱0.00</span>'}</td>
+            <td style="text-align:center; font-size:12.5px; color:#475569; font-weight:600;">${c.last_transaction ? h(c.last_transaction) : '<span style="color:#94a3b8;">None</span>'}</td>
+            <td style="text-align:center;"><small style="color:#334155; font-weight:700; font-size:12.5px;">${formatDateCell(c.registered_at)}</small></td>
+            <td class="col-status" style="text-align:center;"><span class="pill ${h(c.status)}">${h(c.status)}</span></td>
+            <td class="col-actions" style="text-align:center;">
+                <div class="btn-action-stack">
+                    <button type="button" class="btn-plain primary" onclick="viewCustomer(${c.id})"><i class="fas fa-eye"></i> View</button>
+                    <button type="button" class="btn-plain success" onclick="openCustomerForm('edit', ${c.id})"><i class="fas fa-edit"></i> Edit</button>
+                    <button type="button" class="btn-plain danger" onclick="openArchiveModal(${c.id})"><i class="fas fa-archive"></i> Archive</button>
                 </div>
             </td>
         </tr>
@@ -1642,9 +1777,20 @@ function custListChangePerPage() {
 // ── ARCHIVED CUSTOMERS pagination ─────────────────────────────────────────
 var custArchState = { data: [], page: 1, perPage: 10 };
 
-function renderArchivedTable(customers) {
-    custArchState.data = customers || [];
-    custArchState.page = 1;
+function renderArchivedTable(customers, preserveState = false) {
+    const newCustomers = customers || [];
+    const isSame = (custArchState.data.length === newCustomers.length) &&
+        (JSON.stringify(custArchState.data) === JSON.stringify(newCustomers));
+    if (preserveState && isSame) {
+        return; // Absolute stillness
+    }
+    custArchState.data = newCustomers;
+    if (!preserveState) {
+        custArchState.page = 1;
+    } else {
+        const totalPages = Math.max(1, Math.ceil(newCustomers.length / custArchState.perPage));
+        if (custArchState.page > totalPages) custArchState.page = totalPages;
+    }
     custArchRender();
 }
 
@@ -1675,14 +1821,14 @@ function custArchRender() {
 
     tbody.innerHTML = slice.map(c => `
         <tr>
-            <td><strong>${h(c.customer_id)}</strong></td>
-            <td><strong>${h(c.customer_name)}</strong></td>
-            <td>${c.archived_at ? h(c.archived_at) : '-'}</td>
-            <td>${h(c.archive_reason || 'Inactive')}</td>
+            <td><strong style="color:#00264D; font-family:monospace; font-size:13px;">${h(c.customer_id)}</strong></td>
+            <td><strong style="color:#00264D; font-size:14px;">${h(c.customer_name)}</strong></td>
+            <td style="font-size:12.5px; color:#475569; font-weight:600;">${c.archived_at ? h(c.archived_at) : '-'}</td>
+            <td style="font-size:13px; color:#1e293b;">${h(c.archive_reason || 'Inactive')}</td>
             <td style="text-align:center;">
-                <div style="display:flex; flex-direction:column; gap:4px; align-items:center;">
-                    <button type="button" class="btn-plain primary" style="height:30px; padding:0 8px; font-size:11px; width:80px;" onclick="viewCustomer(${c.id})"><i class="fas fa-eye"></i> View</button>
-                    <button type="button" class="btn-plain success" style="height:30px; padding:0 8px; font-size:11px; width:80px;" onclick="restoreCustomer(${c.id})"><i class="fas fa-undo"></i> Restore</button>
+                <div class="btn-action-stack">
+                    <button type="button" class="btn-plain primary" onclick="viewCustomer(${c.id})"><i class="fas fa-eye"></i> View</button>
+                    <button type="button" class="btn-plain success" onclick="restoreCustomer(${c.id})"><i class="fas fa-undo"></i> Restore</button>
                 </div>
             </td>
         </tr>
@@ -1713,7 +1859,11 @@ var custPendState = { data: [], page: 1, perPage: 10 };
 
 function loadCustomerRequests(silent = false) {
     if (!silent) {
-        document.getElementById('requestsBody').innerHTML = `<tr><td colspan="7" class="empty">Loading pending requests...</td></tr>`;
+        const tbody = document.getElementById('requestsBody');
+        const existingRows = tbody ? tbody.querySelectorAll('tr:not(.empty)').length : 0;
+        if (existingRows === 0 && tbody) {
+            tbody.innerHTML = `<tr><td colspan="7" class="empty"><i class="fas fa-spinner fa-spin"></i> Loading pending requests...</td></tr>`;
+        }
     }
 
     fetch(`${apiUrl}?action=requests`)
@@ -1725,7 +1875,6 @@ function loadCustomerRequests(silent = false) {
                 res = JSON.parse(cleanText);
             } catch (e) {
                 console.error("Non-JSON requests output:", text);
-                if (!silent) document.getElementById('requestsBody').innerHTML = `<tr><td colspan="7" class="empty">Error loading pending requests.</td></tr>`;
                 return;
             }
             if (!res.success) {
@@ -1733,8 +1882,16 @@ function loadCustomerRequests(silent = false) {
                 return;
             }
             currentRequests = res.requests || [];
-            document.getElementById('requestCount').innerText = currentRequests.length + ' pending';
-            document.getElementById('statRequests').innerText = currentRequests.length;
+            const reqCountEl = document.getElementById('requestCount');
+            if (reqCountEl) reqCountEl.innerText = currentRequests.length + ' pending';
+            const statReqEl = document.getElementById('statRequests');
+            if (statReqEl) statReqEl.innerText = currentRequests.length;
+
+            const isSame = (custPendState.data.length === currentRequests.length) &&
+                (JSON.stringify(custPendState.data) === JSON.stringify(currentRequests));
+            if (silent && isSame) {
+                return;
+            }
             custPendState.data = currentRequests;
             custPendRender();
 
@@ -1744,7 +1901,7 @@ function loadCustomerRequests(silent = false) {
             }
         })
         .catch(err => {
-            if (!silent) document.getElementById('requestsBody').innerHTML = `<tr><td colspan="7" class="empty">Network error loading requests.</td></tr>`;
+            if (!silent) toast('Network error loading requests.', 'error');
         });
 }
 
@@ -1773,16 +1930,14 @@ function custPendRender() {
 
     tbody.innerHTML = slice.map(r => `
         <tr>
-            <td><strong style="color:#002F6C; font-family:monospace;">${h(r.request_no || ('CR-' + String(r.id).padStart(5, '0')))}</strong></td>
-            <td><strong>${h(r.first_name + ' ' + (r.middle_name ? r.middle_name + ' ' : '') + r.last_name)}</strong></td>
-            <td>${h(r.contact_number)}</td>
-            <td><span class="pill regular">${h(r.vehicle_plate || 'N/A')}</span></td>
-            <td>${h(r.requested_by_name || 'Staff')}</td>
-            <td>${h(r.created_at)}</td>
-            <td style="text-align:right;">
-                <div class="cust-actions">
-                    <button type="button" class="btn-plain primary" style="height:30px; padding:0 8px; font-size:11px;" onclick="openReviewModal(${r.id})"><i class="fas fa-tasks"></i> Review</button>
-                </div>
+            <td><strong style="color:#00264D; font-family:monospace; font-size:13px;">${h(r.request_no || ('CR-' + String(r.id).padStart(5, '0')))}</strong></td>
+            <td><strong style="color:#00264D; font-size:14px;">${h(r.first_name + ' ' + (r.middle_name ? r.middle_name + ' ' : '') + r.last_name)}</strong></td>
+            <td style="font-size:13px; font-weight:600;">${h(r.contact_number)}</td>
+            <td><span class="pill regular" style="font-size:11.5px; font-weight:800;">${h(r.vehicle_plate || 'N/A')}</span></td>
+            <td style="font-size:13px; font-weight:600;">${h(r.requested_by_name || 'Staff')}</td>
+            <td style="font-size:12.5px; color:#475569; font-weight:600;">${h(r.created_at)}</td>
+            <td style="text-align:center;">
+                <button type="button" class="btn-plain primary" style="height:26px; padding:0 8px; font-size:12px; font-weight:800; width:78px; margin:0 auto;" onclick="openReviewModal(${r.id})"><i class="fas fa-tasks"></i> Review</button>
             </td>
         </tr>
     `).join('');
@@ -1889,6 +2044,7 @@ function addVehicleRow(v = {}) {
     div.id = 'vehicleRow_' + vehicleIndex;
     div.innerHTML = `
         <button type="button" class="remove-v-btn" title="Remove Vehicle" onclick="document.getElementById('vehicleRow_${vehicleIndex}').remove()"><i class="fas fa-times"></i></button>
+        <input type="hidden" class="v-id" value="${v.id || 0}">
         <div class="form-grid" style="gap:8px;">
             <div class="cust-field">
                 <label>Plate Number</label>
@@ -1923,11 +2079,11 @@ function addVehicleRow(v = {}) {
             </div>
             <div class="cust-field">
                 <label>Engine No. (Optional)</label>
-                <input type="text" class="v-engine" value="${h(v.engine_no || '')}" oninput="this.value = this.value.toUpperCase().replace(/[^a-zA-Z0-9\-\_]/g, '');">
+                <input type="text" class="v-engine" value="${h(v.engine_no || v.engine_number || '')}" placeholder="e.g. 6HK1-415965" oninput="this.value = this.value.toUpperCase().replace(/[^a-zA-Z0-9\-\_]/g, '');">
             </div>
             <div class="cust-field">
                 <label>Chassis No. (Optional)</label>
-                <input type="text" class="v-chassis" value="${h(v.chassis_no || '')}" oninput="this.value = this.value.toUpperCase().replace(/[^a-zA-Z0-9\-\_]/g, '');">
+                <input type="text" class="v-chassis" value="${h(v.chassis_no || v.chassis_number || '')}" placeholder="e.g. FRR34L4-7007218" oninput="this.value = this.value.toUpperCase().replace(/[^a-zA-Z0-9\-\_]/g, '');">
             </div>
         </div>
     `;
@@ -1986,7 +2142,17 @@ function openCustomerForm(mode = 'add', id = 0) {
                 if (vehicles.length > 0) {
                     vehicles.forEach(v => addVehicleRow(v));
                 } else {
-                    addVehicleRow({ plate_number: c.plate_no, brand: c.vehicle_make, model: c.vehicle_model, vehicle_type: c.vehicle_type });
+                    addVehicleRow({
+                        id: 0,
+                        plate_number: c.plate_no,
+                        brand: c.vehicle_make,
+                        model: c.vehicle_model,
+                        vehicle_type: c.vehicle_type,
+                        year_model: c.year_model || '',
+                        color: c.color || '',
+                        engine_no: c.engine_no || c.engine_number || '',
+                        chassis_no: c.chassis_no || c.chassis_number || ''
+                    });
                 }
                 toggleCreditSection();
                 openModal('customerFormModal');
@@ -2043,6 +2209,7 @@ document.getElementById('customerForm').onsubmit = function(e) {
         const plate = row.querySelector('.v-plate').value.trim();
         if (plate) {
             vehicles.push({
+                id: parseInt(row.querySelector('.v-id')?.value || '0', 10),
                 plate_number: plate,
                 vehicle_type: row.querySelector('.v-type').value,
                 brand: row.querySelector('.v-brand').value,
@@ -2061,6 +2228,10 @@ document.getElementById('customerForm').onsubmit = function(e) {
         formData.append('vehicle_make', vehicles[0].brand);
         formData.append('vehicle_model', vehicles[0].model);
         formData.append('vehicle_type', vehicles[0].vehicle_type);
+        formData.append('year_model', vehicles[0].year_model);
+        formData.append('color', vehicles[0].color);
+        formData.append('engine_no', vehicles[0].engine_no);
+        formData.append('chassis_no', vehicles[0].chassis_no);
     }
 
     fetch(apiUrl, { method: 'POST', body: formData })
@@ -2082,10 +2253,170 @@ document.getElementById('customerForm').onsubmit = function(e) {
             document.getElementById('filterStatus').value = '';
             document.getElementById('filterDateFrom').value = '';
             document.getElementById('filterDateTo').value = '';
-            switchCustTab('list');
+            if (activeTab === 'list') {
+                loadManagerCustomers(true);
+            } else {
+                switchCustTab('list');
+            }
+            if (typeof window.petronBroadcastCustomerChange === 'function') {
+                window.petronBroadcastCustomerChange();
+            }
         })
         .catch(err => toast('Network error saving customer.', 'error'));
 };
+
+function populateCustomerView(res) {
+    if (!res || !res.customer) return;
+    currentCustomer = res.customer;
+    const c = res.customer;
+    const s = res.summary || {};
+
+    document.getElementById('vCustId').innerText = c.customer_id || '-';
+    document.getElementById('vCustSince').innerText = c.registered_at ? c.registered_at.split(' ')[0] : '-';
+    document.getElementById('vStatus').innerHTML = `<span class="pill ${h(c.status)}">${h(c.status)}</span>`;
+    document.getElementById('vContact').innerText = c.contact_number || '-';
+    document.getElementById('vEmail').innerText = c.email || '-';
+    document.getElementById('vAddress').innerText = c.address || '-';
+
+    document.getElementById('vCreditLimit').innerText = money(c.credit_limit);
+    document.getElementById('vOutstanding').innerText = money(c.outstanding_balance);
+    document.getElementById('vAvailableCredit').innerText = money(c.available_credit);
+    document.getElementById('vTerms').innerText = c.credit_terms || '30 Days';
+
+    // Loyalty Summary
+    const cardNo = (res.loyalty_account && res.loyalty_account.card_number) ? res.loyalty_account.card_number : (c.loyalty_card_no || c.customer_id || '');
+    const pts = (res.loyalty_account && res.loyalty_account.points_balance !== undefined) ? res.loyalty_account.points_balance : (c.points || 0);
+
+    document.getElementById('vProfileCardNo').innerText = cardNo ? cardNo : '—';
+    document.getElementById('vProfilePoints').innerText = Number(pts || 0).toLocaleString();
+    const lStatusEl = document.getElementById('vProfileLoyaltyStatus');
+    if (lStatusEl) {
+        if (cardNo) {
+            lStatusEl.className = 'pill active';
+            lStatusEl.innerText = res.loyalty_account ? (res.loyalty_account.status || 'Active').toUpperCase() : 'ACTIVE';
+        } else {
+            lStatusEl.className = 'pill muted';
+            lStatusEl.innerText = 'NO CARD';
+        }
+    }
+
+    // Vehicles
+    const vBody = document.getElementById('vVehiclesBody');
+    const vehicles = res.vehicles || [];
+    if (!vehicles.length) {
+        vBody.innerHTML = `<tr><td colspan="7" class="empty">No vehicles registered.</td></tr>`;
+    } else {
+        vBody.innerHTML = vehicles.map(v => {
+            const isVArchived = (v.status || '').toLowerCase() === 'archived';
+            const statusBadge = isVArchived
+                ? `<span class="pill archived">ARCHIVED</span>`
+                : `<span class="pill ${h(v.status || 'active')}">${h(v.status || 'active')}</span>`;
+
+            const brandModel = [v.brand, v.model].filter(Boolean).join(' ') || 'N/A';
+            const yearColor = [v.year_model, v.color].filter(Boolean).join(' / ') || 'N/A';
+            const engineNo = (v.engine_no || v.engine_number || '').trim();
+            const chassisNo = (v.chassis_no || v.chassis_number || '').trim();
+
+            return `
+                <tr>
+                    <td><strong>${h(v.plate_number)}</strong></td>
+                    <td>${h(v.vehicle_type || 'N/A')}</td>
+                    <td>${h(brandModel)}</td>
+                    <td>${h(yearColor)}</td>
+                    <td>${engineNo ? `<code style="color:#002F6C; font-weight:600; font-size:12px;">${h(engineNo)}</code>` : '<span style="color:#94a3b8;">—</span>'}</td>
+                    <td>${chassisNo ? `<code style="color:#002F6C; font-weight:600; font-size:12px;">${h(chassisNo)}</code>` : '<span style="color:#94a3b8;">—</span>'}</td>
+                    <td style="text-align:center;">${statusBadge}</td>
+                </tr>
+            `;
+        }).join('');
+    }
+
+    // Transactions
+    const tBody = document.getElementById('vTxBody');
+    const txs = res.transactions || [];
+    if (!txs.length) {
+        tBody.innerHTML = `<tr><td colspan="5" class="empty">No recent transactions.</td></tr>`;
+    } else {
+        tBody.innerHTML = txs.map(t => {
+            const tStat = (t.status || 'Completed').toLowerCase();
+            const tStatClass = tStat.includes('complet') || tStat.includes('approv') || tStat.includes('valid') ? 'active' :
+                (tStat.includes('cancel') || tStat.includes('reject') || tStat.includes('void') ? 'archived' : 'walk-in');
+            const typeColors = {Fuel: '#d97706', Merchandise: '#2563eb', 'Job Order': '#7c3aed', Combined: '#0369a1'};
+            const typeColor = typeColors[t.type] || '#475569';
+            return `
+            <tr>
+                <td style="word-break:break-all; font-family:monospace; font-size:11px;"><strong>${h(t.transaction_id || '-')}</strong></td>
+                <td>${h(t.date || '-')}</td>
+                <td><span style="font-weight:700; color:${typeColor};">${h(t.type || 'Merchandise')}</span></td>
+                <td style="text-align:right; font-weight:700;">${money(t.amount)}</td>
+                <td style="text-align:center;"><span class="pill ${tStatClass}">${h(t.status || 'Completed')}</span></td>
+            </tr>
+        `}).join('');
+    }
+
+    // Job Orders
+    const jBody = document.getElementById('vJoBody');
+    const jos = res.job_orders || [];
+    if (!jos.length) {
+        jBody.innerHTML = `<tr><td colspan="5" class="empty">No job orders found.</td></tr>`;
+    } else {
+        jBody.innerHTML = jos.map(j => {
+            const jStat = (j.status || 'Pending').toLowerCase();
+            const jStatClass = jStat.includes('complet') || jStat.includes('verif') || jStat.includes('final') ? 'active' :
+                (jStat.includes('cancel') || jStat.includes('reject') ? 'archived' : 'walk-in');
+            return `
+            <tr>
+                <td style="word-break:break-all; font-family:monospace; font-size:11px;"><strong>${h(j.jo_no || '-')}</strong></td>
+                <td>${h(j.vehicle || '-')}</td>
+                <td>${h(j.service || '-')}</td>
+                <td>${h(j.mechanic || 'Unassigned')}</td>
+                <td style="text-align:center;"><span class="pill ${jStatClass}">${h(j.status || 'Pending')}</span></td>
+            </tr>
+        `}).join('');
+    }
+
+    // Loyalty Points History
+    const cardEl = document.getElementById('vLoyaltyCardNo');
+    const ptsEl  = document.getElementById('vLoyaltyPointsBalance');
+    if (cardEl) cardEl.innerText = cardNo || '—';
+    if (ptsEl)  ptsEl.innerText  = Number(pts || 0).toLocaleString();
+
+    const lBody = document.getElementById('vLoyaltyBody');
+    const lHistory = res.loyalty_history || [];
+    if (lBody) {
+        if (!lHistory.length) {
+            lBody.innerHTML = `<tr><td colspan="6" class="empty">No loyalty transactions recorded yet.</td></tr>`;
+        } else {
+            lBody.innerHTML = lHistory.map(lh => `
+                <tr>
+                    <td><small style="color:#475569; font-weight:600;">${formatDateCell(lh.date)}</small></td>
+                    <td><strong>${h(lh.reference || '-')}</strong></td>
+                    <td>${h(lh.transaction_type || 'Merchandise')}</td>
+                    <td style="text-align:center !important; font-weight:700; color:#16a34a;">+${lh.points_earned || 0}</td>
+                    <td style="text-align:center !important; font-weight:700; color:#dc2626;">-${lh.points_redeemed || 0}</td>
+                    <td style="text-align:center !important; font-weight:700; color:#002F70;">${lh.balance || 0}</td>
+                </tr>
+            `).join('');
+        }
+    }
+
+    // Documents
+    document.getElementById('vGovType').innerText = c.gov_id_type || 'ID';
+    document.getElementById('vGovFileLink').innerHTML = c.gov_id_file ? `<a href="../${h(c.gov_id_file)}" target="_blank" class="btn-plain primary" style="height:24px; padding:0 8px; font-size:11px;"><i class="fas fa-download"></i> Download</a>` : 'Not uploaded';
+    document.getElementById('vCrFileLink').innerHTML = c.cr_file ? `<a href="../${h(c.cr_file)}" target="_blank" class="btn-plain primary" style="height:24px; padding:0 8px; font-size:11px;"><i class="fas fa-download"></i> Download</a>` : 'Not uploaded';
+    document.getElementById('vOrFileLink').innerHTML = c.or_file ? `<a href="../${h(c.or_file)}" target="_blank" class="btn-plain primary" style="height:24px; padding:0 8px; font-size:11px;"><i class="fas fa-download"></i> Download</a>` : 'Not uploaded';
+
+    // Timeline
+    const tmEl = document.getElementById('vTimeline');
+    const timeline = res.timeline || [];
+    tmEl.innerHTML = timeline.map(t => `
+        <div class="timeline-item">
+            <div class="t-title">${h(t.event_type)}</div>
+            <div>${h(t.description)}</div>
+            <div class="t-time">${h(t.created_at)}</div>
+        </div>
+    `).join('');
+}
 
 function viewCustomer(id) {
     switchViewTab('profile');
@@ -2093,185 +2424,9 @@ function viewCustomer(id) {
         .then(r => r.json())
         .then(res => {
             if (!res.success) { toast(res.error, 'error'); return; }
-            currentCustomer = res.customer;
-            const c = res.customer;
-            const s = res.summary || {};
-
-            document.getElementById('vCustId').innerText = c.customer_id || '-';
-            document.getElementById('vCustSince').innerText = c.registered_at ? c.registered_at.split(' ')[0] : '-';
-            document.getElementById('vStatus').innerHTML = `<span class="pill ${h(c.status)}">${h(c.status)}</span>`;
-            document.getElementById('vContact').innerText = c.contact_number || '-';
-            document.getElementById('vEmail').innerText = c.email || '-';
-            document.getElementById('vAddress').innerText = c.address || '-';
-
-            document.getElementById('vCreditLimit').innerText = money(c.credit_limit);
-            document.getElementById('vOutstanding').innerText = money(c.outstanding_balance);
-            document.getElementById('vAvailableCredit').innerText = money(c.available_credit);
-            document.getElementById('vTerms').innerText = c.credit_terms || '30 Days';
-
-            // Loyalty Summary
-            const cardNo = (res.loyalty_account && res.loyalty_account.card_number) ? res.loyalty_account.card_number : (c.loyalty_card_no || c.customer_id || '');
-            const pts = (res.loyalty_account && res.loyalty_account.points_balance !== undefined) ? res.loyalty_account.points_balance : (c.points || 0);
-
-            document.getElementById('vProfileCardNo').innerText = cardNo ? cardNo : '—';
-            document.getElementById('vProfilePoints').innerText = Number(pts || 0).toLocaleString();
-            const lStatusEl = document.getElementById('vProfileLoyaltyStatus');
-            if (lStatusEl) {
-                if (cardNo) {
-                    lStatusEl.className = 'pill active';
-                    lStatusEl.innerText = res.loyalty_account ? (res.loyalty_account.status || 'Active').toUpperCase() : 'ACTIVE';
-                } else {
-                    lStatusEl.className = 'pill muted';
-                    lStatusEl.innerText = 'NO CARD';
-                }
-            }
-
-            // Dynamic Archive / Restore button for Customer in Modal
-            const archiveBtn = document.getElementById('vModalArchiveBtn');
-            if (archiveBtn) {
-                if ((c.status || '').toLowerCase() === 'archived') {
-                    archiveBtn.className = 'btn-plain success';
-                    archiveBtn.innerHTML = '<i class="fas fa-undo"></i> Restore Customer';
-                    archiveBtn.onclick = function() { restoreCustomer(c.id); };
-                } else {
-                    archiveBtn.className = 'btn-plain danger';
-                    archiveBtn.innerHTML = '<i class="fas fa-archive"></i> Archiveive Customer';
-                    archiveBtn.onclick = function() { openArchiveFromView(); };
-                }
-            }
-
-            // Vehicles
-            const vBody = document.getElementById('vVehiclesBody');
-            const vehicles = res.vehicles || [];
-            if (!vehicles.length) {
-                vBody.innerHTML = `<tr><td colspan="6" class="empty">No vehicles registered.</td></tr>`;
-            } else {
-                vBody.innerHTML = vehicles.map(v => {
-                    const isVArchived = (v.status || '').toLowerCase() === 'archived';
-                    const vBtn = isVArchived
-                        ? `<button type="button" class="btn-plain success" style="height:26px; padding:0 8px; font-size:10px;" onclick="restoreVehicle(${v.id})"><i class="fas fa-undo"></i> Restore</button>`
-                        : `<button type="button" class="btn-plain danger" style="height:26px; padding:0 8px; font-size:10px;" onclick="archiveVehicle(${v.id})"><i class="fas fa-archive"></i> Archiveive</button>`;
-                    const statusBadge = isVArchived
-                        ? `<span class="pill archived">ARCHIVED</span>`
-                        : `<span class="pill ${h(v.status || 'active')}">${h(v.status || 'active')}</span>`;
-
-                    return `
-                        <tr>
-                            <td><strong>${h(v.plate_number)}</strong></td>
-                            <td>${h(v.vehicle_type || 'N/A')}</td>
-                            <td>${h(v.brand || 'N/A')}</td>
-                            <td>${h(v.model || 'N/A')}</td>
-                            <td style="text-align:center;">${statusBadge}</td>
-                            <td style="text-align:right;">
-                                ${v.id ? vBtn : '-'}
-                            </td>
-                        </tr>
-                    `;
-                }).join('');
-            }
-
-            // Transactions
-            const tBody = document.getElementById('vTxBody');
-            const txs = res.transactions || [];
-            if (!txs.length) {
-                tBody.innerHTML = `<tr><td colspan="5" class="empty">No recent transactions.</td></tr>`;
-            } else {
-                tBody.innerHTML = txs.map(t => {
-                    const tStat = (t.status || 'Completed').toLowerCase();
-                    const tStatClass = tStat.includes('complet') || tStat.includes('approv') || tStat.includes('valid') ? 'active' :
-                        (tStat.includes('cancel') || tStat.includes('reject') || tStat.includes('void') ? 'archived' : 'walk-in');
-                    const typeColors = {Fuel: '#d97706', Merchandise: '#2563eb', 'Job Order': '#7c3aed', Combined: '#0369a1'};
-                    const typeColor = typeColors[t.type] || '#475569';
-                    return `
-                    <tr>
-                        <td style="word-break:break-all; font-family:monospace; font-size:11px;"><strong>${h(t.transaction_id || '-')}</strong></td>
-                        <td>${h(t.date || '-')}</td>
-                        <td><span style="font-weight:700; color:${typeColor};">${h(t.type || 'Merchandise')}</span></td>
-                        <td style="text-align:right; font-weight:700;">${money(t.amount)}</td>
-                        <td style="text-align:center;"><span class="pill ${tStatClass}">${h(t.status || 'Completed')}</span></td>
-                    </tr>
-                `}).join('');
-            }
-
-            // Job Orders
-            const jBody = document.getElementById('vJoBody');
-            const jos = res.job_orders || [];
-            if (!jos.length) {
-                jBody.innerHTML = `<tr><td colspan="5" class="empty">No job orders found.</td></tr>`;
-            } else {
-                jBody.innerHTML = jos.map(j => {
-                    const jStat = (j.status || 'Pending').toLowerCase();
-                    const jStatClass = jStat.includes('complet') || jStat.includes('verif') || jStat.includes('final') ? 'active' :
-                        (jStat.includes('cancel') || jStat.includes('reject') ? 'archived' : 'walk-in');
-                    return `
-                    <tr>
-                        <td style="word-break:break-all; font-family:monospace; font-size:11px;"><strong>${h(j.jo_no || '-')}</strong></td>
-                        <td>${h(j.vehicle || '-')}</td>
-                        <td>${h(j.service || '-')}</td>
-                        <td>${h(j.mechanic || 'Unassigned')}</td>
-                        <td style="text-align:center;"><span class="pill ${jStatClass}">${h(j.status || 'Pending')}</span></td>
-                    </tr>
-                `}).join('');
-            }
-
-            // Loyalty Points History
-            const cardEl = document.getElementById('vLoyaltyCardNo');
-            const ptsEl  = document.getElementById('vLoyaltyPointsBalance');
-            if (cardEl) cardEl.innerText = cardNo || '—';
-            if (ptsEl)  ptsEl.innerText  = Number(pts || 0).toLocaleString();
-
-            const lBody = document.getElementById('vLoyaltyBody');
-            const lHistory = res.loyalty_history || [];
-            if (lBody) {
-                if (!lHistory.length) {
-                    lBody.innerHTML = `<tr><td colspan="6" class="empty">No loyalty transactions recorded yet.</td></tr>`;
-                } else {
-                    lBody.innerHTML = lHistory.map(lh => `
-                        <tr>
-                            <td><small style="color:#475569; font-weight:600;">${formatDateCell(lh.date)}</small></td>
-                            <td><strong>${h(lh.reference || '-')}</strong></td>
-                            <td>${h(lh.transaction_type || 'Merchandise')}</td>
-                            <td style="text-align:right; font-weight:700; color:#16a34a;">+${lh.points_earned || 0}</td>
-                            <td style="text-align:right; font-weight:700; color:#dc2626;">-${lh.points_redeemed || 0}</td>
-                            <td style="text-align:right; font-weight:700; color:#002F70;">${lh.balance || 0}</td>
-                        </tr>
-                    `).join('');
-                }
-            }
-
-            // Documents
-            document.getElementById('vGovType').innerText = c.gov_id_type || 'ID';
-            document.getElementById('vGovFileLink').innerHTML = c.gov_id_file ? `<a href="../${h(c.gov_id_file)}" target="_blank" class="btn-plain primary" style="height:24px; padding:0 8px; font-size:11px;"><i class="fas fa-download"></i> Download</a>` : 'Not uploaded';
-            document.getElementById('vCrFileLink').innerHTML = c.cr_file ? `<a href="../${h(c.cr_file)}" target="_blank" class="btn-plain primary" style="height:24px; padding:0 8px; font-size:11px;"><i class="fas fa-download"></i> Download</a>` : 'Not uploaded';
-            document.getElementById('vOrFileLink').innerHTML = c.or_file ? `<a href="../${h(c.or_file)}" target="_blank" class="btn-plain primary" style="height:24px; padding:0 8px; font-size:11px;"><i class="fas fa-download"></i> Download</a>` : 'Not uploaded';
-
-            // Timeline
-            const tmEl = document.getElementById('vTimeline');
-            const timeline = res.timeline || [];
-            tmEl.innerHTML = timeline.map(t => `
-                <div class="timeline-item">
-                    <div class="t-title">${h(t.event_type)}</div>
-                    <div>${h(t.description)}</div>
-                    <div class="t-time">${h(t.created_at)}</div>
-                </div>
-            `).join('');
-
+            populateCustomerView(res);
             openModal('customerViewModal');
         });
-}
-
-function editFromCurrentView() {
-    if (currentCustomer) {
-        closeModal('customerViewModal');
-        openCustomerForm('edit', currentCustomer.id);
-    }
-}
-
-function openArchiveFromView() {
-    if (currentCustomer) {
-        closeModal('customerViewModal');
-        openArchiveModal(currentCustomer.id);
-    }
 }
 
 // ── VIEW TAB SWITCHER ─────────────────────────────────────────────────────────
@@ -2293,9 +2448,17 @@ function switchViewTab(tab) {
 }
 
 // ── LOAD AR HISTORY ───────────────────────────────────────────────────────────
-function loadARHistory(customerId) {
-    document.getElementById('arHistoryBody').innerHTML = `<tr><td colspan="10" class="empty"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>`;
-    document.getElementById('arPaymentBody').innerHTML = `<tr><td colspan="6" class="empty"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>`;
+function loadARHistory(customerId, silent = false) {
+    if (!silent) {
+        const arBody = document.getElementById('arHistoryBody');
+        if (arBody && arBody.querySelectorAll('tr:not(.empty)').length === 0) {
+            arBody.innerHTML = `<tr><td colspan="10" class="empty"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>`;
+        }
+        const payBody = document.getElementById('arPaymentBody');
+        if (payBody && payBody.querySelectorAll('tr:not(.empty)').length === 0) {
+            payBody.innerHTML = `<tr><td colspan="7" class="empty"><i class="fas fa-spinner fa-spin"></i> Loading...</td></tr>`;
+        }
+    }
 
     fetch(`${apiUrl}?action=ar_history&customer_id=${customerId}`)
         .then(r => r.text())
@@ -2440,11 +2603,32 @@ function renderARPaymentHistory(payments) {
         const sType  = p.source_type || 'Payment';
         const sColor = sourceColor[sType] || '#475569';
 
+        // Format Reference No.
+        const refVal = (p.reference_no && p.reference_no !== '—') ? p.reference_no : '';
+        const secRef = (p.secondary_ref && p.secondary_ref !== refVal && p.secondary_ref !== '—') ? p.secondary_ref : '';
+        const fullRefTitle = [refVal, secRef].filter(Boolean).join(' | ');
+
+        let refHtml = '<span style="color:#94a3b8; font-weight:600;">—</span>';
+        if (refVal) {
+            refHtml = `<strong style="color:#002F6C; font-size:11.5px; font-family:monospace; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${h(fullRefTitle)}">${h(refVal)}</strong>`;
+            if (secRef) {
+                refHtml += `<span style="font-size:10px; color:#64748b; font-family:monospace; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${h(secRef)}">${h(secRef)}</span>`;
+            }
+        }
+
+        // Format Receipt No.
+        const rcptVal = p.receipt_no || '—';
+        const prVal   = (p.pr_receipt_no && p.pr_receipt_no !== rcptVal) ? p.pr_receipt_no : '';
+        let rcptHtml  = `<strong style="color:#002f70; font-size:12px; display:block;">${h(rcptVal)}</strong>`;
+        if (prVal) {
+            rcptHtml += `<span style="font-size:10px; color:#16a34a; font-weight:700; display:block; font-family:monospace;" title="Official Payment Receipt">${h(prVal)}</span>`;
+        }
+
         return `
         <tr>
             <td style="font-size:12px; color:#475569;">${h(p.pay_date ? p.pay_date.split(' ')[0] : '—')}</td>
-            <td><strong style="color:#002f70; font-size:12px;">${h(p.receipt_no || '—')}</strong></td>
-            <td style="font-size:11px; color:#475569; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${h(p.reference_no || '')}">${h(p.reference_no || '—')}</td>
+            <td>${rcptHtml}</td>
+            <td style="max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${refHtml}</td>
             <td><span style="display:inline-block; padding:2px 8px; border-radius:20px; font-size:10px; font-weight:800; background:${mColor}22; color:${mColor}; border:1px solid ${mColor}44;">${h(p.payment_method || 'Cash')}</span></td>
             <td><span style="display:inline-block; padding:2px 8px; border-radius:20px; font-size:10px; font-weight:800; background:${sColor}18; color:${sColor};">${h(sType)}</span></td>
             <td style="text-align:right; color:#16a34a; font-weight:800; font-size:13px;">${money(amt)}</td>
@@ -2557,8 +2741,11 @@ if (arPayForm) {
             if (!res.success) { toast(res.error || 'Failed to save payment.', 'error'); return; }
             toast(res.message || 'Payment recorded!');
             closeModal('arPaymentModal');
-            loadARHistory(customerId);
-            loadManagerCustomers(); // refresh outstanding balance in list
+            loadARHistory(customerId, true);
+            loadManagerCustomers(true); // refresh outstanding balance in list
+            if (typeof window.petronBroadcastCustomerChange === 'function') {
+                window.petronBroadcastCustomerChange({ action: 'payment', customerId: customerId });
+            }
         })
         .catch(() => toast('Network error saving payment.', 'error'));
     };
@@ -2584,7 +2771,10 @@ document.getElementById('archiveForm').onsubmit = function(e) {
             if (!res.success) { toast(res.error || 'Failed to archive customer.', 'error'); return; }
             toast(res.message || 'Customer archived successfully!', 'success');
             closeModal('archiveModal');
-            loadManagerCustomers();
+            loadManagerCustomers(true);
+            if (typeof window.petronBroadcastCustomerChange === 'function') {
+                window.petronBroadcastCustomerChange({ action: 'archive', customerId: id });
+            }
         });
 };
 
@@ -2596,9 +2786,12 @@ function restoreCustomer(id) {
         .then(res => {
             if (!res.success) { toast(res.error || 'Failed to restore customer.', 'error'); return; }
             toast(res.message || 'Customer restored to active status successfully!', 'success');
-            loadManagerCustomers();
+            loadManagerCustomers(true);
             if (currentCustomer && currentCustomer.id == id) {
                 viewCustomer(id);
+            }
+            if (typeof window.petronBroadcastCustomerChange === 'function') {
+                window.petronBroadcastCustomerChange({ action: 'restore', customerId: id });
             }
         })
         .catch(err => toast('Network error restoring customer.', 'error'));
@@ -2613,7 +2806,10 @@ function archiveVehicle(vId) {
             if (!res.success) { toast(res.error || 'Failed to archive vehicle.', 'error'); return; }
             toast(res.message || 'Vehicle archived successfully!', 'success');
             if (currentCustomer) viewCustomer(currentCustomer.id);
-            loadManagerCustomers();
+            loadManagerCustomers(true);
+            if (typeof window.petronBroadcastCustomerChange === 'function') {
+                window.petronBroadcastCustomerChange({ action: 'archive_vehicle', vehicleId: vId });
+            }
         })
         .catch(err => toast('Network error archiving vehicle.', 'error'));
 }
@@ -2627,7 +2823,10 @@ function restoreVehicle(vId) {
             if (!res.success) { toast(res.error || 'Failed to restore vehicle.', 'error'); return; }
             toast(res.message || 'Vehicle restored successfully!', 'success');
             if (currentCustomer) viewCustomer(currentCustomer.id);
-            loadManagerCustomers();
+            loadManagerCustomers(true);
+            if (typeof window.petronBroadcastCustomerChange === 'function') {
+                window.petronBroadcastCustomerChange({ action: 'restore_vehicle', vehicleId: vId });
+            }
         })
         .catch(err => toast('Network error restoring vehicle.', 'error'));
 }
@@ -2668,8 +2867,11 @@ function submitReviewAction(type) {
             if (!res.success) { toast(res.error || 'Failed to review request.', 'error'); return; }
             toast(res.message || 'Customer request updated successfully!', 'success');
             closeModal('reviewModal');
-            loadCustomerRequests();
-            loadManagerCustomers();
+            loadCustomerRequests(true);
+            loadManagerCustomers(true);
+            if (typeof window.petronBroadcastCustomerChange === 'function') {
+                window.petronBroadcastCustomerChange({ action: type, requestId: id });
+            }
         });
 }
 
@@ -2700,37 +2902,127 @@ document.addEventListener('DOMContentLoaded', function() {
         loadManagerCustomers();
     }
 
-    // Auto-refresh pending requests list and counts in real time based on system setting
-    let custRefreshTimer = null;
-    function scheduleCustomerRefresh(ms) {
-        if (custRefreshTimer) clearInterval(custRefreshTimer);
-        const interval = (typeof ms === 'number' && ms >= 5000)
-            ? ms
-            : ((typeof window.PETRON_AUTO_REFRESH_MS === 'number' && window.PETRON_AUTO_REFRESH_MS >= 5000) ? window.PETRON_AUTO_REFRESH_MS : 10000);
-        custRefreshTimer = setInterval(function() {
-            if (activeTab === 'pending') {
-                loadCustomerRequests(true);
-            } else {
-                // Silently poll pending count for stats card
-                fetch(`${apiUrl}?action=requests`)
-                    .then(r => r.json())
-                    .then(res => {
-                        if (res && res.success && Array.isArray(res.requests)) {
-                            const statEl = document.getElementById('statRequests');
-                            if (statEl) statEl.innerText = res.requests.length;
-                            const reqCountEl = document.getElementById('requestCount');
-                            if (reqCountEl) reqCountEl.innerText = res.requests.length + ' pending';
-                        }
-                    })
-                    .catch(() => {});
+    // ══════════════════════════════════════════════════════════════════════════
+    // AUTOMATIC DATA REFRESH & LIVE UI UPDATES (No full-page reload / F5)
+    // ══════════════════════════════════════════════════════════════════════════
+    window.handleLiveCustomerUpdate = function(detail) {
+        // Do not disrupt active input if user is currently typing in an input field
+        const active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') && !active.readOnly && !active.disabled) {
+            const t = (active.type || '').toLowerCase();
+            if (['button', 'submit', 'reset', 'checkbox', 'radio', 'hidden'].indexOf(t) === -1) {
+                return;
             }
-        }, interval);
-    }
-    scheduleCustomerRefresh();
+        }
 
-    document.addEventListener('petron:auto-refresh-interval-changed', function(e) {
-        if (e.detail && e.detail.intervalMs) {
-            scheduleCustomerRefresh(e.detail.intervalMs);
+        // Do not disrupt if user has an editing/creation modal open
+        const formModals = ['customerFormModal', 'archiveModal', 'reviewModal', 'arPaymentModal'];
+        for (let mid of formModals) {
+            const m = document.getElementById(mid);
+            if (m && m.classList.contains('open')) return;
+        }
+
+        // 1. Silent live update for active main tab (Customer List, Pending, Archived)
+        if (activeTab === 'pending') {
+            loadCustomerRequests(true);
+        } else {
+            loadManagerCustomers(true);
+        }
+
+        // 2. Keep pending requests stats card fresh when in another tab
+        if (activeTab !== 'pending') {
+            fetch(`${apiUrl}?action=requests`)
+                .then(r => r.json())
+                .then(res => {
+                    if (res && res.success && Array.isArray(res.requests)) {
+                        const statEl = document.getElementById('statRequests');
+                        if (statEl) statEl.innerText = res.requests.length;
+                        const reqCountEl = document.getElementById('requestCount');
+                        if (reqCountEl) reqCountEl.innerText = res.requests.length + ' pending';
+                    }
+                })
+                .catch(() => {});
+        }
+
+        // 3. Live UI Updates for View Modal sub-tabs (Profile, AR History, Payment History)
+        const viewModal = document.getElementById('customerViewModal');
+        if (viewModal && viewModal.classList.contains('open') && currentCustomer && currentCustomer.id) {
+            const custId = currentCustomer.id;
+            // Always keep customer profile, loyalty & vehicle information updated
+            fetch(`${apiUrl}?action=view&id=${custId}`)
+                .then(r => r.json())
+                .then(res => {
+                    if (res && res.success) {
+                        populateCustomerView(res);
+                    }
+                })
+                .catch(() => {});
+
+            // If AR History or Payment History sub-tab is currently open, refresh silently
+            if (currentViewTab === 'ar' || currentViewTab === 'payments') {
+                loadARHistory(custId, true);
+            }
+        }
+    };
+
+    // Cross-tab synchronization via BroadcastChannel & StorageEvent
+    const custBroadcastChannel = (typeof BroadcastChannel !== 'undefined') ? new BroadcastChannel('petron_customer_sync') : null;
+
+    window.petronBroadcastCustomerChange = function(data) {
+        const payload = Object.assign({ timestamp: Date.now() }, data || {});
+        if (custBroadcastChannel) {
+            try { custBroadcastChannel.postMessage(payload); } catch(e) {}
+        }
+        try {
+            localStorage.setItem('petron_customer_sync_signal', JSON.stringify(payload));
+        } catch(e) {}
+        if (window.PetronRealtime && typeof window.PetronRealtime.trigger === 'function') {
+            try { window.PetronRealtime.trigger(['customers', 'notifications', 'badges', 'dashboard']); } catch(e) {}
+        }
+    };
+
+    if (custBroadcastChannel) {
+        custBroadcastChannel.onmessage = function(ev) {
+            if (typeof window.handleLiveCustomerUpdate === 'function') {
+                window.handleLiveCustomerUpdate(ev.data);
+            }
+        };
+    }
+
+    window.addEventListener('storage', function(e) {
+        if (e.key === 'petron_customer_sync_signal') {
+            try {
+                const data = JSON.parse(e.newValue);
+                if (typeof window.handleLiveCustomerUpdate === 'function') {
+                    window.handleLiveCustomerUpdate(data);
+                }
+            } catch(err) {
+                if (typeof window.handleLiveCustomerUpdate === 'function') {
+                    window.handleLiveCustomerUpdate();
+                }
+            }
+        }
+    });
+
+    // Event listeners for unified PetronRealtime broadcast events
+    document.addEventListener('petron:customers', function(e) {
+        if (typeof window.handleLiveCustomerUpdate === 'function') {
+            window.handleLiveCustomerUpdate(e.detail);
+        }
+    });
+    document.addEventListener('petron:transactions', function(e) {
+        if (typeof window.handleLiveCustomerUpdate === 'function') {
+            window.handleLiveCustomerUpdate(e.detail);
+        }
+    });
+    document.addEventListener('petron:dashboard', function(e) {
+        if (typeof window.handleLiveCustomerUpdate === 'function') {
+            window.handleLiveCustomerUpdate(e.detail);
+        }
+    });
+    document.addEventListener('petron:view-refreshed', function(e) {
+        if (typeof window.handleLiveCustomerUpdate === 'function') {
+            window.handleLiveCustomerUpdate(e.detail);
         }
     });
 });

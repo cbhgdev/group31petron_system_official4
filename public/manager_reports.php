@@ -1163,6 +1163,7 @@ table.rpt-table.rpt-table-fixed .badge {
                     $sel_post = htmlspecialchars($active_filters['po_status'] ?? '');
                     $sel_cat  = htmlspecialchars($active_filters['category'] ?? '');
                     $sel_search = htmlspecialchars($active_filters['search'] ?? '');
+                    $po_cats = $report_data['categories'] ?? [];
                     ?>
                     <label class="ms-1"><i class="fas fa-info-circle me-1"></i> PO Status</label>
                     <select name="filter_po_status" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;color:#334155;">
@@ -1173,6 +1174,16 @@ table.rpt-table.rpt-table-fixed .badge {
                         <option value="Completed" <?= $sel_post === 'Completed' ? 'selected' : '' ?>>Completed</option>
                         <option value="Cancelled" <?= $sel_post === 'Cancelled' ? 'selected' : '' ?>>Cancelled</option>
                     </select>
+
+                    <?php if (!empty($po_cats)): ?>
+                    <label class="ms-1"><i class="fas fa-tags me-1"></i> Category</label>
+                    <select name="filter_cat" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;color:#334155;">
+                        <option value="">All Categories</option>
+                        <?php foreach ($po_cats as $pc): ?>
+                            <option value="<?= htmlspecialchars($pc['name']) ?>" <?= $sel_cat === $pc['name'] ? 'selected' : '' ?>><?= htmlspecialchars($pc['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <?php endif; ?>
 
                     <label class="ms-1"><i class="fas fa-search me-1"></i> Search</label>
                     <input type="text" name="filter_search" value="<?= $sel_search ?>" placeholder="Search PO No..." style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:120px;color:#334155;">
@@ -1205,6 +1216,17 @@ table.rpt-table.rpt-table-fixed .badge {
                         <option value="Pending" <?= $sel_status === 'Pending' ? 'selected' : '' ?>>Pending</option>
                         <option value="Submitted" <?= $sel_status === 'Submitted' ? 'selected' : '' ?>>Submitted</option>
                     </select>
+
+                <?php elseif ($active_tab === 'po_vs_received'): ?>
+                    <?php
+                    $sel_po_no  = htmlspecialchars($active_filters['po_no'] ?? '');
+                    $sel_search = htmlspecialchars($active_filters['search'] ?? '');
+                    ?>
+                    <label class="ms-1"><i class="fas fa-file-alt me-1"></i> PO No.</label>
+                    <input type="text" name="filter_po_no" value="<?= $sel_po_no ?>" placeholder="Search PO No..." style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:130px;color:#334155;">
+
+                    <label class="ms-1"><i class="fas fa-search me-1"></i> Search</label>
+                    <input type="text" name="filter_search" value="<?= $sel_search ?>" placeholder="Search product..." style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:12px;width:120px;color:#334155;">
 
                 <?php elseif ($active_tab === 'stock_in_approval'): ?>
                     <?php

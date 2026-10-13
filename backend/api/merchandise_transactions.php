@@ -370,13 +370,19 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
     }
 
     // customer_name is no longer required — auto-default to Walk-in Customer
-    $required_fields = ['items', 'payment_method'];
+    // payment_method is optional — if not selected, auto-defaults to Partial Payment
+    $required_fields = ['items'];
     foreach ($required_fields as $field) {
         if (empty($data[$field])) {
             http_response_code(400);
             echo json_encode(['error' => "Missing required field: $field"]);
             return;
         }
+    }
+
+    // Default payment method to Partial Payment if empty or not selected
+    if (empty($data['payment_method']) || trim((string)$data['payment_method']) === '') {
+        $data['payment_method'] = 'Partial Payment';
     }
 
     // Auto-default customer to Walk-in Customer
@@ -617,6 +623,33 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
         } catch (Exception $e) {}
     }
 
+    // ── Ensure Job Order Tip is included in items and normalized as 'Tip' ─────
+    $has_tip_item = false;
+    foreach ($data['items'] as &$itm_ref) {
+        $p_nm = trim((string)($itm_ref['product_name'] ?? ''));
+        $p_cat = trim((string)($itm_ref['category'] ?? ''));
+        if (strcasecmp($p_nm, 'Tip') === 0 || strcasecmp($p_nm, 'Labor Charge') === 0 || strcasecmp($p_nm, 'Labor') === 0 || strcasecmp($p_nm, 'Labor Fee') === 0 || strcasecmp($p_cat, 'Tip') === 0 || strcasecmp($p_cat, 'Labor') === 0) {
+            $itm_ref['item_type'] = 'service';
+            $itm_ref['product_name'] = 'Tip';
+            $itm_ref['category'] = 'Tip';
+            $has_tip_item = true;
+        }
+    }
+    unset($itm_ref);
+
+    $jo_tip_val = floatval($data['job_order_tip'] ?? 0);
+    if ($jo_tip_val > 0 && !$has_tip_item) {
+        $data['items'][] = [
+            'item_type'    => 'service',
+            'product_id'   => null,
+            'product_name' => 'Tip',
+            'category'     => 'Tip',
+            'size_variant' => '',
+            'quantity'     => 1,
+            'unit_price'   => $jo_tip_val,
+        ];
+    }
+
     // ── Calculate totals & VAT-Inclusive Pricing ──────────────────────────────
     // Item selling prices are VAT-inclusive per Petron standard.
     // Gross Amount = sum of (quantity * unit_price)
@@ -627,7 +660,10 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
     $gross_amount = round($items_subtotal, 2);
 
     // ── Payment method setup ──────────────────────────────────────────────────
-    $raw_payment_method  = trim((string)($data['payment_method'] ?? 'Cash'));
+    $raw_payment_method  = trim((string)($data['payment_method'] ?? 'Partial Payment'));
+    if ($raw_payment_method === '' || $raw_payment_method === 'none' || $raw_payment_method === 'null') {
+        $raw_payment_method = 'Partial Payment';
+    }
     $raw_ewallet_prov    = trim((string)($data['ewallet_provider'] ?? ''));
     $norm_pay            = normalize_payment_type($raw_payment_method, $raw_ewallet_prov);
     $payment_method      = $norm_pay['payment_type'];
@@ -771,6 +807,10 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
             error_log("Credit limit check warning: " . $e->getMessage());
         }
         $balance_due = $total_amount; // full net amount is on credit
+    } elseif ($payment_method === 'Partial Payment' || strcasecmp($payment_method, 'Partial Payment') === 0 || strcasecmp((string)($data['payment_status'] ?? ''), 'Partially Paid') === 0) {
+        $amount_paid = floatval($data['amount_paid'] ?? 0.00);
+        $resolved_payment_status = 'Partially Paid';
+        $balance_due = max(0.0, round($total_amount - $amount_paid, 2));
     } elseif ($is_pvc_payment) {
         if ($total_amount <= 0.009) {
             // Available PVC points covered 100% of the transaction
@@ -1033,6 +1073,12 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
             $vals[] = date('Y-m-d H:i:s');
         }
 
+        // Auto-generate PO number for credit accounts if empty or not provided
+        $credit_po_number = trim((string)($data['credit_po_number'] ?? ''));
+        if ($is_credit_account && $credit_po_number === '') {
+            $credit_po_number = 'PO-' . date('Ymd') . '-' . str_pad((string)mt_rand(1000, 9999), 4, '0', STR_PAD_LEFT);
+        }
+
         // Optional columns — add only if they exist
         $optional = [
             'shift_id'              => $shift_id ?: null,
@@ -1069,11 +1115,11 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
             'fleet_points_redeemed' => isset($data['fleet_points_redeemed']) ? (int)$data['fleet_points_redeemed'] : null,
             'credit_company_name'   => $data['credit_company_name'] ?? null,
             'credit_account_number' => $data['credit_account_number'] ?? null,
-            'credit_po_number'      => $data['credit_po_number'] ?? null,
+            'credit_po_number'      => $credit_po_number ?: null,
             'credit_due_date'       => !empty($data['credit_due_date']) ? $data['credit_due_date'] : null,
             // ── Payment tracking fields ──────────────────────────────────────────
-            'amount_paid'           => $amount_paid > 0 ? $amount_paid : null,
-            'balance_due'           => $balance_due > 0 ? $balance_due : null,
+            'amount_paid'           => ($amount_paid !== null && $amount_paid >= 0) ? $amount_paid : 0.00,
+            'balance_due'           => ($resolved_payment_status === 'Paid') ? 0.00 : ($balance_due > 0 ? $balance_due : $total_amount),
             // payment_status: Paid / Partially Paid / Pending
             'payment_status'        => $resolved_payment_status,
             'ar_status'             => $resolved_ar_status,
@@ -1313,7 +1359,7 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
                     $transaction_id,
                     $total_amount,
                     $new_bal,
-                    "Official Merchandise Sale - Ref: " . $transaction_id,
+                    "Official Merchandise Sale - Ref: " . $transaction_id . ($credit_po_number ? " (PO: " . $credit_po_number . ")" : ""),
                     $station_id,
                     $me['id']
                 ]);
@@ -1323,11 +1369,30 @@ function createMerchandiseTransaction($pdo, $station_id, $role, $me) {
 
             try {
                 $or_no = 'OR-' . date('Y') . '-' . str_pad($merch_transaction_id ?? 0, 6, '0', STR_PAD_LEFT);
-                $pdo->prepare("
-                    INSERT INTO customer_accounts_receivable
-                    (customer_id, transaction_id, transaction_db_id, or_number, total_amount, amount_paid, outstanding_balance, status, station_id, created_at)
-                    VALUES (?, ?, ?, ?, ?, 0, ?, 'Active', ?, NOW())
-                ")->execute([$data['credit_customer_id'], $transaction_id, $merch_transaction_id, $or_no, $total_amount, $total_amount, $station_id]);
+                $hasArPo = false;
+                try {
+                    $arColList = $pdo->query("SHOW COLUMNS FROM customer_accounts_receivable")->fetchAll(PDO::FETCH_ASSOC);
+                    foreach ($arColList as $arCol) {
+                        if (strtolower($arCol['Field']) === 'po_number') {
+                            $hasArPo = true;
+                            break;
+                        }
+                    }
+                } catch (Exception $colEx) {}
+
+                if ($hasArPo) {
+                    $pdo->prepare("
+                        INSERT INTO customer_accounts_receivable
+                        (customer_id, transaction_id, transaction_db_id, or_number, po_number, total_amount, amount_paid, outstanding_balance, status, station_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, 0, ?, 'Active', ?, NOW())
+                    ")->execute([$data['credit_customer_id'], $transaction_id, $merch_transaction_id, $or_no, $credit_po_number ?: null, $total_amount, $total_amount, $station_id]);
+                } else {
+                    $pdo->prepare("
+                        INSERT INTO customer_accounts_receivable
+                        (customer_id, transaction_id, transaction_db_id, or_number, total_amount, amount_paid, outstanding_balance, status, station_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, 0, ?, 'Active', ?, NOW())
+                    ")->execute([$data['credit_customer_id'], $transaction_id, $merch_transaction_id, $or_no, $total_amount, $total_amount, $station_id]);
+                }
             } catch (Exception $are) {
                 error_log("AR record creation error: " . $are->getMessage());
             }

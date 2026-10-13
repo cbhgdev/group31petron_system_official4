@@ -72,35 +72,35 @@
     function isUserEditing() {
         var active = document.activeElement;
         if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) {
-            // If user is focused on an editable input, do not disturb
-            if (!active.readOnly && !active.disabled) return true;
-        }
-
-        // If user is on an active encoding card (like Meter Readings Encode Card)
-        var encodeCard = document.getElementById('encodeCard');
-        if (encodeCard && window.getComputedStyle(encodeCard).display !== 'none') {
-            return true;
-        }
-
-        // Check if any non-readonly input on page has non-empty user data entered
-        var liveInputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([readonly]), textarea:not([readonly])');
-        for (var k = 0; k < liveInputs.length; k++) {
-            var v = (liveInputs[k].value || '').trim();
-            if (v !== '' && v !== '0' && v !== '0.00') {
-                return true;
+            var inputType = (active.type || '').toLowerCase();
+            // Buttons, submits, checkboxes, radios, and hidden inputs do not count as active text typing
+            if (['button', 'submit', 'reset', 'checkbox', 'radio', 'hidden'].indexOf(inputType) === -1) {
+                if (!active.readOnly && !active.disabled) {
+                    return true;
+                }
             }
         }
 
-        // Check if any modal is currently visible
+        // If user is on an active encoding card (like Meter Readings Encode Card) with active non-empty inputs
+        var encodeCard = document.getElementById('encodeCard');
+        if (encodeCard && encodeCard.offsetParent !== null && window.getComputedStyle(encodeCard).display !== 'none') {
+            var encInputs = encodeCard.querySelectorAll('input:not([type="hidden"]):not([readonly]), textarea:not([readonly])');
+            for (var ei = 0; ei < encInputs.length; ei++) {
+                var v = (encInputs[ei].value || '').trim();
+                if (v !== '' && v !== '0' && v !== '0.00') {
+                    return true;
+                }
+            }
+        }
+
+        // Check if any interactive business modal is currently open and visible
         var openModals = document.querySelectorAll(
-            '.modal-overlay[style*="flex"], .modal-overlay[style*="block"], ' +
-            '[id$="Modal"][style*="flex"], [id$="Modal"][style*="block"], ' +
-            '[id*="modal"][style*="flex"], [id*="modal"][style*="block"], ' +
-            '.modal.show, .mi-overlay[style*="flex"], .mi-overlay[style*="block"]'
+            '.modal-overlay, [id$="Modal"], [id*="modal"], .modal.show, .mi-overlay, .sr-modal-overlay'
         );
         for (var i = 0; i < openModals.length; i++) {
             var m = openModals[i];
-            if (m.offsetParent !== null && window.getComputedStyle(m).display !== 'none') {
+            if (m.id === 'sessionTimeoutModal' || m.id === 'maintKickoutOverlay' || m.id === 'customerViewModal') continue;
+            if (m.offsetParent !== null && window.getComputedStyle(m).display !== 'none' && window.getComputedStyle(m).visibility !== 'hidden') {
                 return true;
             }
         }
@@ -179,10 +179,32 @@
         WITHOUT reloading the page and WITHOUT losing user context!
     ══════════════════════════════════════════════════════════════════════════ */
     function refreshActiveView(options) {
+        options = options || {};
+        var isForced = options.force === true;
         if (_paused || _isRefreshingView) return Promise.resolve(false);
-        // Active data entry and active encode screens take absolute precedence — never disrupt or overwrite!
-        if (isUserEditing()) {
+        // Active data entry takes absolute precedence unless explicitly forced
+        if (!isForced && isUserEditing()) {
             return Promise.resolve(false);
+        }
+
+        // Even when forced, never disrupt if user is focused inside an editable text input
+        var active = document.activeElement;
+        if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA') && !active.readOnly && !active.disabled) {
+            var activeType = (active.type || '').toLowerCase();
+            if (['button', 'submit', 'reset', 'checkbox', 'radio', 'hidden'].indexOf(activeType) === -1) {
+                return Promise.resolve(false);
+            }
+        }
+
+        if (typeof window.refreshMerchandiseInventoryLive === 'function') {
+            _isRefreshingView = true;
+            return Promise.resolve()
+                .then(function () { return window.refreshMerchandiseInventoryLive({ force: isForced }); })
+                .catch(function () { return false; })
+                .then(function (res) {
+                    _isRefreshingView = false;
+                    return res;
+                });
         }
 
         _isRefreshingView = true;
@@ -210,10 +232,10 @@
             var parser = new DOMParser();
             var doc = parser.parseFromString(html, 'text/html');
 
-            // 1. Update KPI counters & stat cards (elements with id starting with kpi_, stat_, etc.)
+            // 1. Update KPI counters & stat cards (elements with id starting with kpi_, stat_, card-, etc.)
             var kpiSelectors = [
-                '[id^="kpi_"]', '[id*="_kpi_"]', '[id^="stat_"]', '[id^="sh_"]', '[id^="fl_"]',
-                '.stat-card-value', '.kpi-card-value', '.stat-number', '[data-kpi]'
+                '[id^="kpi_"]', '[id*="_kpi_"]', '[id^="stat_"]', '[id^="card-"]', '[id^="sh_"]', '[id^="fl_"]',
+                '.stat-card-value', '.kpi-card-value', '.stat-number', '[data-kpi]', '.inv-stat-val'
             ];
             kpiSelectors.forEach(function (sel) {
                 document.querySelectorAll(sel).forEach(function (currentEl) {
@@ -223,23 +245,68 @@
                     }
                     if (currentEl.id) {
                         var newEl = doc.getElementById(currentEl.id);
-                        if (newEl && currentEl.innerHTML !== newEl.innerHTML) {
-                            currentEl.innerHTML = newEl.innerHTML;
+                        if (newEl) {
+                            var curVal = currentEl.querySelector('.inv-stat-val');
+                            var newVal = newEl.querySelector('.inv-stat-val');
+                            if (curVal && newVal) {
+                                if (curVal.textContent !== newVal.textContent) {
+                                    curVal.textContent = newVal.textContent;
+                                }
+                            } else if (currentEl.innerHTML !== newEl.innerHTML) {
+                                currentEl.innerHTML = newEl.innerHTML;
+                            }
                         }
                     }
                 });
             });
 
-            // 2. Update Table Bodies (Preserves table headers, colgroups, and scroll position)
-            // Never target data-entry tables (.fet, fuel-encode-table, or tables with input fields)
+            // 1b. Update tab badge counters without replacing active tab buttons
+            ['.inv-tab-nav', '.tab-nav'].forEach(function (sel) {
+                var curNav = document.querySelector(sel);
+                var nwNav = doc.querySelector(sel);
+                if (curNav && nwNav) {
+                    var curBtns = curNav.querySelectorAll('button, a');
+                    var nwBtns = nwNav.querySelectorAll('button, a');
+                    curBtns.forEach(function (btn, idx) {
+                        var nwBtn = btn.id ? doc.getElementById(btn.id) : nwBtns[idx];
+                        if (!nwBtn) return;
+                        var curSpan = btn.querySelector('span');
+                        var nwSpan = nwBtn.querySelector('span');
+                        if (curSpan && nwSpan && curSpan.textContent !== nwSpan.textContent) {
+                            curSpan.textContent = nwSpan.textContent;
+                        }
+                    });
+                }
+            });
+
+            // 2. Direct TBODY swaps for dedicated transaction & history tables
+            var tbodySelectors = [
+                '#mhTableBody', '#jomTableBody', '#fhTableBody', '#joTableBody',
+                '#histTbody', '#merchTableBody', '#fuelTableBody', '#reportTableBody',
+                '#mgrStaffAdjTable tbody', '#mgrInventoryTable tbody', '#alertTableBody',
+                '#fsrTableBody', '#srTableBody', '#fuelTable tbody', '#stockInTable tbody'
+            ];
+            tbodySelectors.forEach(function (tbsel) {
+                var curTb = document.querySelector(tbsel);
+                var newTb = doc.querySelector(tbsel);
+                if (curTb && newTb && curTb.innerHTML !== newTb.innerHTML) {
+                    curTb.innerHTML = newTb.innerHTML;
+                }
+            });
+
+            // 3. Update Table Bodies (Preserves table headers, colgroups, and scroll position)
             var tableSelectors = [
-                '#joUnifiedTable', '#mhTable', '#jomTable', '#reportTable',
+                '#joUnifiedTable', '#mhHistoryTable', '#jomHistoryTable', '#fuelHistoryTable',
+                '#histTbl', '#mhTable', '#jomTable', '#reportTable', '#inventoryTable', '#merchandiseTable',
+                '#merchTable', '#poTable', '#shiftsTable', '#fuelPriceTable', '#pumpTable',
+                '#tanksTable', '#customerTable', '#customersTable', '#auditTable', '#adminTable',
+                '#mgrStaffAdjTable', '#mgrInventoryTable', '#alertTable', '#fsrTable', '#fuelTable',
                 'table.txn-table', 'table.data-table',
                 'table.manager-table', 'table.admin-table',
                 'table.mgr-table', 'table.adm-table', 'table.dev-inner-table',
                 'table.vt-table', '.vt-table',
                 'table.afto-tbl', '.afto-tbl',
-                '#auditTable', '#adminTable', '.petron-table', '.table-custom'
+                '.petron-table', '.table-custom'
             ];
             tableSelectors.forEach(function (sel) {
                 document.querySelectorAll(sel).forEach(function (currentTbl) {
@@ -247,7 +314,7 @@
                     if (currentTbl.closest('#encodeCard') || currentTbl.classList.contains('fet') || currentTbl.classList.contains('fuel-encode-table')) {
                         return;
                     }
-                    if (currentTbl.querySelector('input:not([type="hidden"]), textarea, select')) {
+                    if (currentTbl.querySelector('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]), textarea, select')) {
                         return; // Active data-entry form!
                     }
                     var newTbl = currentTbl.id ? doc.getElementById(currentTbl.id) : doc.querySelector(sel);
@@ -255,13 +322,35 @@
                         var curTbody = currentTbl.querySelector('tbody');
                         var newTbody = newTbl.querySelector('tbody');
                         if (curTbody && newTbody && curTbody.innerHTML !== newTbody.innerHTML) {
-                            curTbody.innerHTML = newTbody.innerHTML;
+                            var isNewStub = newTbody.querySelector('td.empty') || newTbody.textContent.toLowerCase().indexOf('loading') !== -1;
+                            var hasCurData = curTbody.querySelector('tr:not(.empty)');
+                            if (isNewStub && hasCurData) {
+                                // Skip overwriting active rendered data with an empty loading stub
+                            } else {
+                                curTbody.innerHTML = newTbody.innerHTML;
+                            }
                         }
                     }
                 });
             });
 
-            // 3. Update Calendar Views (Grid / Events)
+            // 4. Update targeted counters & text elements by ID
+            var textIds = [
+                'mhShowingEntriesText', 'jomShowingEntriesText', 'mhPageLabel', 'jomPageLabel',
+                'fhPageLabel', 'mhKpiTxnCount', 'mhKpiTotalEncoded', 'joPendingCountBadge',
+                'joApprovedCountBadge', 'joRejectedCountBadge', 'joTrackerTotalCount',
+                'kpi_jo_count', 'kpi_merch_released', 'kpi_total_encoded',
+                'srBannerTitle', 'srBannerText'
+            ];
+            textIds.forEach(function (id) {
+                var cur = document.getElementById(id);
+                var nw = doc.getElementById(id);
+                if (cur && nw && cur.innerHTML !== nw.innerHTML) {
+                    cur.innerHTML = nw.innerHTML;
+                }
+            });
+
+            // 5. Update Calendar Views (Grid / Events)
             var calSelectors = ['.cal-grid', '.cal-events', '#calendarGrid', '#calendarView'];
             calSelectors.forEach(function (sel) {
                 var currentCal = document.querySelector(sel);
@@ -271,10 +360,10 @@
                 }
             });
 
-            // 4. Update Header Badges & Sidebar Counters from New HTML
+            // 6. Update Header Badges & Sidebar Counters from New HTML
             var badgeSelectors = [
                 '#notificationBadge', '#badge-notifications', '.header-notif-badge',
-                '[data-badge-key]', '[id^="badge-"]'
+                '#notifDropdownBadge', '[data-badge-key]', '[id^="badge-"]'
             ];
             badgeSelectors.forEach(function (sel) {
                 document.querySelectorAll(sel).forEach(function (currentBdg) {
@@ -288,7 +377,28 @@
                 });
             });
 
-            // 5. Re-run local UI initializers if they exist
+            // 7. Re-run local UI initializers & paginations if they exist
+            if (typeof window.mhRender === 'function') {
+                try { window.mhRender(); } catch (e) {}
+            }
+            if (typeof window.jomRender === 'function') {
+                try { window.jomRender(); } catch (e) {}
+            }
+            if (typeof window.fhRender === 'function') {
+                try { window.fhRender(); } catch (e) {}
+            }
+            if (typeof window.applyFilters === 'function') {
+                try { window.applyFilters(); } catch (e) {}
+            }
+            if (typeof window.filterInvTable === 'function') {
+                try { window.filterInvTable(); } catch (e) {}
+            }
+            if (typeof window.filterFuelTable === 'function') {
+                try { window.filterFuelTable(); } catch (e) {}
+            }
+            if (typeof window.applyFuelInventoryFilters === 'function') {
+                try { window.applyFuelInventoryFilters(); } catch (e) {}
+            }
             if (typeof window.initAllPetronDropdowns === 'function') {
                 try { window.initAllPetronDropdowns(); } catch (e) {}
             }
@@ -306,6 +416,14 @@
             }
             if (typeof window.updateBatchButtons === 'function') {
                 try { window.updateBatchButtons(); } catch (e) {}
+            }
+            if (typeof window.handleLiveCustomerUpdate === 'function') {
+                try { window.handleLiveCustomerUpdate(); } catch (e) {}
+            }
+            if (typeof window.isNotificationDropdownOpen === 'function' && window.isNotificationDropdownOpen()) {
+                if (typeof window.petronLoadNotificationsOnly === 'function') {
+                    try { window.petronLoadNotificationsOnly(false); } catch (e) {}
+                }
             }
 
             document.dispatchEvent(new CustomEvent('petron:view-refreshed', { detail: { url: targetUrl } }));
@@ -354,12 +472,17 @@
 
                         if (!isInternal && response && (response.status >= 200 && response.status < 300)) {
                             _lastMutationTime = Date.now();
-                            // Execute cascade refresh only if user is not actively editing
                             setTimeout(function () {
                                 PetronRealtime.trigger(['notifications', 'badges', 'dashboard']);
-                                refreshActiveView({ force: false });
+                                refreshActiveView({ force: true });
 
                                 // Trigger page-specific refresh routines if declared
+                                if (typeof window.autoRefreshJobOrderTracker === 'function') {
+                                    try { window.autoRefreshJobOrderTracker(true); } catch (e) {}
+                                }
+                                if (typeof window.autoRefreshMerchandiseHistory === 'function') {
+                                    try { window.autoRefreshMerchandiseHistory(true); } catch (e) {}
+                                }
                                 if (typeof window.refreshManagerDashboard === 'function') {
                                     try { window.refreshManagerDashboard(); } catch (e) {}
                                 }
@@ -407,7 +530,17 @@
                             _lastMutationTime = Date.now();
                             setTimeout(function () {
                                 PetronRealtime.trigger(['notifications', 'badges', 'dashboard']);
-                                refreshActiveView({ force: false });
+                                refreshActiveView({ force: true });
+
+                                if (typeof window.autoRefreshJobOrderTracker === 'function') {
+                                    try { window.autoRefreshJobOrderTracker(true); } catch (e) {}
+                                }
+                                if (typeof window.autoRefreshMerchandiseHistory === 'function') {
+                                    try { window.autoRefreshMerchandiseHistory(true); } catch (e) {}
+                                }
+                                if (typeof window.fetchUnreadCount === 'function') {
+                                    try { window.fetchUnreadCount(); } catch (e) {}
+                                }
                             }, 350);
                         }
                     });

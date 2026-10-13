@@ -1,0 +1,65 @@
+280: // Fetch customers with complete vehicle information (including engine & chassis numbers) for auto-fill
+4444: sessionStorage.setItem('petron_fuel_reading_cache', JSON.stringify(data));
+4446: sessionStorage.removeItem('petron_fuel_reading_cache');
+4454: var raw = sessionStorage.getItem('petron_fuel_reading_cache');
+4767: // Clear sessionStorage flags
+4769: sessionStorage.removeItem('petron_fuel_readings_submitted');
+4770: sessionStorage.removeItem('petron_fuel_reading_shift');
+4771: sessionStorage.removeItem('petron_fuel_reading_date');
+5186: value="<?= $is_manual_beginning ? '' : number_format((float)$pump_prev_reading, 2, '.', ',') ?>"
+5202: value="<?= htmlspecialchars($saved_ending_val) ?>"
+5299: for (var i = localStorage.length - 1; i >= 0; i--) {
+5300: var lk = localStorage.key(i);
+5301: if (lk && lk.indexOf('petron_draft_') === 0 && (lk.indexOf('fuel') !== -1 || lk.indexOf('meter') !== -1 || lk.indexOf('reading') !== -1 || lk.indexOf('transactions_hub') !== -1 || (localStorage.getItem(lk) && localStorage.getItem(lk).indexOf('Γé') !== -1))) {
+5302: localStorage.removeItem(lk);
+5331: var beginning = parseNum(bEl.value);
+5332: var ending    = parseNum(eEl.value);
+5338: var hasEndingVal = eEl.value.trim() !== '';
+5652: sessionStorage.removeItem('petron_fuel_readings_submitted');
+5653: sessionStorage.removeItem('petron_fuel_reading_shift');
+5654: sessionStorage.removeItem('petron_fuel_reading_date');
+5677: // Persist pending flag in sessionStorage for bfcache resilience
+5680: sessionStorage.setItem('petron_fuel_readings_submitted', '1');
+5685: // Network error — fall back to sessionStorage + PHP-baked flags
+5689: try { sessionPending = sessionStorage.getItem('petron_fuel_readings_submitted') === '1'; } catch(e) {}
+5774: let beginningRaw = ((formData.get('beginning_reading') !== null ? formData.get('beginning_reading') : (beginningEl ? beginningEl.value : '')) || '').replace(/,/g, '');
+5792: if (endingEl) endingEl.value = beginningVal.toFixed(2);
+5876: const submittedEnding = parseFloat((endingEl?.value || '0').replace(/,/g, ''));
+5880: beginningEl.value = submittedEnding.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+5882: beginningEl.title = 'Auto-fetched from previous meter reading (' + beginningEl.value + '). Read-only.';
+5903: try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
+6005: try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
+6073: let endingRaw    = (endingEl    ? endingEl.value    : '').replace(/,/g, '').trim();
+6074: let beginningRaw = (beginningEl ? beginningEl.value : '').replace(/,/g, '').trim();
+6097: endingEl.value = beginningEl.value;
+6200: beginningEl.value = endingVal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+6202: beginningEl.title = 'Auto-fetched from previous meter reading (' + beginningEl.value + '). Read-only.';
+6249: try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
+6251: // Mark sessionStorage so if user navigates back the button re-appears
+6253: sessionStorage.setItem('petron_fuel_readings_submitted', '1');
+6254: sessionStorage.setItem('petron_fuel_reading_shift', '<?= htmlspecialchars($fuel_shift_name, ENT_QUOTES) ?>');
+6255: sessionStorage.setItem('petron_fuel_reading_date', new Date().toISOString().split('T')[0]);
+6766: cleared from both localStorage, sessionStorage, and the server drafts API.
+6772: for (var i = 0; i < localStorage.length; i++) {
+6773: var k = localStorage.key(i);
+6778: keysToRemove.forEach(function (k) { try { localStorage.removeItem(k); } catch (e) {} });
+6782: sessionStorage.removeItem('jo_draft');
+6783: sessionStorage.removeItem('cart');
+6820: $jo_pending  = array_values(array_filter($job_orders, fn($j) => ($j['validation_status'] ?? '') === 'Pending Validation'));
+7327: <span style="font-size:10px;font-weight:400;color:#64748b;text-transform:none;">(Auto-filled, editable)</span>
+7701: <option value="Pending" <?= ($_GET['mh_status'] ?? '') === 'Pending' ? 'selected' : '' ?>>Pending</option>
+10552: //   1. Auto-fill the service fee from cached data
+11540: // UPDATED: First Name is typeable for search, other fields auto-fill from selection
+11560: // All fields are editable - staff can type manually or auto-fill from customer search
+11839: sessionStorage.removeItem('jo_draft');
+11840: localStorage.removeItem('jo_draft');
+12057: // Automatically fill loyalty fields if customer matches
+12158: // Auto-fill Vehicle Brand and Vehicle Model from the vehicle name
+13094: // Store draft in sessionStorage for persistence
+13098: sessionStorage.setItem('jo_draft', JSON.stringify(draftData));
+14118: const hasPendingSvc = ((document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim() !== '') && ((parseFloat(document.getElementById('joServicePrice')?.value || 0) > 0) || (parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) > 0));
+14143: const pendingSvcType = (document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim();
+14144: const pendingSvcPrice = parseFloat(document.getElementById('joServicePrice')?.value || 0);
+14145: const pendingLabor = parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) || 0;
+14627: <option value="pending">Pending Validation</option>
+18260: <option value="Pending"><i class="fas fa-clock"></i> Pending</option>

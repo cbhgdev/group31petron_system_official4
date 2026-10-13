@@ -365,7 +365,7 @@ function getStatusTextColor($status) {
                 <?php endif; ?>
                 <?php if ($job['labor_cost'] > 0): ?>
                     <div class="cost-row">
-                        <span>Labor Cost</span>
+                        <span>Tip</span>
                         <span>₱<?php echo number_format($job['labor_cost'], 2); ?></span>
                     </div>
                 <?php endif; ?>

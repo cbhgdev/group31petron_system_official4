@@ -198,22 +198,19 @@ if (!function_exists('getAdminReportData')) {
                 }
                 $data['pump_list'] = $pump_list;
 
-                // Fuel sales only appear in official reports if approved by Manager/Admin and fuel closing is verified
+                // Fuel sales appear in official reports if approved by Manager/Admin or fuel closing is verified
                 $app_clause = function(string $alias) {
-                    return " AND LOWER(COALESCE({$alias}.status, '')) IN ('verified','approved','validated')
-                             AND EXISTS (
-                                 SELECT 1 FROM fuel_sales_closing fsc_app
-                                 WHERE fsc_app.station_id = {$alias}.station_id
-                                   AND fsc_app.report_date = DATE(COALESCE({$alias}.transaction_date, {$alias}.created_at))
-                                   AND (
-                                       fsc_app.shift_period = {$alias}.shift_period
-                                       OR fsc_app.shift = {$alias}.shift_name
-                                       OR fsc_app.shift = {$alias}.shift_period
-                                       OR LOWER(fsc_app.shift) LIKE CONCAT('%', LOWER(COALESCE({$alias}.shift_period, '')), '%')
-                                       OR {$alias}.shift_period IS NULL OR {$alias}.shift_period = ''
-                                   )
-                                   AND LOWER(COALESCE(fsc_app.status, '')) IN ('verified','approved','validated')
-                             ) ";
+                    return " AND (
+                                 LOWER(COALESCE({$alias}.status, '')) IN ('verified','approved','validated','adjusted')
+                                 OR {$alias}.validated_by IS NOT NULL
+                                 OR EXISTS (
+                                     SELECT 1 FROM fuel_sales_closing fsc_app
+                                     WHERE fsc_app.station_id = {$alias}.station_id
+                                       AND fsc_app.report_date = DATE(COALESCE({$alias}.transaction_date, {$alias}.created_at))
+                                       AND LOWER(COALESCE(fsc_app.status, '')) IN ('verified','approved','validated')
+                                 )
+                             )
+                             AND LOWER(COALESCE({$alias}.status, '')) NOT IN ('rejected','voided','cancelled','canceled') ";
                 };
 
                 // 1. UGT DAILY SALES TABLE — deduplicated latest reading per pump per day
@@ -1732,57 +1729,169 @@ if (!function_exists('getAdminReportData')) {
         // 4. PROCUREMENT REPORTS
         // =========================================================================
         case 'procurement':
-            // Load categories for filter dropdown
+            // Load categories for filter dropdown (include Fuel option)
             try {
                 $stmt = $pdo->query("SELECT id, name FROM product_categories ORDER BY name");
-                $data['categories'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            } catch (Exception $e) { $data['categories'] = []; }
+                $cats = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                $has_fuel_cat = false;
+                foreach ($cats as $c) {
+                    if (stripos($c['name'], 'fuel') !== false) {
+                        $has_fuel_cat = true;
+                        break;
+                    }
+                }
+                if (!$has_fuel_cat) {
+                    array_unshift($cats, ['id' => 0, 'name' => 'Fuel']);
+                }
+                $data['categories'] = $cats;
+            } catch (Exception $e) {
+                $data['categories'] = [['id' => 0, 'name' => 'Fuel']];
+            }
 
             if ($tab === 'purchase_order') {
-                // Build dynamic WHERE
-                $po_where  = "WHERE DATE(po.created_at) BETWEEN :date_from AND :date_to";
-                $po_params = ['date_from' => $date_from, 'date_to' => $date_to];
-                if ($station_id > 0) { $po_where .= " AND po.station_id = :station_id"; $po_params['station_id'] = $station_id; }
-                if (!empty($filters['po_status'])) {
-                    $po_where .= " AND po.status LIKE :po_status";
-                    $po_params['po_status'] = '%' . $filters['po_status'] . '%';
-                }
-                if (!empty($filters['search'])) {
-                    $po_where .= " AND po.po_number LIKE :search";
-                    $po_params['search'] = '%' . $filters['search'] . '%';
-                }
-                // Note: category filter applied via items join
-                $cat_join  = '';
-                $cat_where = '';
-                if (!empty($filters['category'])) {
-                    $cat_join  = " LEFT JOIN purchase_order_items poi2 ON poi2.po_id = po.id LEFT JOIN products p2 ON p2.id = poi2.product_id LEFT JOIN product_categories pc2 ON pc2.id = p2.category_id ";
-                    $cat_where = " AND pc2.name = :cat_filter";
-                    $po_params['cat_filter'] = $filters['category'];
+                $rows = [];
+
+                // 1. Fetch Merchandise Purchase Orders
+                if (ard_table_exists($pdo, 'purchase_orders')) {
+                    $is_fuel_only_category = !empty($filters['category']) && (stripos($filters['category'], 'fuel') !== false);
+                    if (!$is_fuel_only_category) {
+                        $po_where  = "WHERE DATE(po.created_at) BETWEEN :date_from AND :date_to";
+                        $po_params = ['date_from' => $date_from, 'date_to' => $date_to];
+                        if ($station_id > 0) {
+                            $po_where .= " AND po.station_id = :station_id";
+                            $po_params['station_id'] = $station_id;
+                        }
+                        if (!empty($filters['po_status'])) {
+                            $st_filter = trim($filters['po_status']);
+                            if (strtolower($st_filter) === 'approved') {
+                                $po_where .= " AND (po.status LIKE :po_status OR po.status IN ('Approved','Approved PO','Official','Expected Delivery'))";
+                            } else {
+                                $po_where .= " AND po.status LIKE :po_status";
+                            }
+                            $po_params['po_status'] = '%' . $st_filter . '%';
+                        }
+                        if (!empty($filters['search'])) {
+                            $po_where .= " AND (po.po_number LIKE :search OR po.batch_id LIKE :search2)";
+                            $po_params['search']  = '%' . $filters['search'] . '%';
+                            $po_params['search2'] = '%' . $filters['search'] . '%';
+                        }
+
+                        $cat_join  = '';
+                        $cat_where = '';
+                        if (!empty($filters['category'])) {
+                            $cat_join  = " LEFT JOIN purchase_order_items poi2 ON poi2.po_id = po.id LEFT JOIN products p2 ON p2.id = poi2.product_id LEFT JOIN product_categories pc2 ON pc2.id = p2.category_id ";
+                            $cat_where = " AND pc2.name = :cat_filter";
+                            $po_params['cat_filter'] = $filters['category'];
+                        }
+
+                        $sql_merch = "SELECT po.id,
+                                             po.po_number,
+                                             po.batch_id,
+                                             po.created_at as po_date,
+                                             COALESCE(u1.name, CONCAT(COALESCE(u1.first_name,''),' ',COALESCE(u1.last_name,'')), 'Station Manager') as requested_by,
+                                             COALESCE(u2.name, CONCAT(COALESCE(u2.first_name,''),' ',COALESCE(u2.last_name,'')), u1.name, CONCAT(COALESCE(u1.first_name,''),' ',COALESCE(u1.last_name,'')), 'Admin') as approved_by,
+                                             COALESCE(s.name, fs.supplier_name, 'Petron Corporation') as supplier,
+                                             GREATEST(1, COUNT(DISTINCT poi.id)) as item_count,
+                                             COALESCE(NULLIF(SUM(poi.quantity_ordered), 0), po.quantity, 0) as total_qty,
+                                             COALESCE(NULLIF(SUM(poi.total_price), 0), po.total_amount, 0) as estimated_cost,
+                                             po.expected_delivery_date,
+                                             po.status,
+                                             'merchandise' as po_type
+                                      FROM purchase_orders po
+                                      LEFT JOIN purchase_order_items poi ON poi.po_id = po.id
+                                      LEFT JOIN suppliers s ON po.supplier_id = s.id
+                                      LEFT JOIN fuel_suppliers fs ON po.supplier_id = fs.id
+                                      LEFT JOIN users u1 ON po.created_by = u1.id
+                                      LEFT JOIN users u2 ON po.approved_by = u2.id
+                                      {$cat_join}
+                                      {$po_where} {$cat_where}
+                                      GROUP BY po.id
+                                      ORDER BY po.created_at DESC";
+                        try {
+                            $stmt_m = $pdo->prepare($sql_merch);
+                            $stmt_m->execute($po_params);
+                            foreach ($stmt_m->fetchAll(PDO::FETCH_ASSOC) ?: [] as $rm) {
+                                $rm['requested_by'] = trim($rm['requested_by']) ?: 'Station Manager';
+                                $rm['approved_by']  = trim($rm['approved_by']) ?: 'Admin';
+                                $rows[] = $rm;
+                            }
+                        } catch (Exception $e) {
+                            error_log('Procurement PO merch error: ' . $e->getMessage());
+                        }
+                    }
                 }
 
-                $sql = "SELECT po.po_number,
-                               po.created_at as po_date,
-                               COALESCE(u1.name, CONCAT(u1.first_name,' ',u1.last_name), 'N/A') as requested_by,
-                               COALESCE(u2.name, CONCAT(u2.first_name,' ',u2.last_name), 'N/A') as approved_by,
-                               COALESCE(s.name, fs.supplier_name, 'Petron Corporation') as supplier,
-                               COUNT(DISTINCT poi.id) as item_count,
-                               COALESCE(SUM(poi.quantity_ordered), 0) as total_qty,
-                               COALESCE(SUM(poi.total_price), 0) as estimated_cost,
-                               po.expected_delivery_date,
-                               po.status
-                        FROM purchase_orders po
-                        LEFT JOIN purchase_order_items poi ON poi.po_id = po.id
-                        LEFT JOIN suppliers s ON po.supplier_id = s.id
-                        LEFT JOIN fuel_suppliers fs ON po.supplier_id = fs.id
-                        LEFT JOIN users u1 ON po.created_by = u1.id
-                        LEFT JOIN users u2 ON po.approved_by = u2.id
-                        {$cat_join}
-                        {$po_where} {$cat_where}
-                        GROUP BY po.id
-                        ORDER BY po.created_at DESC";
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute($po_params);
-                $data['rows'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                // 2. Fetch Fuel Purchase Orders
+                if (ard_table_exists($pdo, 'fuel_purchase_orders')) {
+                    $is_merch_only_category = !empty($filters['category']) && (stripos($filters['category'], 'fuel') === false);
+                    if (!$is_merch_only_category) {
+                        $fpo_where  = "WHERE DATE(fpo.created_at) BETWEEN :f_date_from AND :f_date_to";
+                        $fpo_params = ['f_date_from' => $date_from, 'f_date_to' => $date_to];
+                        if ($station_id > 0) {
+                            $fpo_where .= " AND fpo.station_id = :f_station_id";
+                            $fpo_params['f_station_id'] = $station_id;
+                        }
+                        if (!empty($filters['po_status'])) {
+                            $st_filter = trim($filters['po_status']);
+                            if (strtolower($st_filter) === 'approved') {
+                                $fpo_where .= " AND (fpo.status LIKE :f_po_status OR fpo.status IN ('Approved','Approved PO'))";
+                            } else {
+                                $fpo_where .= " AND fpo.status LIKE :f_po_status";
+                            }
+                            $fpo_params['f_po_status'] = '%' . $st_filter . '%';
+                        }
+                        if (!empty($filters['search'])) {
+                            $fpo_where .= " AND (fpo.po_number LIKE :f_search OR fpo.batch_id LIKE :f_search2)";
+                            $fpo_params['f_search']  = '%' . $filters['search'] . '%';
+                            $fpo_params['f_search2'] = '%' . $filters['search'] . '%';
+                        }
+
+                        // Group by canonical PO number (batch_id if set, else po_number)
+                        $sql_fuel = "SELECT 
+                                        COALESCE(NULLIF(fpo.batch_id, ''), fpo.po_number) as po_number,
+                                        MIN(fpo.created_at) as po_date,
+                                        COALESCE(MIN(u1.name), CONCAT(COALESCE(MIN(u1.first_name),''),' ',COALESCE(MIN(u1.last_name,''))), 'Station Manager') as requested_by,
+                                        COALESCE(MIN(u2.name), CONCAT(COALESCE(MIN(u2.first_name),''),' ',COALESCE(MIN(u2.last_name,''))), MIN(u1.name), CONCAT(COALESCE(MIN(u1.first_name),''),' ',COALESCE(MIN(u1.last_name,''))), 'Admin') as approved_by,
+                                        COALESCE(MIN(s.name), MIN(fs.supplier_name), 'Petron Corporation') as supplier,
+                                        COUNT(DISTINCT fpo.id) as item_count,
+                                        COALESCE(SUM(fpo.volume), 0) as total_qty,
+                                        COALESCE(SUM(fpo.total_amount), 0) as estimated_cost,
+                                        MAX(fpo.expected_delivery_date) as expected_delivery_date,
+                                        CASE
+                                            WHEN LOWER(MAX(fpo.status)) IN ('completed','received','stock-in complete') THEN 'Completed'
+                                            WHEN LOWER(MAX(fpo.status)) LIKE '%partial%' THEN 'Partially Delivered'
+                                            WHEN LOWER(MAX(fpo.status)) LIKE '%approv%' THEN 'Approved'
+                                            WHEN LOWER(MAX(fpo.status)) LIKE '%cancel%' THEN 'Cancelled'
+                                            ELSE MAX(fpo.status)
+                                        END as status,
+                                        'fuel' as po_type
+                                     FROM fuel_purchase_orders fpo
+                                     LEFT JOIN suppliers s ON fpo.supplier_id = s.id
+                                     LEFT JOIN fuel_suppliers fs ON fpo.supplier_id = fs.id
+                                     LEFT JOIN users u1 ON fpo.created_by = u1.id
+                                     LEFT JOIN users u2 ON fpo.approved_by = u2.id
+                                     {$fpo_where}
+                                     GROUP BY COALESCE(NULLIF(fpo.batch_id, ''), fpo.po_number)
+                                     ORDER BY po_date DESC";
+                        try {
+                            $stmt_f = $pdo->prepare($sql_fuel);
+                            $stmt_f->execute($fpo_params);
+                            foreach ($stmt_f->fetchAll(PDO::FETCH_ASSOC) ?: [] as $rf) {
+                                $rf['requested_by'] = trim($rf['requested_by']) ?: 'Station Manager';
+                                $rf['approved_by']  = trim($rf['approved_by']) ?: 'Admin';
+                                $rows[] = $rf;
+                            }
+                        } catch (Exception $e) {
+                            error_log('Procurement PO fuel error: ' . $e->getMessage());
+                        }
+                    }
+                }
+
+                // Sort all combined POs by date descending
+                usort($rows, function($a, $b) {
+                    return strtotime($b['po_date'] ?? 0) - strtotime($a['po_date'] ?? 0);
+                });
+                $data['rows'] = $rows;
 
             } elseif ($tab === 'fuel_reconciliation' || $tab === 'delivery_validation') {
                 $fr_where  = "WHERE DATE(ft.transaction_date) BETWEEN :date_from AND :date_to";
@@ -1862,40 +1971,181 @@ if (!function_exists('getAdminReportData')) {
                 $data['rows'] = $raw_rows;
 
             } elseif ($tab === 'po_vs_received') {
-                $pvr_where  = "WHERE DATE(po.created_at) BETWEEN :date_from AND :date_to";
-                $pvr_params = ['date_from' => $date_from, 'date_to' => $date_to];
-                if ($station_id > 0) { $pvr_where .= " AND po.station_id = :station_id"; $pvr_params['station_id'] = $station_id; }
-                if (!empty($filters['po_no'])) {
-                    $pvr_where .= " AND po.po_number LIKE :po_no";
-                    $pvr_params['po_no'] = '%' . $filters['po_no'] . '%';
-                }
-                if (!empty($filters['search'])) {
-                    $pvr_where .= " AND (po.po_number LIKE :search OR poi.item_name LIKE :search2)";
-                    $pvr_params['search']  = '%' . $filters['search'] . '%';
-                    $pvr_params['search2'] = '%' . $filters['search'] . '%';
+                $rows = [];
+
+                // 1. Merchandise PO vs Received
+                if (ard_table_exists($pdo, 'purchase_orders')) {
+                    $pvr_where  = "WHERE DATE(po.created_at) BETWEEN :date_from AND :date_to";
+                    $pvr_params = ['date_from' => $date_from, 'date_to' => $date_to];
+                    if ($station_id > 0) {
+                        $pvr_where .= " AND po.station_id = :station_id";
+                        $pvr_params['station_id'] = $station_id;
+                    }
+                    if (!empty($filters['po_no'])) {
+                        $pvr_where .= " AND (po.po_number LIKE :po_no OR po.batch_id LIKE :po_no2)";
+                        $pvr_params['po_no']  = '%' . $filters['po_no'] . '%';
+                        $pvr_params['po_no2'] = '%' . $filters['po_no'] . '%';
+                    }
+                    if (!empty($filters['search'])) {
+                        $pvr_where .= " AND (po.po_number LIKE :search OR poi.item_name LIKE :search2 OR po.product_name LIKE :search3)";
+                        $pvr_params['search']  = '%' . $filters['search'] . '%';
+                        $pvr_params['search2'] = '%' . $filters['search'] . '%';
+                        $pvr_params['search3'] = '%' . $filters['search'] . '%';
+                    }
+
+                    $sql_m_pvr = "SELECT po.po_number,
+                                         COALESCE(poi.item_name, po.product_name) as product,
+                                         COALESCE(poi.quantity_ordered, po.quantity, 0) as ordered_qty,
+                                         COALESCE(
+                                             poi.quantity_received,
+                                             poi.received_quantity,
+                                             (SELECT SUM(do2.actual_quantity)
+                                              FROM deliveries_oversight do2
+                                              WHERE (do2.source_ref = po.po_number OR do2.source_ref = po.batch_id OR do2.delivery_ref = po.po_number)
+                                                AND LOWER(TRIM(do2.product)) = LOWER(TRIM(COALESCE(poi.item_name, po.product_name)))
+                                                AND (do2.station_id = po.station_id OR po.station_id = 0)
+                                             ),
+                                             (CASE WHEN LOWER(COALESCE(po.status, '')) IN ('completed','received','stock-in complete') THEN COALESCE(poi.quantity_ordered, po.quantity, 0) ELSE 0 END)
+                                         ) as received_qty,
+                                         po.expected_delivery_date,
+                                         COALESCE(
+                                             poi.received_at,
+                                             po.stock_in_at,
+                                             (SELECT MAX(do2.delivery_date)
+                                              FROM deliveries_oversight do2
+                                              WHERE (do2.source_ref = po.po_number OR do2.source_ref = po.batch_id OR do2.delivery_ref = po.po_number)
+                                                AND LOWER(TRIM(do2.product)) = LOWER(TRIM(COALESCE(poi.item_name, po.product_name)))
+                                                AND (do2.station_id = po.station_id OR po.station_id = 0)
+                                             ),
+                                             (CASE WHEN LOWER(COALESCE(po.status, '')) IN ('completed','received','stock-in complete') THEN DATE(po.updated_at) ELSE NULL END)
+                                         ) as actual_delivery,
+                                         po.status as raw_po_status,
+                                         po.created_at
+                                  FROM purchase_orders po
+                                  LEFT JOIN purchase_order_items poi ON poi.po_id = po.id
+                                  {$pvr_where}
+                                  ORDER BY po.created_at DESC, poi.id ASC";
+                    try {
+                        $stmt_mp = $pdo->prepare($sql_m_pvr);
+                        $stmt_mp->execute($pvr_params);
+                        foreach ($stmt_mp->fetchAll(PDO::FETCH_ASSOC) ?: [] as $rm) {
+                            $ord = (float)($rm['ordered_qty'] ?? 0);
+                            $rec = (float)($rm['received_qty'] ?? 0);
+                            $var = $rec - $ord;
+                            $raw_st = strtolower($rm['raw_po_status'] ?? '');
+                            if ($rec <= 0 && !in_array($raw_st, ['completed','received','stock-in complete'], true)) {
+                                $disp_status = 'Pending Delivery';
+                            } elseif ($rec >= $ord && $ord > 0) {
+                                $disp_status = 'Complete';
+                            } elseif ($rec > $ord) {
+                                $disp_status = 'Over Delivered';
+                            } elseif ($rec < $ord && $rec > 0) {
+                                $disp_status = 'Partial';
+                            } elseif (in_array($raw_st, ['completed','received','stock-in complete'], true)) {
+                                $disp_status = 'Complete';
+                            } else {
+                                $disp_status = 'Under Delivered';
+                            }
+                            $rm['variance'] = $var;
+                            $rm['status']   = $disp_status;
+                            $rows[] = $rm;
+                        }
+                    } catch (Exception $e) {
+                        error_log('PO vs received merch error: ' . $e->getMessage());
+                    }
                 }
 
-                $sql = "SELECT po.po_number,
-                               COALESCE(poi.item_name, po.product_name) as product,
-                               COALESCE(poi.quantity_ordered, po.quantity, 0) as ordered_qty,
-                               COALESCE(poi.quantity_received, poi.received_quantity, 0) as received_qty,
-                               (COALESCE(poi.quantity_received, poi.received_quantity, 0) - COALESCE(poi.quantity_ordered, po.quantity, 0)) as variance,
-                               po.expected_delivery_date,
-                               COALESCE(poi.received_at, po.stock_in_at) as actual_delivery,
-                               CASE
-                                 WHEN poi.quantity_received IS NULL THEN 'Pending Delivery'
-                                 WHEN poi.quantity_received >= poi.quantity_ordered THEN 'Complete'
-                                 WHEN poi.quantity_received > poi.quantity_ordered THEN 'Over Delivered'
-                                 WHEN poi.quantity_received < poi.quantity_ordered AND poi.quantity_received > 0 THEN 'Partial'
-                                 ELSE 'Under Delivered'
-                               END as status
-                        FROM purchase_orders po
-                        LEFT JOIN purchase_order_items poi ON poi.po_id = po.id
-                        {$pvr_where}
-                        ORDER BY po.created_at DESC, poi.id ASC";
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute($pvr_params);
-                $data['rows'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                // 2. Fuel PO vs Received
+                if (ard_table_exists($pdo, 'fuel_purchase_orders')) {
+                    $has_act_vol = ard_column_exists($pdo, 'fuel_purchase_orders', 'actual_volume');
+                    $has_del_dat = ard_column_exists($pdo, 'fuel_purchase_orders', 'delivery_date');
+                    $act_vol_col = $has_act_vol ? "fpo.actual_volume" : "NULL";
+                    $del_dat_col = $has_del_dat ? "fpo.delivery_date" : "NULL";
+
+                    $f_pvr_where  = "WHERE DATE(fpo.created_at) BETWEEN :f_date_from AND :f_date_to";
+                    $f_pvr_params = ['f_date_from' => $date_from, 'f_date_to' => $date_to];
+                    if ($station_id > 0) {
+                        $f_pvr_where .= " AND fpo.station_id = :f_station_id";
+                        $f_pvr_params['f_station_id'] = $station_id;
+                    }
+                    if (!empty($filters['po_no'])) {
+                        $f_pvr_where .= " AND (fpo.po_number LIKE :f_po_no OR fpo.batch_id LIKE :f_po_no2)";
+                        $f_pvr_params['f_po_no']  = '%' . $filters['po_no'] . '%';
+                        $f_pvr_params['f_po_no2'] = '%' . $filters['po_no'] . '%';
+                    }
+                    if (!empty($filters['search'])) {
+                        $f_pvr_where .= " AND (fpo.po_number LIKE :f_search OR fpo.batch_id LIKE :f_search2 OR ft.name LIKE :f_search3)";
+                        $f_pvr_params['f_search']  = '%' . $filters['search'] . '%';
+                        $f_pvr_params['f_search2'] = '%' . $filters['search'] . '%';
+                        $f_pvr_params['f_search3'] = '%' . $filters['search'] . '%';
+                    }
+
+                    $sql_f_pvr = "SELECT 
+                                    COALESCE(NULLIF(fpo.batch_id, ''), fpo.po_number) as po_number,
+                                    COALESCE(ft.name, 'Fuel') as product,
+                                    COALESCE(fpo.volume, 0) as ordered_qty,
+                                    COALESCE(
+                                        {$act_vol_col},
+                                        (SELECT SUM(do2.actual_quantity)
+                                         FROM deliveries_oversight do2
+                                         WHERE (do2.source_ref = fpo.po_number OR do2.source_ref = fpo.batch_id OR do2.delivery_ref = fpo.po_number)
+                                           AND (LOWER(TRIM(do2.product)) = LOWER(TRIM(COALESCE(ft.name, ''))) OR do2.delivery_type = 'fuel')
+                                           AND (do2.station_id = fpo.station_id OR fpo.station_id = 0)
+                                        ),
+                                        (CASE WHEN LOWER(fpo.status) IN ('completed','received','stock-in complete') THEN fpo.volume ELSE 0 END)
+                                    ) as received_qty,
+                                    fpo.expected_delivery_date,
+                                    COALESCE(
+                                        {$del_dat_col},
+                                        (SELECT MAX(do2.delivery_date)
+                                         FROM deliveries_oversight do2
+                                         WHERE (do2.source_ref = fpo.po_number OR do2.source_ref = fpo.batch_id OR do2.delivery_ref = fpo.po_number)
+                                           AND (LOWER(TRIM(do2.product)) = LOWER(TRIM(COALESCE(ft.name, ''))) OR do2.delivery_type = 'fuel')
+                                           AND (do2.station_id = fpo.station_id OR fpo.station_id = 0)
+                                        ),
+                                        (CASE WHEN LOWER(fpo.status) IN ('completed','received','stock-in complete') THEN DATE(fpo.updated_at) ELSE NULL END)
+                                    ) as actual_delivery,
+                                    fpo.status as raw_po_status,
+                                    fpo.created_at
+                                  FROM fuel_purchase_orders fpo
+                                  LEFT JOIN fuel_types ft ON fpo.fuel_type_id = ft.id
+                                  {$f_pvr_where}
+                                  ORDER BY fpo.created_at DESC, fpo.id ASC";
+                    try {
+                        $stmt_fp = $pdo->prepare($sql_f_pvr);
+                        $stmt_fp->execute($f_pvr_params);
+                        foreach ($stmt_fp->fetchAll(PDO::FETCH_ASSOC) ?: [] as $rf) {
+                            $ord = (float)($rf['ordered_qty'] ?? 0);
+                            $rec = (float)($rf['received_qty'] ?? 0);
+                            $var = $rec - $ord;
+                            $raw_st = strtolower($rf['raw_po_status'] ?? '');
+                            if ($rec <= 0 && !in_array($raw_st, ['completed','received','stock-in complete'], true)) {
+                                $disp_status = 'Pending Delivery';
+                            } elseif ($rec >= $ord && $ord > 0) {
+                                $disp_status = 'Complete';
+                            } elseif ($rec > $ord) {
+                                $disp_status = 'Over Delivered';
+                            } elseif ($rec < $ord && $rec > 0) {
+                                $disp_status = 'Partial';
+                            } elseif (in_array($raw_st, ['completed','received','stock-in complete'], true)) {
+                                $disp_status = 'Complete';
+                            } else {
+                                $disp_status = 'Under Delivered';
+                            }
+                            $rf['variance'] = $var;
+                            $rf['status']   = $disp_status;
+                            $rows[] = $rf;
+                        }
+                    } catch (Exception $e) {
+                        error_log('PO vs received fuel error: ' . $e->getMessage());
+                    }
+                }
+
+                // Sort all rows by created_at descending
+                usort($rows, function($a, $b) {
+                    return strtotime($b['created_at'] ?? 0) - strtotime($a['created_at'] ?? 0);
+                });
+                $data['rows'] = $rows;
 
             } else { // stock_in_approval
                 $rows = [];

@@ -950,8 +950,8 @@
     function setupTablePagination(tableId, selectId, paginationContainerId, defaultRows) {
         var table = document.getElementById(tableId);
         if (!table) return;
-        var tbody = table.querySelector('tbody');
-        if (!tbody) return;
+        if (!table.querySelector('tbody')) return;
+        var currentPage = 1;
         
         var container = document.getElementById(paginationContainerId);
         if (container) {
@@ -959,7 +959,14 @@
             container.style.display = 'none';
         }
         
+        function getLiveTbody() {
+            var curTable = document.getElementById(tableId);
+            return curTable ? curTable.querySelector('tbody') : null;
+        }
+
         function updatePagination() {
+            var tbody = getLiveTbody();
+            if (!tbody) return;
             var allRows = Array.from(tbody.querySelectorAll('tr'));
             allRows.forEach(function(row) {
                 if (row.id.indexOf('NoResults') !== -1 || row.classList.contains('no-paginate') || row.classList.contains('no-results')) {
@@ -1011,6 +1018,8 @@
         if (searchInput) {
             searchInput.addEventListener('input', function() {
                 setTimeout(function() {
+                    var tbody = getLiveTbody();
+                    if (!tbody) return;
                     tbody.querySelectorAll('tr').forEach(function(row) {
                         if (row.style.display === 'none') {
                             row.classList.add('search-hidden');
@@ -1028,6 +1037,8 @@
         selectFilters.forEach(function(sel) {
             sel.addEventListener('change', function() {
                 setTimeout(function() {
+                    var tbody = getLiveTbody();
+                    if (!tbody) return;
                     tbody.querySelectorAll('tr').forEach(function(row) {
                         if (row.style.display === 'none') {
                             row.classList.add('search-hidden');

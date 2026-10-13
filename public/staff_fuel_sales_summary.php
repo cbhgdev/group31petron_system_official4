@@ -102,20 +102,28 @@ $today = date('Y-m-d');
 $default_date = $today;
 
 if (empty($_GET['date_from']) && empty($_GET['report_date'])) {
-    if ($active_tab === 'merchandise') {
-        try {
-            $dr = $pdo->prepare("SELECT DATE(COALESCE(transaction_date, created_at)) AS d FROM merchandise_transactions WHERE station_id=? ORDER BY COALESCE(transaction_date, created_at) DESC LIMIT 1");
-            $dr->execute([$station_id]);
-            $dr_row = $dr->fetch(PDO::FETCH_ASSOC);
-            if ($dr_row && $dr_row['d']) $default_date = $dr_row['d'];
-        } catch (Exception $e) {}
-    } else {
-        try {
-            $dr = $pdo->prepare("SELECT DATE(transaction_date) AS d FROM fuel_transactions WHERE station_id=? ORDER BY transaction_date DESC LIMIT 1");
-            $dr->execute([$station_id]);
-            $dr_row = $dr->fetch(PDO::FETCH_ASSOC);
-            if ($dr_row && $dr_row['d']) $default_date = $dr_row['d'];
-        } catch (Exception $e) {}
+    $candidate_dates = [];
+    try {
+        $dr = $pdo->prepare("SELECT DATE(COALESCE(transaction_date, created_at)) AS d FROM merchandise_transactions WHERE station_id=? ORDER BY COALESCE(transaction_date, created_at) DESC LIMIT 1");
+        $dr->execute([$station_id]);
+        $dr_row = $dr->fetch(PDO::FETCH_ASSOC);
+        if ($dr_row && !empty($dr_row['d'])) $candidate_dates[] = $dr_row['d'];
+    } catch (Exception $e) {}
+    try {
+        $dr2 = $pdo->prepare("SELECT DATE(created_at) AS d FROM job_orders WHERE station_id=? ORDER BY created_at DESC LIMIT 1");
+        $dr2->execute([$station_id]);
+        $dr2_row = $dr2->fetch(PDO::FETCH_ASSOC);
+        if ($dr2_row && !empty($dr2_row['d'])) $candidate_dates[] = $dr2_row['d'];
+    } catch (Exception $e) {}
+    try {
+        $dr3 = $pdo->prepare("SELECT DATE(transaction_date) AS d FROM fuel_transactions WHERE station_id=? ORDER BY transaction_date DESC LIMIT 1");
+        $dr3->execute([$station_id]);
+        $dr3_row = $dr3->fetch(PDO::FETCH_ASSOC);
+        if ($dr3_row && !empty($dr3_row['d'])) $candidate_dates[] = $dr3_row['d'];
+    } catch (Exception $e) {}
+    if (!empty($candidate_dates)) {
+        rsort($candidate_dates);
+        $default_date = $candidate_dates[0];
     }
 }
 
@@ -286,6 +294,33 @@ function staff_report_line_amount_sql(string $itemAlias = 'mti', string $txAlias
     return "ROUND(COALESCE($itemAlias.subtotal, COALESCE($itemAlias.quantity, 0) * COALESCE($itemAlias.unit_price, 0), 0) * CASE WHEN COALESCE($sumAlias.item_subtotal, 0) > 0 AND COALESCE($txAlias.total_amount, 0) > 0 THEN $txAlias.total_amount / $sumAlias.item_subtotal ELSE 1 END, 2)";
 }
 
+if (!function_exists('staff_report_payment_method_sql')) {
+    function staff_report_payment_method_sql(PDO $pdo, string $table = 'merchandise_transactions', string $alias = 'mt'): string {
+        $hasEwProv  = column_exists($pdo, $table, 'ewallet_provider');
+        $hasCardSub = column_exists($pdo, $table, 'card_sub_type');
+        $hasCardTyp = column_exists($pdo, $table, 'card_type');
+
+        $ewExpr = $hasEwProv
+            ? "CASE WHEN LOWER(TRIM(COALESCE($alias.ewallet_provider, ''))) IN ('maya', 'paymaya', 'pay maya') THEN 'Maya' ELSE COALESCE(NULLIF(TRIM($alias.ewallet_provider), ''), 'GCash') END"
+            : "'GCash'";
+
+        $cardParts = [];
+        if ($hasCardSub) $cardParts[] = "NULLIF(TRIM($alias.card_sub_type), '')";
+        if ($hasCardTyp) $cardParts[] = "NULLIF(TRIM($alias.card_type), '')";
+        $cardSource = $cardParts ? ('COALESCE(' . implode(', ', $cardParts) . ", '')") : "''";
+        $cardExpr = "CASE WHEN LOWER($cardSource) LIKE '%debit%' THEN 'Debit Card' ELSE 'Credit Card' END";
+
+        return "CASE
+            WHEN LOWER(TRIM(COALESCE($alias.payment_method, ''))) IN ('e-wallet', 'ewallet') THEN $ewExpr
+            WHEN LOWER(TRIM(COALESCE($alias.payment_method, ''))) = 'card' THEN $cardExpr
+            WHEN LOWER(TRIM(COALESCE($alias.payment_method, ''))) IN ('credit', 'credit account', 'account') THEN 'Credit Account'
+            WHEN LOWER(TRIM(COALESCE($alias.payment_method, ''))) IN ('maya', 'paymaya', 'pay maya') THEN 'Maya'
+            WHEN LOWER(TRIM(COALESCE($alias.payment_method, ''))) = 'gcash' THEN 'GCash'
+            ELSE COALESCE(NULLIF(TRIM($alias.payment_method), ''), 'Cash')
+        END";
+    }
+}
+
 function staff_report_fetch_merchandise_rows(PDO $pdo, int $station_id, string $date_from, string $date_to): array {
     if (!table_exists($pdo, 'merchandise_transactions')) {
         return [];
@@ -293,6 +328,22 @@ function staff_report_fetch_merchandise_rows(PDO $pdo, int $station_id, string $
 
     $encoderSql = table_exists($pdo, 'users') ? staff_report_user_display_sql($pdo, 'u') : "'N/A'";
     $validWhere = staff_report_valid_merchandise_where($pdo, 'mt');
+    $pmSql      = staff_report_payment_method_sql($pdo, 'merchandise_transactions', 'mt');
+    $hasTxnType = column_exists($pdo, 'merchandise_transactions', 'transaction_type');
+    $txnTypeSql = $hasTxnType ? "COALESCE(NULLIF(LOWER(TRIM(mt.transaction_type)), ''), 'merchandise')" : "'merchandise'";
+    $hasOrNo    = column_exists($pdo, 'merchandise_transactions', 'or_number');
+    $orNoSql    = $hasOrNo ? "NULLIF(TRIM(mt.or_number), '')" : "NULL";
+    $hasItemSku = column_exists($pdo, 'merchandise_transactions', 'item_sku');
+    $skuFallback = $hasItemSku ? "NULLIF(mt.item_sku, '')" : "NULL";
+    $hasQtyCol  = column_exists($pdo, 'merchandise_transactions', 'quantity');
+    $qtyFallback = $hasQtyCol ? "mt.quantity" : "1";
+    $hasPriceCol = column_exists($pdo, 'merchandise_transactions', 'unit_price');
+    $priceFallback = $hasPriceCol ? "mt.unit_price" : "mt.total_amount";
+    $hasTxnDate = column_exists($pdo, 'merchandise_transactions', 'transaction_date');
+    $dateExpr   = $hasTxnDate ? "COALESCE(mt.transaction_date, mt.created_at)" : "mt.created_at";
+    $dateWhere  = $hasTxnDate
+        ? "(DATE(mt.transaction_date) BETWEEN ? AND ? OR DATE(mt.created_at) BETWEEN ? AND ?)"
+        : "(DATE(mt.created_at) BETWEEN ? AND ? OR DATE(mt.created_at) BETWEEN ? AND ?)";
 
     if (table_exists($pdo, 'merchandise_transaction_items')) {
         $lineAmountSql = staff_report_line_amount_sql('mti', 'mt');
@@ -300,35 +351,39 @@ function staff_report_fetch_merchandise_rows(PDO $pdo, int $station_id, string $
             SELECT
                 mt.id,
                 mt.transaction_id,
+                $orNoSql AS transaction_number,
+                $txnTypeSql AS transaction_type,
                 COALESCE(NULLIF(mt.customer_name, ''), 'Walk-in') AS customer_name,
                 COALESCE(NULLIF(mti.category, ''), 'General') AS category,
-                COALESCE(NULLIF(mti.product_name, ''), mt.item_sku, 'Item') AS product_name,
-                COALESCE(mti.quantity, mt.quantity, 0) AS stock_out,
-                COALESCE(mti.unit_price, mt.unit_price, 0) AS unit_price,
+                COALESCE(NULLIF(mti.product_name, ''), $skuFallback, 'Item') AS product_name,
+                COALESCE(mti.quantity, $qtyFallback, 0) AS stock_out,
+                COALESCE(mti.unit_price, $priceFallback, 0) AS unit_price,
                 CASE WHEN mti.id IS NOT NULL THEN $lineAmountSql ELSE COALESCE(mt.total_amount, 0) END AS total_amount,
                 COALESCE(mt.shift_period, '') AS shift,
                 $encoderSql AS encoder,
-                COALESCE(mt.payment_method, 'Cash') AS payment_method,
-                COALESCE(mt.transaction_date, mt.created_at) AS created_at
+                $pmSql AS payment_method,
+                $dateExpr AS created_at
             FROM merchandise_transactions mt
             LEFT JOIN (
                 SELECT transaction_id,
                        SUM(COALESCE(subtotal, COALESCE(quantity, 0) * COALESCE(unit_price, 0), 0)) AS item_subtotal
                 FROM merchandise_transaction_items
                 GROUP BY transaction_id
-            ) mis ON (mis.transaction_id = CAST(mt.id AS CHAR) OR mis.transaction_id = mt.transaction_id)
+            ) mis ON mis.transaction_id = mt.id
             LEFT JOIN merchandise_transaction_items mti
-                   ON (mti.transaction_id = CAST(mt.id AS CHAR) OR mti.transaction_id = mt.transaction_id)
+                   ON mti.transaction_id = mt.id
                   AND LOWER(COALESCE(mti.item_type, 'merchandise')) <> 'service'
+                  AND LOWER(TRIM(COALESCE(mti.category, ''))) NOT IN ('tip', 'labor', 'labor fee', 'labor charge', 'service fee')
+                  AND LOWER(TRIM(COALESCE(mti.product_name, ''))) NOT IN ('tip', 'labor', 'labor fee', 'labor charge')
             LEFT JOIN users u ON mt.staff_id = u.id
             WHERE mt.station_id = ?
-              AND (DATE(mt.transaction_date) BETWEEN ? AND ? OR DATE(mt.created_at) BETWEEN ? AND ?)
+              AND $dateWhere
               AND $validWhere
               AND (
                     mti.id IS NOT NULL
-                    OR LOWER(COALESCE(mt.transaction_type, 'merchandise')) NOT IN ('job_order','combined')
+                    OR $txnTypeSql NOT IN ('job_order','combined')
                   )
-            ORDER BY category, COALESCE(mt.transaction_date, mt.created_at), mt.id
+            ORDER BY $dateExpr ASC, mt.id ASC, mti.id ASC
         ");
         $stmt->execute([$station_id, $date_from, $date_to, $date_from, $date_to]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -338,23 +393,25 @@ function staff_report_fetch_merchandise_rows(PDO $pdo, int $station_id, string $
         SELECT
             mt.id,
             mt.transaction_id,
+            $orNoSql AS transaction_number,
+            $txnTypeSql AS transaction_type,
             COALESCE(NULLIF(mt.customer_name, ''), 'Walk-in') AS customer_name,
             'General' AS category,
-            COALESCE(NULLIF(mt.item_sku, ''), 'Item') AS product_name,
-            COALESCE(mt.quantity, 0) AS stock_out,
-            COALESCE(mt.unit_price, 0) AS unit_price,
+            COALESCE($skuFallback, 'Item') AS product_name,
+            COALESCE($qtyFallback, 0) AS stock_out,
+            COALESCE($priceFallback, 0) AS unit_price,
             COALESCE(mt.total_amount, 0) AS total_amount,
             COALESCE(mt.shift_period, '') AS shift,
             $encoderSql AS encoder,
-            COALESCE(mt.payment_method, 'Cash') AS payment_method,
-            COALESCE(mt.transaction_date, mt.created_at) AS created_at
+            $pmSql AS payment_method,
+            $dateExpr AS created_at
         FROM merchandise_transactions mt
         LEFT JOIN users u ON mt.staff_id = u.id
         WHERE mt.station_id = ?
-          AND (DATE(mt.transaction_date) BETWEEN ? AND ? OR DATE(mt.created_at) BETWEEN ? AND ?)
+          AND $dateWhere
           AND $validWhere
-          AND LOWER(COALESCE(mt.transaction_type, 'merchandise')) NOT IN ('job_order','combined')
-        ORDER BY COALESCE(mt.transaction_date, mt.created_at), mt.id
+          AND $txnTypeSql NOT IN ('job_order','combined')
+        ORDER BY $dateExpr ASC, mt.id ASC
     ");
     $stmt->execute([$station_id, $date_from, $date_to, $date_from, $date_to]);
     return $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
@@ -367,152 +424,180 @@ function staff_report_fetch_service_income_rows(PDO $pdo, int $station_id, strin
 
     if (table_exists($pdo, 'merchandise_transactions')) {
         $validWhere = staff_report_valid_merchandise_where($pdo, 'mt');
-        $jobOrderFilter = "(
-            LOWER(COALESCE(mt.transaction_type, '')) IN ('job_order','combined')
-            OR NULLIF(TRIM(COALESCE(mt.job_order_service, '')), '') IS NOT NULL
-            OR mt.job_order_id IS NOT NULL
-            OR mt.job_order_db_id IS NOT NULL
-        )";
+        $pmSql      = staff_report_payment_method_sql($pdo, 'merchandise_transactions', 'mt');
+        $hasTxnDate = column_exists($pdo, 'merchandise_transactions', 'transaction_date');
+        $dateExpr   = $hasTxnDate ? "COALESCE(mt.transaction_date, mt.created_at)" : "mt.created_at";
+        $dateWhere  = $hasTxnDate
+            ? "(DATE(mt.transaction_date) BETWEEN ? AND ? OR DATE(mt.created_at) BETWEEN ? AND ?)"
+            : "(DATE(mt.created_at) BETWEEN ? AND ? OR DATE(mt.created_at) BETWEEN ? AND ?)";
+        $hasTxnType = column_exists($pdo, 'merchandise_transactions', 'transaction_type');
+        $txnTypeSql = $hasTxnType ? "COALESCE(NULLIF(LOWER(TRIM(mt.transaction_type)), ''), 'job_order')" : "'job_order'";
+        $hasJoService = column_exists($pdo, 'merchandise_transactions', 'job_order_service');
+        $hasJoId      = column_exists($pdo, 'merchandise_transactions', 'job_order_id');
+        $hasJoDbId    = column_exists($pdo, 'merchandise_transactions', 'job_order_db_id');
+        $hasMechId    = column_exists($pdo, 'merchandise_transactions', 'job_order_mechanic_id');
+        $hasMechName  = column_exists($pdo, 'merchandise_transactions', 'job_order_mechanic_name');
+        $hasVehPlate  = column_exists($pdo, 'merchandise_transactions', 'job_order_vehicle_plate');
+        $hasVehType   = column_exists($pdo, 'merchandise_transactions', 'job_order_vehicle_type');
+        $hasItemSku   = column_exists($pdo, 'merchandise_transactions', 'item_sku');
 
+        $joFilterParts = [];
+        if ($hasTxnType)   $joFilterParts[] = "LOWER(COALESCE(mt.transaction_type, '')) IN ('job_order','combined')";
+        if ($hasJoService) $joFilterParts[] = "NULLIF(TRIM(COALESCE(mt.job_order_service, '')), '') IS NOT NULL";
+        if ($hasJoId)      $joFilterParts[] = "mt.job_order_id IS NOT NULL";
+        if ($hasJoDbId)    $joFilterParts[] = "mt.job_order_db_id IS NOT NULL";
         if (table_exists($pdo, 'merchandise_transaction_items')) {
-            $lineAmountSql = staff_report_line_amount_sql('mti', 'mt');
-            $hasJobOrdersTable = table_exists($pdo, 'job_orders');
-            $joJoinSql = $hasJobOrdersTable
-                ? "LEFT JOIN job_orders jo ON jo.id = mt.job_order_db_id"
-                : "";
-            $joNumberSql = $hasJobOrdersTable
-                ? "COALESCE(NULLIF(jo.job_order_number,''), CONCAT('JO-', DATE_FORMAT(COALESCE(mt.transaction_date,mt.created_at),'%Y%m%d'), '-', LPAD(mt.job_order_db_id,6,'0')))"
-                : "CONCAT('JO-', DATE_FORMAT(COALESCE(mt.transaction_date,mt.created_at),'%Y%m%d'), '-', LPAD(COALESCE(mt.job_order_db_id,mt.id),6,'0'))";
-            $joCustomerSql = $hasJobOrdersTable
-                ? "COALESCE(NULLIF(TRIM(CONCAT(COALESCE(cu.first_name,''),' ',COALESCE(cu.last_name,''))),''), NULLIF(cu.name,''), NULLIF(jo.customer_name,''), NULLIF(mt.customer_name,''), 'Walk-in')"
-                : "COALESCE(NULLIF(mt.customer_name,''), 'Walk-in')";
-            $joVehicleSql = $hasJobOrdersTable
-                ? "COALESCE(NULLIF(CONCAT_WS(' ', NULLIF(jo.vehicle_plate,''), NULLIF(jo.vehicle_type,'')),''), NULLIF(CONCAT_WS(' ', NULLIF(mt.job_order_vehicle_plate,''), NULLIF(mt.job_order_vehicle_type,'')),''), NULL)"
-                : "NULLIF(CONCAT_WS(' ', NULLIF(mt.job_order_vehicle_plate,''), NULLIF(mt.job_order_vehicle_type,'')),'')"; 
-            $joMechanicSql = table_exists($pdo, 'users') && $hasJobOrdersTable
-                ? "COALESCE(NULLIF(TRIM(CONCAT(COALESCE(um.first_name,''),' ',COALESCE(um.last_name,''))),''), NULLIF(um.name,''), NULLIF(um.username,''), NULLIF(mt.job_order_mechanic_name,''))"
-                : "NULLIF(mt.job_order_mechanic_name,'')";
-            $joMechanicJoinSql = (table_exists($pdo, 'users') && $hasJobOrdersTable)
-                ? "LEFT JOIN users um ON um.id = jo.assigned_mechanic_id"
-                : "";
-            $joCuJoinSql = ($hasJobOrdersTable && table_exists($pdo, 'customers'))
-                ? "LEFT JOIN customers cu ON cu.id = jo.customer_id"
-                : "";
-            $stmt = $pdo->prepare("
-                SELECT
-                    CONCAT('mt-service-', mt.id, '-', mti.id) AS source_key,
-                    mt.id,
-                    mt.job_order_db_id AS native_job_order_id,
-                    $joNumberSql AS job_order_number,
-                    COALESCE(NULLIF(mt.job_order_service, ''), NULLIF(mti.product_name, ''), 'Service') AS service_type,
-                    COALESCE(mti.subtotal, COALESCE(mti.quantity, 0) * COALESCE(mti.unit_price, 0), 0) AS labor_fee,
-                    (
-                        SELECT GROUP_CONCAT(CONCAT(mi.product_name, ' (x', FORMAT(mi.quantity, 0), ')') ORDER BY mi.id SEPARATOR ', ')
-                        FROM merchandise_transaction_items mi
-                        WHERE mi.transaction_id = mt.id
-                          AND LOWER(COALESCE(mi.item_type, 'merchandise')) <> 'service'
-                    ) AS parts_used,
-                    $lineAmountSql AS total_amount,
-                    COALESCE(mt.shift_period, '') AS shift,
-                    $encoderSql AS encoder,
-                    $joCustomerSql AS customer_name,
-                    $joVehicleSql AS vehicle_plate,
-                    $joMechanicSql AS mechanic_name,
-                    COALESCE(mt.payment_method, 'Cash') AS payment_method,
-                    COALESCE(mt.transaction_date, mt.created_at) AS created_at
-                FROM merchandise_transactions mt
-                LEFT JOIN (
-                    SELECT transaction_id,
-                           SUM(COALESCE(subtotal, COALESCE(quantity, 0) * COALESCE(unit_price, 0), 0)) AS item_subtotal
-                    FROM merchandise_transaction_items
-                    GROUP BY transaction_id
-                ) mis ON mis.transaction_id = mt.id
-                INNER JOIN merchandise_transaction_items mti
-                        ON mti.transaction_id = mt.id
-                       AND LOWER(COALESCE(mti.item_type, 'merchandise')) = 'service'
-                LEFT JOIN users u ON mt.staff_id = u.id
-                $joJoinSql
-                $joCuJoinSql
-                $joMechanicJoinSql
-                WHERE mt.station_id = ?
-                  AND (DATE(mt.transaction_date) BETWEEN ? AND ? OR DATE(mt.created_at) BETWEEN ? AND ?)
-                  AND $validWhere
-                  AND $jobOrderFilter
-                ORDER BY COALESCE(mt.transaction_date, mt.created_at), mt.id, mti.id
-            ");
-            $stmt->execute([$station_id, $date_from, $date_to, $date_from, $date_to]);
-            $rows = array_merge($rows, $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+            $joFilterParts[] = "mti_agg.has_service_item = 1";
         }
+        $jobOrderFilter = $joFilterParts ? '(' . implode(' OR ', $joFilterParts) . ')' : '1=1';
 
-        $fallbackNotExists = table_exists($pdo, 'merchandise_transaction_items')
-            ? "AND NOT EXISTS (
-                    SELECT 1
-                    FROM merchandise_transaction_items mi
-                    WHERE mi.transaction_id = mt.id
-                      AND LOWER(COALESCE(mi.item_type, 'merchandise')) = 'service'
-               )"
-            : '';
-        $partsSql = table_exists($pdo, 'merchandise_transaction_items')
-            ? "(
-                    SELECT GROUP_CONCAT(CONCAT(mi.product_name, ' (x', FORMAT(mi.quantity, 0), ')') ORDER BY mi.id SEPARATOR ', ')
-                    FROM merchandise_transaction_items mi
-                    WHERE mi.transaction_id = mt.id
-                      AND LOWER(COALESCE(mi.item_type, 'merchandise')) <> 'service'
-               )"
-            : "NULL";
-
-        // Re-use same join vars from above (if items table exists) or redefine
-        if (!isset($hasJobOrdersTable)) $hasJobOrdersTable = table_exists($pdo, 'job_orders');
-        $fb_joJoin    = $hasJobOrdersTable ? "LEFT JOIN job_orders jo ON jo.id = mt.job_order_db_id" : "";
-        $fb_joNum     = $hasJobOrdersTable
-            ? "COALESCE(NULLIF(jo.job_order_number,''), CONCAT('JO-', DATE_FORMAT(COALESCE(mt.transaction_date,mt.created_at),'%Y%m%d'), '-', LPAD(mt.job_order_db_id,6,'0')))"
-            : "CONCAT('JO-', DATE_FORMAT(COALESCE(mt.transaction_date,mt.created_at),'%Y%m%d'), '-', LPAD(COALESCE(mt.job_order_db_id,mt.id),6,'0'))";
-        $fb_joCust    = $hasJobOrdersTable
+        $hasJobOrdersTable = table_exists($pdo, 'job_orders');
+        $joDbIdExpr = $hasJoDbId ? "mt.job_order_db_id" : "NULL";
+        $joJoinSql  = ($hasJobOrdersTable && $hasJoDbId)
+            ? "LEFT JOIN job_orders jo ON jo.id = mt.job_order_db_id"
+            : "";
+        $joNumberSql = ($hasJobOrdersTable && $hasJoDbId)
+            ? "COALESCE(NULLIF(jo.job_order_number,''), CONCAT('JO-', DATE_FORMAT($dateExpr,'%Y%m%d'), '-', LPAD(COALESCE(mt.job_order_db_id, mt.id), 6, '0')))"
+            : "CONCAT('JO-', DATE_FORMAT($dateExpr,'%Y%m%d'), '-', LPAD(mt.id, 6, '0'))";
+        $joCustomerSql = ($hasJobOrdersTable && $hasJoDbId && table_exists($pdo, 'customers'))
             ? "COALESCE(NULLIF(TRIM(CONCAT(COALESCE(cu.first_name,''),' ',COALESCE(cu.last_name,''))),''), NULLIF(cu.name,''), NULLIF(jo.customer_name,''), NULLIF(mt.customer_name,''), 'Walk-in')"
             : "COALESCE(NULLIF(mt.customer_name,''), 'Walk-in')";
-        $fb_joVeh     = $hasJobOrdersTable
-            ? "COALESCE(NULLIF(CONCAT_WS(' ', NULLIF(jo.vehicle_plate,''), NULLIF(jo.vehicle_type,'')),''), NULLIF(CONCAT_WS(' ', NULLIF(mt.job_order_vehicle_plate,''), NULLIF(mt.job_order_vehicle_type,'')),''), NULL)"
-            : "NULLIF(CONCAT_WS(' ', NULLIF(mt.job_order_vehicle_plate,''), NULLIF(mt.job_order_vehicle_type,'')),'')"; 
-        $fb_joMech    = (table_exists($pdo, 'users') && $hasJobOrdersTable)
-            ? "COALESCE(NULLIF(TRIM(CONCAT(COALESCE(um.first_name,''),' ',COALESCE(um.last_name,''))),''), NULLIF(um.name,''), NULLIF(um.username,''), NULLIF(mt.job_order_mechanic_name,''))"
-            : "NULLIF(mt.job_order_mechanic_name,'')";
-        $fb_mechJoin  = (table_exists($pdo, 'users') && $hasJobOrdersTable) ? "LEFT JOIN users um ON um.id = jo.assigned_mechanic_id" : "";
-        $fb_cuJoin    = ($hasJobOrdersTable && table_exists($pdo, 'customers')) ? "LEFT JOIN customers cu ON cu.id = jo.customer_id" : "";
+        $mtVehExpr = ($hasVehPlate && $hasVehType)
+            ? "NULLIF(CONCAT_WS(' ', NULLIF(mt.job_order_vehicle_plate,''), NULLIF(mt.job_order_vehicle_type,'')),'')"
+            : ($hasVehPlate ? "NULLIF(mt.job_order_vehicle_plate,'')" : "NULL");
+        $joVehicleSql = ($hasJobOrdersTable && $hasJoDbId)
+            ? "COALESCE(NULLIF(CONCAT_WS(' ', NULLIF(jo.vehicle_plate,''), NULLIF(jo.vehicle_type,'')),''), $mtVehExpr, NULL)"
+            : $mtVehExpr;
+
+        $mechIdJoinExpr = ($hasJobOrdersTable && $hasJoDbId && $hasMechId)
+            ? "COALESCE(mt.job_order_mechanic_id, jo.assigned_mechanic_id)"
+            : ($hasMechId ? "mt.job_order_mechanic_id" : (($hasJobOrdersTable && $hasJoDbId) ? "jo.assigned_mechanic_id" : "NULL"));
+        $joMechanicJoinSql = (table_exists($pdo, 'users') && $mechIdJoinExpr !== "NULL")
+            ? "LEFT JOIN users um ON um.id = $mechIdJoinExpr"
+            : "";
+        $mtMechNameExpr = $hasMechName ? "NULLIF(TRIM(mt.job_order_mechanic_name),'')" : "NULL";
+        $joMechanicSql = ($joMechanicJoinSql !== "")
+            ? "COALESCE($mtMechNameExpr, NULLIF(TRIM(CONCAT(COALESCE(um.first_name,''),' ',COALESCE(um.last_name,''))),''), NULLIF(um.name,''), NULLIF(um.username,''))"
+            : $mtMechNameExpr;
+        $joCuJoinSql = ($hasJobOrdersTable && $hasJoDbId && table_exists($pdo, 'customers'))
+            ? "LEFT JOIN customers cu ON cu.id = jo.customer_id"
+            : "";
+
+        $mtiAggJoinSql = table_exists($pdo, 'merchandise_transaction_items')
+            ? "LEFT JOIN (
+                SELECT
+                    transaction_id,
+                    MAX(CASE WHEN LOWER(COALESCE(item_type, 'merchandise')) = 'service' OR LOWER(TRIM(COALESCE(category, ''))) IN ('service fee', 'services', 'service', 'tip', 'labor', 'labor fee', 'labor charge') THEN 1 ELSE 0 END) AS has_service_item,
+                    SUM(COALESCE(subtotal, COALESCE(quantity, 0) * COALESCE(unit_price, 0), 0)) AS all_items_subtotal,
+                    SUM(CASE
+                        WHEN LOWER(TRIM(COALESCE(category, ''))) IN ('tip', 'labor', 'labor fee', 'labor charge')
+                          OR LOWER(TRIM(COALESCE(product_name, ''))) IN ('tip', 'labor', 'labor fee', 'labor charge')
+                          OR LOWER(TRIM(COALESCE(product_name, ''))) LIKE '%labor%'
+                          OR LOWER(TRIM(COALESCE(product_name, ''))) LIKE '%tip%'
+                        THEN COALESCE(subtotal, COALESCE(quantity, 0) * COALESCE(unit_price, 0), 0)
+                        ELSE 0
+                    END) AS raw_labor_fee,
+                    SUM(CASE
+                        WHEN (LOWER(COALESCE(item_type, 'merchandise')) = 'service'
+                              OR LOWER(TRIM(COALESCE(category, ''))) IN ('service fee', 'services', 'service'))
+                         AND LOWER(TRIM(COALESCE(category, ''))) NOT IN ('tip', 'labor', 'labor fee', 'labor charge')
+                         AND LOWER(TRIM(COALESCE(product_name, ''))) NOT IN ('tip', 'labor', 'labor fee', 'labor charge')
+                         AND LOWER(TRIM(COALESCE(product_name, ''))) NOT LIKE '%labor%'
+                         AND LOWER(TRIM(COALESCE(product_name, ''))) NOT LIKE '%tip%'
+                        THEN COALESCE(subtotal, COALESCE(quantity, 0) * COALESCE(unit_price, 0), 0)
+                        ELSE 0
+                    END) AS raw_service_fee,
+                    SUM(CASE
+                        WHEN LOWER(COALESCE(item_type, 'merchandise')) <> 'service'
+                         AND LOWER(TRIM(COALESCE(category, ''))) NOT IN ('tip', 'labor', 'labor fee', 'labor charge', 'service fee', 'services', 'service')
+                        THEN COALESCE(subtotal, COALESCE(quantity, 0) * COALESCE(unit_price, 0), 0)
+                        ELSE 0
+                    END) AS raw_merch_subtotal,
+                    GROUP_CONCAT(CASE
+                        WHEN (LOWER(COALESCE(item_type, 'merchandise')) = 'service'
+                              OR LOWER(TRIM(COALESCE(category, ''))) IN ('service fee', 'services', 'service'))
+                         AND LOWER(TRIM(COALESCE(category, ''))) NOT IN ('tip', 'labor', 'labor fee', 'labor charge')
+                         AND LOWER(TRIM(COALESCE(product_name, ''))) NOT IN ('tip', 'labor', 'labor fee', 'labor charge')
+                         AND LOWER(TRIM(COALESCE(product_name, ''))) NOT LIKE '%labor%'
+                         AND LOWER(TRIM(COALESCE(product_name, ''))) NOT LIKE '%tip%'
+                        THEN product_name
+                        ELSE NULL
+                    END ORDER BY id SEPARATOR ', ') AS service_names,
+                    GROUP_CONCAT(CASE
+                        WHEN LOWER(COALESCE(item_type, 'merchandise')) <> 'service'
+                         AND LOWER(TRIM(COALESCE(category, ''))) NOT IN ('tip', 'labor', 'labor fee', 'labor charge', 'service fee', 'services', 'service')
+                        THEN CONCAT(product_name, ' (x', FORMAT(quantity, 0), ')')
+                        ELSE NULL
+                    END ORDER BY id SEPARATOR ', ') AS parts_used
+                FROM merchandise_transaction_items
+                GROUP BY transaction_id
+            ) mti_agg ON mti_agg.transaction_id = mt.id"
+            : "LEFT JOIN (SELECT NULL AS transaction_id, 0 AS has_service_item, 0 AS all_items_subtotal, 0 AS raw_labor_fee, 0 AS raw_service_fee, 0 AS raw_merch_subtotal, NULL AS service_names, NULL AS parts_used) mti_agg ON 1=0";
+
+        $svcNameExpr = "COALESCE(" . ($hasJoService ? "NULLIF(TRIM(mt.job_order_service), ''), " : "") . "NULLIF(mti_agg.service_names, ''), " . ($hasItemSku ? "NULLIF(mt.item_sku, ''), " : "") . "'Service')";
 
         $stmt = $pdo->prepare("
             SELECT
                 CONCAT('mt-job-', mt.id) AS source_key,
                 mt.id,
-                mt.job_order_db_id AS native_job_order_id,
-                $fb_joNum AS job_order_number,
-                COALESCE(NULLIF(mt.job_order_service, ''), NULLIF(mt.item_sku, ''), 'Service') AS service_type,
-                COALESCE(NULLIF(mt.subtotal_amount, 0), NULLIF(mt.unit_price, 0), mt.total_amount, 0) AS labor_fee,
-                $partsSql AS parts_used,
-                COALESCE(mt.total_amount, 0) AS total_amount,
+                mt.transaction_id,
+                $txnTypeSql AS transaction_type,
+                $joDbIdExpr AS native_job_order_id,
+                $joNumberSql AS job_order_number,
+                $svcNameExpr AS service_type,
+                COALESCE(mti_agg.raw_labor_fee, 0) AS raw_labor_fee,
+                COALESCE(mti_agg.raw_service_fee, 0) AS raw_service_fee,
+                COALESCE(mti_agg.raw_merch_subtotal, 0) AS raw_merch_subtotal,
+                COALESCE(mti_agg.all_items_subtotal, 0) AS all_items_subtotal,
+                COALESCE(mt.total_amount, 0) AS mt_total_amount,
+                mti_agg.parts_used AS parts_used,
                 COALESCE(mt.shift_period, '') AS shift,
                 $encoderSql AS encoder,
-                $fb_joCust AS customer_name,
-                $fb_joVeh AS vehicle_plate,
-                $fb_joMech AS mechanic_name,
-                COALESCE(mt.payment_method, 'Cash') AS payment_method,
-                COALESCE(mt.transaction_date, mt.created_at) AS created_at
+                $joCustomerSql AS customer_name,
+                $joVehicleSql AS vehicle_plate,
+                $joMechanicSql AS mechanic_name,
+                $pmSql AS payment_method,
+                $dateExpr AS created_at
             FROM merchandise_transactions mt
+            $mtiAggJoinSql
             LEFT JOIN users u ON mt.staff_id = u.id
-            $fb_joJoin
-            $fb_cuJoin
-            $fb_mechJoin
+            $joJoinSql
+            $joCuJoinSql
+            $joMechanicJoinSql
             WHERE mt.station_id = ?
-              AND (DATE(mt.transaction_date) BETWEEN ? AND ? OR DATE(mt.created_at) BETWEEN ? AND ?)
+              AND $dateWhere
               AND $validWhere
               AND $jobOrderFilter
-              $fallbackNotExists
-            ORDER BY COALESCE(mt.transaction_date, mt.created_at), mt.id
+            ORDER BY $dateExpr ASC, mt.id ASC
         ");
         $stmt->execute([$station_id, $date_from, $date_to, $date_from, $date_to]);
-        $rows = array_merge($rows, $stmt->fetchAll(PDO::FETCH_ASSOC) ?: []);
+        $fetchedMtRows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
 
-        foreach ($rows as $row) {
-            $nativeId = (int)($row['native_job_order_id'] ?? 0);
+        foreach ($fetchedMtRows as $r) {
+            $rawLabor = (float)($r['raw_labor_fee'] ?? 0);
+            $rawSvc   = (float)($r['raw_service_fee'] ?? 0);
+            $rawMerch = (float)($r['raw_merch_subtotal'] ?? 0);
+            $allSub   = (float)($r['all_items_subtotal'] ?? 0);
+            $mtTotal  = (float)($r['mt_total_amount'] ?? 0);
+
+            if ($rawLabor <= 0 && $rawSvc <= 0) {
+                // Fallback when no item_type='service' rows exist in merchandise_transaction_items
+                $rawSvc = max(0.0, $mtTotal - $rawMerch);
+            }
+
+            $scale = ($allSub > 0 && $mtTotal > 0) ? ($mtTotal / $allSub) : 1.0;
+            $laborFee   = round($rawLabor * $scale, 2);
+            $serviceFee = round($rawSvc * $scale, 2);
+            $partsCost  = 0.0; // Merchandise/parts items are already listed in Merchandise Transactions
+            $totalAmt   = round($laborFee + $serviceFee, 2);
+
+            $r['labor_fee']    = $laborFee;
+            $r['service_fee']  = $serviceFee;
+            $r['parts_cost']   = $partsCost;
+            $r['total_amount'] = $totalAmt;
+
+            $rows[] = $r;
+            $nativeId = (int)($r['native_job_order_id'] ?? 0);
             if ($nativeId > 0) {
                 $nativeJobOrderIds[$nativeId] = true;
             }
@@ -524,11 +609,17 @@ function staff_report_fetch_service_income_rows(PDO $pdo, int $station_id, strin
         $serviceSql = column_exists($pdo, 'job_orders', 'service_type')
             ? "COALESCE(NULLIF(jo.service_type, ''), NULLIF(jo.service_description, ''), 'Service')"
             : "COALESCE(NULLIF(jo.service_description, ''), 'Service')";
-        $laborSql = "COALESCE(NULLIF(jo.actual_labor_cost, 0), NULLIF(jo.estimated_labor_cost, 0), 0)";
+        $hasTipCol = column_exists($pdo, 'job_orders', 'tip_amount');
+        $laborSql = $hasTipCol
+            ? "COALESCE(NULLIF(jo.tip_amount, 0), NULLIF(jo.actual_labor_cost, 0), NULLIF(jo.estimated_labor_cost, 0), 0)"
+            : "COALESCE(NULLIF(jo.actual_labor_cost, 0), NULLIF(jo.estimated_labor_cost, 0), 0)";
+        $hasSvcFeeCol = column_exists($pdo, 'job_orders', 'service_fee');
+        $svcFeeSql = $hasSvcFeeCol
+            ? "COALESCE(NULLIF(jo.service_fee, 0), NULLIF(jo.estimated_cost, 0), 0)"
+            : "COALESCE(NULLIF(jo.estimated_cost, 0), 0)";
+        $partsCostSql = "COALESCE(NULLIF(jo.actual_parts_cost, 0), NULLIF(jo.estimated_parts_cost, 0), 0)";
         $amountSql = "COALESCE(NULLIF(jo.total_cost, 0), NULLIF(jo.estimated_cost, 0), NULLIF(jo.amount_paid, 0), NULLIF(COALESCE(jo.actual_labor_cost, 0) + COALESCE(jo.actual_parts_cost, 0), 0), NULLIF(COALESCE(jo.estimated_labor_cost, 0) + COALESCE(jo.estimated_parts_cost, 0), 0), 0)";
 
-        // Build parts subquery — try with inventory_products join first,
-        // fall back to part IDs only if the table is inaccessible (corrupt/missing engine file)
         $partsSqlWithJoin = table_exists($pdo, 'job_order_parts')
             ? "(
                     SELECT GROUP_CONCAT(CONCAT(COALESCE(ip.product_name, CONCAT('Part #', jop.product_id)), ' (x', jop.quantity_used, ')') ORDER BY jop.id SEPARATOR ', ')
@@ -545,7 +636,6 @@ function staff_report_fetch_service_income_rows(PDO $pdo, int $station_id, strin
                )"
             : "NULL";
 
-        // Check if inventory_products is actually accessible (not just schema-present)
         $invProductsAccessible = false;
         if (table_exists($pdo, 'inventory_products')) {
             try {
@@ -572,15 +662,38 @@ function staff_report_fetch_service_income_rows(PDO $pdo, int $station_id, strin
         $joCuNameSql = table_exists($pdo, 'customers')
             ? "COALESCE(NULLIF(TRIM(CONCAT(COALESCE(cu.first_name,''),' ',COALESCE(cu.last_name,''))),''), NULLIF(cu.name,''), NULLIF(jo.customer_name,''), 'Walk-in')"
             : "COALESCE(NULLIF(jo.customer_name,''), 'Walk-in')";
+        $joPmSql = staff_report_payment_method_sql($pdo, 'job_orders', 'jo');
+
+        $normalizeJoRow = static function (array $row): array {
+            $tot   = (float)($row['total_amount'] ?? 0);
+            $labor = (float)($row['labor_fee'] ?? 0);
+            $svc   = (float)($row['service_fee'] ?? 0);
+            $parts = (float)($row['parts_cost'] ?? 0);
+            if ($svc <= 0 && $tot > ($labor + $parts)) {
+                $svc = round($tot - $labor - $parts, 2);
+            } elseif ($svc >= $tot && $labor > 0 && $tot > $labor) {
+                $svc = round($tot - $labor - $parts, 2);
+            }
+            $row['labor_fee']        = round($labor, 2);
+            $row['service_fee']      = round(max(0.0, $svc), 2);
+            $row['parts_cost']       = round(max(0.0, $parts), 2);
+            $row['total_amount']     = round($row['labor_fee'] + $row['service_fee'] + $row['parts_cost'], 2);
+            $row['transaction_type'] = $row['transaction_type'] ?? 'job_order';
+            return $row;
+        };
+
         try {
             $stmt = $pdo->prepare("
                 SELECT
                     CONCAT('jo-', jo.id) AS source_key,
                     jo.id,
                     jo.id AS native_job_order_id,
+                    'job_order' AS transaction_type,
                     COALESCE(NULLIF(jo.job_order_number,''), CONCAT('JO-', DATE_FORMAT(jo.created_at,'%Y%m%d'), '-', LPAD(jo.id,6,'0'))) AS job_order_number,
                     $serviceSql AS service_type,
                     $laborSql AS labor_fee,
+                    $svcFeeSql AS service_fee,
+                    $partsCostSql AS parts_cost,
                     $partsSql AS parts_used,
                     $amountSql AS total_amount,
                     CASE WHEN HOUR(jo.created_at) >= 6 AND HOUR(jo.created_at) < 14 THEN 'Shift 1' ELSE 'Shift 2' END AS shift,
@@ -588,7 +701,7 @@ function staff_report_fetch_service_income_rows(PDO $pdo, int $station_id, strin
                     $joCuNameSql AS customer_name,
                     $joVehicleFieldSql AS vehicle_plate,
                     $joMechanicNameSql AS mechanic_name,
-                    COALESCE(jo.payment_method, 'Cash') AS payment_method,
+                    $joPmSql AS payment_method,
                     jo.created_at
                 FROM job_orders jo
                 LEFT JOIN users u ON jo.$joEncoderColumn = u.id
@@ -606,19 +719,21 @@ function staff_report_fetch_service_income_rows(PDO $pdo, int $station_id, strin
                 if ($nativeId > 0 && isset($nativeJobOrderIds[$nativeId])) {
                     continue;
                 }
-                $rows[] = $row;
+                $rows[] = $normalizeJoRow($row);
             }
         } catch (Throwable $e) {
-            // Retry without inventory_products reference (engine-level table corruption fallback)
             try {
                 $stmt = $pdo->prepare("
                     SELECT
                         CONCAT('jo-', jo.id) AS source_key,
                         jo.id,
                         jo.id AS native_job_order_id,
+                        'job_order' AS transaction_type,
                         COALESCE(NULLIF(jo.job_order_number,''), CONCAT('JO-', DATE_FORMAT(jo.created_at,'%Y%m%d'), '-', LPAD(jo.id,6,'0'))) AS job_order_number,
                         $serviceSql AS service_type,
                         $laborSql AS labor_fee,
+                        $svcFeeSql AS service_fee,
+                        $partsCostSql AS parts_cost,
                         $partsSqlSafe AS parts_used,
                         $amountSql AS total_amount,
                         CASE WHEN HOUR(jo.created_at) >= 6 AND HOUR(jo.created_at) < 14 THEN 'Shift 1' ELSE 'Shift 2' END AS shift,
@@ -626,7 +741,7 @@ function staff_report_fetch_service_income_rows(PDO $pdo, int $station_id, strin
                         $joCuNameSql AS customer_name,
                         $joVehicleFieldSql AS vehicle_plate,
                         $joMechanicNameSql AS mechanic_name,
-                        COALESCE(jo.payment_method, 'Cash') AS payment_method,
+                        $joPmSql AS payment_method,
                         jo.created_at
                     FROM job_orders jo
                     LEFT JOIN users u ON jo.$joEncoderColumn = u.id
@@ -644,7 +759,7 @@ function staff_report_fetch_service_income_rows(PDO $pdo, int $station_id, strin
                     if ($nativeId > 0 && isset($nativeJobOrderIds[$nativeId])) {
                         continue;
                     }
-                    $rows[] = $row;
+                    $rows[] = $normalizeJoRow($row);
                 }
             } catch (Throwable $e2) {
                 error_log('[staff_fuel_sales_summary] job_orders fetch failed: ' . $e2->getMessage());
@@ -659,8 +774,11 @@ function staff_report_fetch_service_income_rows(PDO $pdo, int $station_id, strin
                     CONCAT('st-', st.id) AS source_key,
                     st.id,
                     NULL AS native_job_order_id,
+                    'job_order' AS transaction_type,
                     st.service_type,
-                    st.labor_fee,
+                    COALESCE(st.labor_fee, 0) AS labor_fee,
+                    GREATEST(0, COALESCE(st.total_amount, 0) - COALESCE(st.labor_fee, 0)) AS service_fee,
+                    0 AS parts_cost,
                     st.parts_used,
                     st.total_amount,
                     COALESCE(st.shift, '') AS shift,
@@ -1147,20 +1265,17 @@ if (count($meter_readings) == 0 && $has_fuel_transactions) {
             LEFT JOIN fuel_pumps fp ON fp.id = ft.pump_id AND fp.station_id = ft.station_id
             WHERE (ft.station_id = ? OR ? = 0) 
               AND DATE(COALESCE(ft.transaction_date, ft.created_at)) BETWEEN ? AND ?
-              AND LOWER(COALESCE(ft.status, '')) IN ('verified','approved','validated')
-              AND EXISTS (
-                  SELECT 1 FROM fuel_sales_closing fsc
-                  WHERE fsc.station_id = ft.station_id
-                    AND fsc.report_date = DATE(COALESCE(ft.transaction_date, ft.created_at))
-                    AND (
-                        fsc.shift_period = ft.shift_period
-                        OR fsc.shift = ft.shift_name
-                        OR fsc.shift = ft.shift_period
-                        OR LOWER(fsc.shift) LIKE CONCAT('%', LOWER(COALESCE(ft.shift_period, '')), '%')
-                        OR ft.shift_period IS NULL OR ft.shift_period = ''
-                    )
-                    AND LOWER(COALESCE(fsc.status, '')) IN ('verified','approved','validated')
+              AND (
+                  LOWER(COALESCE(ft.status, '')) IN ('verified','approved','validated','adjusted')
+                  OR ft.validated_by IS NOT NULL
+                  OR EXISTS (
+                      SELECT 1 FROM fuel_sales_closing fsc
+                      WHERE fsc.station_id = ft.station_id
+                        AND fsc.report_date = DATE(COALESCE(ft.transaction_date, ft.created_at))
+                        AND LOWER(COALESCE(fsc.status, '')) IN ('verified','approved','validated')
+                  )
               )
+              AND LOWER(COALESCE(ft.status, '')) NOT IN ('rejected','voided','cancelled','canceled')
             ORDER BY COALESCE(ft.transaction_date, ft.created_at), ft.id";
         
         $stmt = $pdo->prepare($sql);
@@ -1239,20 +1354,17 @@ if ($has_fuel_transactions) {
             FROM fuel_transactions ft
             WHERE (ft.station_id = ? OR ? = 0)
               AND DATE(COALESCE(ft.transaction_date, ft.created_at)) BETWEEN ? AND ?
-              AND LOWER(COALESCE(ft.status, '')) IN ('verified','approved','validated')
-              AND EXISTS (
-                  SELECT 1 FROM fuel_sales_closing fsc
-                  WHERE fsc.station_id = ft.station_id
-                    AND fsc.report_date = DATE(COALESCE(ft.transaction_date, ft.created_at))
-                    AND (
-                        fsc.shift_period = ft.shift_period
-                        OR fsc.shift = ft.shift_name
-                        OR fsc.shift = ft.shift_period
-                        OR LOWER(fsc.shift) LIKE CONCAT('%', LOWER(COALESCE(ft.shift_period, '')), '%')
-                        OR ft.shift_period IS NULL OR ft.shift_period = ''
-                    )
-                    AND LOWER(COALESCE(fsc.status, '')) IN ('verified','approved','validated')
+              AND (
+                  LOWER(COALESCE(ft.status, '')) IN ('verified','approved','validated','adjusted')
+                  OR ft.validated_by IS NOT NULL
+                  OR EXISTS (
+                      SELECT 1 FROM fuel_sales_closing fsc
+                      WHERE fsc.station_id = ft.station_id
+                        AND fsc.report_date = DATE(COALESCE(ft.transaction_date, ft.created_at))
+                        AND LOWER(COALESCE(fsc.status, '')) IN ('verified','approved','validated')
+                  )
               )
+              AND LOWER(COALESCE(ft.status, '')) NOT IN ('rejected','voided','cancelled','canceled')
             ORDER BY COALESCE(ft.transaction_date, ft.created_at), ft.id";
         
         $stmt = $pdo->prepare($sql);
@@ -1760,25 +1872,84 @@ $total_fuel_sales_amount = array_sum(array_column($enhanced_meter_readings, 'fue
 // Fetch Fuel Sales Closing Record (Verified / Approved only)
 $closing_record = [];
 $pending_closing_record = null;
+$has_approved_tx = false;
+$has_pending_tx  = false;
 try {
     $stmt_cl_rec = $pdo->prepare("
         SELECT * FROM fuel_sales_closing
-        WHERE station_id = ? AND (report_date BETWEEN ? AND ?)
+        WHERE (station_id = ? OR ? = 0) AND (report_date BETWEEN ? AND ?)
           AND LOWER(COALESCE(status, '')) IN ('verified','approved','validated')
         ORDER BY id DESC LIMIT 1
     ");
-    $stmt_cl_rec->execute([$station_id, $date_from, $date_to]);
+    $stmt_cl_rec->execute([$station_id, $station_id, $date_from, $date_to]);
     $closing_record = $stmt_cl_rec->fetch(PDO::FETCH_ASSOC) ?: [];
 
-    if (empty($closing_record)) {
-        $stmt_pen_rec = $pdo->prepare("
-            SELECT * FROM fuel_sales_closing
-            WHERE station_id = ? AND (report_date BETWEEN ? AND ?)
-              AND LOWER(COALESCE(status, '')) NOT IN ('rejected','voided')
-            ORDER BY id DESC LIMIT 1
-        ");
-        $stmt_pen_rec->execute([$station_id, $date_from, $date_to]);
-        $pending_closing_record = $stmt_pen_rec->fetch(PDO::FETCH_ASSOC) ?: null;
+    // Check transaction statuses for this date range to detect Manager/Admin approval
+    $stmt_tx_status = $pdo->prepare("
+        SELECT 
+            COUNT(*) AS total_tx,
+            SUM(CASE WHEN LOWER(COALESCE(status,'')) IN ('verified','approved','validated','adjusted') OR validated_by IS NOT NULL THEN 1 ELSE 0 END) AS approved_tx,
+            SUM(CASE WHEN LOWER(COALESCE(status,'')) IN ('pending','readings_submitted','closing_completed','submitted') THEN 1 ELSE 0 END) AS pending_tx
+        FROM fuel_transactions
+        WHERE (station_id = ? OR ? = 0) 
+          AND DATE(COALESCE(transaction_date, created_at)) BETWEEN ? AND ?
+          AND LOWER(COALESCE(status,'')) NOT IN ('rejected','voided','cancelled','canceled')
+    ");
+    $stmt_tx_status->execute([$station_id, $station_id, $date_from, $date_to]);
+    $tx_status_counts = $stmt_tx_status->fetch(PDO::FETCH_ASSOC) ?: ['total_tx' => 0, 'approved_tx' => 0, 'pending_tx' => 0];
+    $has_approved_tx = ((int)($tx_status_counts['approved_tx'] ?? 0) > 0);
+    $has_pending_tx  = ((int)($tx_status_counts['pending_tx'] ?? 0) > 0);
+
+    // If transactions were approved by Manager/Admin and no pending transactions remain, auto-sync closing status to VERIFIED
+    if ($has_approved_tx && !$has_pending_tx) {
+        try {
+            $pdo->prepare("
+                UPDATE fuel_sales_closing
+                SET status = 'VERIFIED'
+                WHERE (station_id = ? OR ? = 0) AND (report_date BETWEEN ? AND ?)
+                  AND LOWER(COALESCE(status, '')) NOT IN ('rejected','voided')
+            ")->execute([$station_id, $station_id, $date_from, $date_to]);
+        } catch (Exception $e) {}
+
+        if (empty($closing_record)) {
+            $stmt_cl_rec->execute([$station_id, $station_id, $date_from, $date_to]);
+            $closing_record = $stmt_cl_rec->fetch(PDO::FETCH_ASSOC) ?: [];
+        }
+        if (empty($closing_record)) {
+            $stmt_pen_rec = $pdo->prepare("
+                SELECT * FROM fuel_sales_closing
+                WHERE (station_id = ? OR ? = 0) AND (report_date BETWEEN ? AND ?)
+                  AND LOWER(COALESCE(status, '')) NOT IN ('rejected','voided')
+                ORDER BY id DESC LIMIT 1
+            ");
+            $stmt_pen_rec->execute([$station_id, $station_id, $date_from, $date_to]);
+            $closing_record = $stmt_pen_rec->fetch(PDO::FETCH_ASSOC) ?: [];
+            if (!empty($closing_record)) {
+                $closing_record['status'] = 'VERIFIED';
+            }
+        }
+        if (empty($closing_record)) {
+            $closing_record = [
+                'id' => 0,
+                'station_id' => $station_id,
+                'report_date' => $date_from,
+                'status' => 'VERIFIED',
+                'total_fuel_sales' => $total_fuel_sales_amount,
+                'total_liters' => $total_fuel_liters_sold,
+            ];
+        }
+        $pending_closing_record = null;
+    } else {
+        if (empty($closing_record)) {
+            $stmt_pen_rec = $pdo->prepare("
+                SELECT * FROM fuel_sales_closing
+                WHERE (station_id = ? OR ? = 0) AND (report_date BETWEEN ? AND ?)
+                  AND LOWER(COALESCE(status, '')) NOT IN ('rejected','voided')
+                ORDER BY id DESC LIMIT 1
+            ");
+            $stmt_pen_rec->execute([$station_id, $station_id, $date_from, $date_to]);
+            $pending_closing_record = $stmt_pen_rec->fetch(PDO::FETCH_ASSOC) ?: null;
+        }
     }
 } catch (Exception $e) {}
 
@@ -1790,9 +1961,21 @@ try {
     $tank_inventory_summary = $stmt_inv_rec->fetchAll(PDO::FETCH_ASSOC) ?: [];
 } catch (Exception $e) {}
 
+// Normalize Transaction Type filter
+$norm_filter_txn_type = strtolower(trim($filter_txn_type));
+if ($norm_filter_txn_type === 'merchandise only') $norm_filter_txn_type = 'merchandise';
+elseif ($norm_filter_txn_type === 'job order only') $norm_filter_txn_type = 'job_order';
+elseif ($norm_filter_txn_type === 'job order + merchandise') $norm_filter_txn_type = 'combined';
+
 // Filter Merchandise Transactions
 $filtered_merchandise_rows = [];
 foreach ($merchandise_report_transactions as $mt) {
+    $row_tt = strtolower(trim($mt['transaction_type'] ?? 'merchandise'));
+    if ($norm_filter_txn_type !== '') {
+        if ($norm_filter_txn_type === 'job_order') continue;
+        if ($norm_filter_txn_type === 'merchandise' && $row_tt !== 'merchandise') continue;
+        if ($norm_filter_txn_type === 'combined' && $row_tt !== 'combined') continue;
+    }
     if ($filter_pm !== '' && strtolower(trim($mt['payment_method'] ?? '')) !== strtolower($filter_pm)) {
         continue;
     }
@@ -1801,7 +1984,20 @@ foreach ($merchandise_report_transactions as $mt) {
     }
     if ($filter_search !== '') {
         $s = strtolower($filter_search);
-        $searchable = strtolower(($mt['transaction_number'] ?? $mt['id'] ?? '') . ' ' . ($mt['product_name'] ?? '') . ' ' . ($mt['customer_name'] ?? '') . ' ' . ($mt['encoder'] ?? ''));
+        $mt_date_s = !empty($mt['created_at']) ? date('Ymd', strtotime($mt['created_at'])) : date('Ymd');
+        $mt_yr_s   = !empty($mt['created_at']) ? date('Y', strtotime($mt['created_at'])) : date('Y');
+        $or_full_s = 'OR-' . $mt_date_s . '-' . str_pad((int)($mt['id'] ?? 0), 6, '0', STR_PAD_LEFT);
+        $or_yr_s   = 'OR-' . $mt_yr_s . '-' . str_pad((int)($mt['id'] ?? 0), 6, '0', STR_PAD_LEFT);
+        $searchable = strtolower(
+            ($mt['transaction_number'] ?? '') . ' ' .
+            ($mt['transaction_id'] ?? '') . ' ' .
+            $or_full_s . ' ' . $or_yr_s . ' ' .
+            ($mt['id'] ?? '') . ' ' .
+            ($mt['product_name'] ?? '') . ' ' .
+            ($mt['category'] ?? '') . ' ' .
+            ($mt['customer_name'] ?? '') . ' ' .
+            ($mt['encoder'] ?? '')
+        );
         if (strpos($searchable, $s) === false) {
             continue;
         }
@@ -1812,6 +2008,12 @@ foreach ($merchandise_report_transactions as $mt) {
 // Filter Service Income / Job Order Transactions
 $filtered_service_rows = [];
 foreach ($service_income_transactions as $st) {
+    $row_tt = strtolower(trim($st['transaction_type'] ?? 'job_order'));
+    if ($norm_filter_txn_type !== '') {
+        if ($norm_filter_txn_type === 'merchandise') continue;
+        if ($norm_filter_txn_type === 'job_order' && $row_tt !== 'job_order') continue;
+        if ($norm_filter_txn_type === 'combined' && $row_tt !== 'combined') continue;
+    }
     if ($filter_pm !== '' && strtolower(trim($st['payment_method'] ?? '')) !== strtolower($filter_pm)) {
         continue;
     }
@@ -1820,7 +2022,21 @@ foreach ($service_income_transactions as $st) {
     }
     if ($filter_search !== '') {
         $s = strtolower($filter_search);
-        $searchable = strtolower(($st['source_key'] ?? $st['id'] ?? '') . ' ' . ($st['service_type'] ?? '') . ' ' . ($st['customer_name'] ?? '') . ' ' . ($st['encoder'] ?? ''));
+        $st_date_s = !empty($st['created_at']) ? date('Ymd', strtotime($st['created_at'])) : date('Ymd');
+        $st_yr_s   = !empty($st['created_at']) ? date('Y', strtotime($st['created_at'])) : date('Y');
+        $or_full_s = 'OR-' . $st_date_s . '-' . str_pad((int)($st['id'] ?? 0), 6, '0', STR_PAD_LEFT);
+        $or_yr_s   = 'OR-' . $st_yr_s . '-' . str_pad((int)($st['id'] ?? 0), 6, '0', STR_PAD_LEFT);
+        $searchable = strtolower(
+            ($st['job_order_number'] ?? '') . ' ' .
+            ($st['transaction_id'] ?? '') . ' ' .
+            $or_full_s . ' ' . $or_yr_s . ' ' .
+            ($st['source_key'] ?? $st['id'] ?? '') . ' ' .
+            ($st['service_type'] ?? '') . ' ' .
+            ($st['customer_name'] ?? '') . ' ' .
+            ($st['vehicle_plate'] ?? '') . ' ' .
+            ($st['mechanic_name'] ?? '') . ' ' .
+            ($st['encoder'] ?? '')
+        );
         if (strpos($searchable, $s) === false) {
             continue;
         }
@@ -1828,93 +2044,117 @@ foreach ($service_income_transactions as $st) {
     $filtered_service_rows[] = $st;
 }
 
-// 7 Accepted Payment Methods Summary
+// Accepted Payment Methods Summary
 $accepted_payment_methods = [
-    'Cash'              => ['count' => 0, 'amount' => 0.0],
-    'Credit Card'       => ['count' => 0, 'amount' => 0.0],
-    'Debit Card'        => ['count' => 0, 'amount' => 0.0],
-    'GCash'             => ['count' => 0, 'amount' => 0.0],
-    'Maya'              => ['count' => 0, 'amount' => 0.0],
-    'Petron Fleet Card' => ['count' => 0, 'amount' => 0.0],
-    'Credit Account'    => ['count' => 0, 'amount' => 0.0],
+    'Cash'                           => ['count' => 0, 'amount' => 0.0],
+    'Credit Card'                    => ['count' => 0, 'amount' => 0.0],
+    'Debit Card'                     => ['count' => 0, 'amount' => 0.0],
+    'GCash'                          => ['count' => 0, 'amount' => 0.0],
+    'Maya'                           => ['count' => 0, 'amount' => 0.0],
+    'Petron Value Card (PVC Points)' => ['count' => 0, 'amount' => 0.0],
+    'Petron Fleet Card'              => ['count' => 0, 'amount' => 0.0],
+    'Credit Account'                 => ['count' => 0, 'amount' => 0.0],
+    'Partial Payment'                => ['count' => 0, 'amount' => 0.0],
 ];
 
-foreach ($filtered_merchandise_rows as $mRow) {
-    $pm = trim($mRow['payment_method'] ?? 'Cash');
-    $bucket = 'Cash';
-    if (strcasecmp($pm, 'credit card') === 0 || strcasecmp($pm, 'card') === 0) $bucket = 'Credit Card';
-    elseif (strcasecmp($pm, 'debit card') === 0) $bucket = 'Debit Card';
-    elseif (strcasecmp($pm, 'gcash') === 0) $bucket = 'GCash';
-    elseif (strcasecmp($pm, 'maya') === 0 || strcasecmp($pm, 'paymaya') === 0) $bucket = 'Maya';
-    elseif (strcasecmp($pm, 'petron fleet card') === 0 || strcasecmp($pm, 'fleet card') === 0 || strcasecmp($pm, 'fleet') === 0) $bucket = 'Petron Fleet Card';
-    elseif (strcasecmp($pm, 'credit account') === 0 || strcasecmp($pm, 'credit') === 0 || strcasecmp($pm, 'account') === 0) $bucket = 'Credit Account';
+$resolvePmBucket = static function (string $pm): string {
+    $pm = trim($pm);
+    if (strcasecmp($pm, 'credit card') === 0 || strcasecmp($pm, 'card') === 0) return 'Credit Card';
+    if (strcasecmp($pm, 'debit card') === 0) return 'Debit Card';
+    if (strcasecmp($pm, 'gcash') === 0 || strcasecmp($pm, 'e-wallet') === 0 || strcasecmp($pm, 'ewallet') === 0) return 'GCash';
+    if (strcasecmp($pm, 'maya') === 0 || strcasecmp($pm, 'paymaya') === 0 || strcasecmp($pm, 'pay maya') === 0) return 'Maya';
+    if (stripos($pm, 'pvc') !== false || stripos($pm, 'value card') !== false) return 'Petron Value Card (PVC Points)';
+    if (strcasecmp($pm, 'petron fleet card') === 0 || strcasecmp($pm, 'fleet card') === 0 || strcasecmp($pm, 'fleet') === 0) return 'Petron Fleet Card';
+    if (strcasecmp($pm, 'credit account') === 0 || strcasecmp($pm, 'credit') === 0 || strcasecmp($pm, 'account') === 0) return 'Credit Account';
+    if (stripos($pm, 'partial') !== false) return 'Partial Payment';
+    return 'Cash';
+};
 
+foreach ($filtered_merchandise_rows as $mRow) {
+    $bucket = $resolvePmBucket((string)($mRow['payment_method'] ?? 'Cash'));
     $accepted_payment_methods[$bucket]['count']++;
     $accepted_payment_methods[$bucket]['amount'] += (float)($mRow['total_amount'] ?? 0);
 }
 
 foreach ($filtered_service_rows as $sRow) {
-    $pm = trim($sRow['payment_method'] ?? 'Cash');
-    $bucket = 'Cash';
-    if (strcasecmp($pm, 'credit card') === 0 || strcasecmp($pm, 'card') === 0) $bucket = 'Credit Card';
-    elseif (strcasecmp($pm, 'debit card') === 0) $bucket = 'Debit Card';
-    elseif (strcasecmp($pm, 'gcash') === 0) $bucket = 'GCash';
-    elseif (strcasecmp($pm, 'maya') === 0 || strcasecmp($pm, 'paymaya') === 0) $bucket = 'Maya';
-    elseif (strcasecmp($pm, 'petron fleet card') === 0 || strcasecmp($pm, 'fleet card') === 0 || strcasecmp($pm, 'fleet') === 0) $bucket = 'Petron Fleet Card';
-    elseif (strcasecmp($pm, 'credit account') === 0 || strcasecmp($pm, 'credit') === 0 || strcasecmp($pm, 'account') === 0) $bucket = 'Credit Account';
-
+    $bucket = $resolvePmBucket((string)($sRow['payment_method'] ?? 'Cash'));
     $accepted_payment_methods[$bucket]['count']++;
     $accepted_payment_methods[$bucket]['amount'] += (float)($sRow['total_amount'] ?? 0);
 }
 
-// Accounts Receivable Summary (MY SHIFT ONLY)
+// Hide optional zero buckets (PVC Points / Partial Payment) only if unused, keeping standard 7 always visible
+foreach (['Petron Value Card (PVC Points)', 'Partial Payment'] as $_optPm) {
+    if (($accepted_payment_methods[$_optPm]['count'] ?? 0) === 0 && ($accepted_payment_methods[$_optPm]['amount'] ?? 0) <= 0) {
+        unset($accepted_payment_methods[$_optPm]);
+    }
+}
+
+// Accounts Receivable Summary
 $ar_shift_rows = [];
 try {
+    $arValidWhere = staff_report_valid_merchandise_where($pdo, 'mt');
+    $hasCreditDue = column_exists($pdo, 'merchandise_transactions', 'credit_due_date');
+    $hasDueDate   = column_exists($pdo, 'merchandise_transactions', 'due_date');
+    $hasTxnDateAr = column_exists($pdo, 'merchandise_transactions', 'transaction_date');
+    $hasOrNoAr    = column_exists($pdo, 'merchandise_transactions', 'or_number');
+    $arDateExpr   = $hasTxnDateAr ? "COALESCE(mt.transaction_date, mt.created_at)" : "mt.created_at";
+    $arDateWhere  = $hasTxnDateAr
+        ? "(DATE(mt.transaction_date) BETWEEN ? AND ? OR DATE(mt.created_at) BETWEEN ? AND ?)"
+        : "(DATE(mt.created_at) BETWEEN ? AND ? OR DATE(mt.created_at) BETWEEN ? AND ?)";
+
+    $dueParts = [];
+    if ($hasCreditDue) $dueParts[] = "NULLIF(mt.credit_due_date, '0000-00-00')";
+    if ($hasDueDate)   $dueParts[] = "NULLIF(mt.due_date, '0000-00-00')";
+    $dueParts[] = "DATE_ADD(DATE($arDateExpr), INTERVAL 30 DAY)";
+    $dueDateSql = "COALESCE(" . implode(', ', $dueParts) . ")";
+
+    $invNoSql = $hasOrNoAr
+        ? "COALESCE(NULLIF(TRIM(mt.or_number), ''), CONCAT('OR-', DATE_FORMAT($arDateExpr, '%Y%m%d'), '-', LPAD(mt.id, 6, '0')))"
+        : "CONCAT('OR-', DATE_FORMAT($arDateExpr, '%Y%m%d'), '-', LPAD(mt.id, 6, '0'))";
+
     $stmt_ar = $pdo->prepare("
         SELECT 
+            mt.id,
             COALESCE(NULLIF(mt.customer_name,''), 'Walk-in') AS customer_name,
-            COALESCE(mt.payment_method, 'Credit Account') AS account_type,
-            COALESCE(mt.transaction_id, CONCAT('INV-', LPAD(mt.id, 5, '0'))) AS invoice_no,
-            COALESCE(mt.due_date, DATE_ADD(DATE(mt.created_at), INTERVAL 30 DAY)) AS due_date,
-            COALESCE(mt.balance_due, mt.total_amount, 0) AS balance_due,
-            COALESCE(mt.payment_status, 'Unpaid') AS payment_status,
+            CASE
+                WHEN LOWER(COALESCE(mt.payment_method, '')) LIKE '%credit%' THEN 'Credit Account'
+                WHEN LOWER(COALESCE(mt.payment_method, '')) LIKE '%partial%' OR LOWER(COALESCE(mt.payment_status, '')) LIKE '%partial%' THEN 'Partial Payment'
+                ELSE COALESCE(NULLIF(mt.payment_method, ''), 'Credit Account')
+            END AS account_type,
+            $invNoSql AS invoice_no,
+            $dueDateSql AS due_date,
+            COALESCE(NULLIF(mt.balance_due, 0), CASE WHEN LOWER(COALESCE(mt.payment_status, '')) = 'paid' THEN 0 ELSE mt.total_amount END, 0) AS balance_due,
+            COALESCE(NULLIF(mt.payment_status, ''), 'Unpaid') AS payment_status,
             mt.shift_period,
-            mt.created_at
+            $arDateExpr AS created_at
         FROM merchandise_transactions mt
         WHERE mt.station_id = ?
-          AND DATE(mt.transaction_date) BETWEEN ? AND ?
+          AND $arDateWhere
+          AND $arValidWhere
           AND (
-            LOWER(mt.payment_method) LIKE '%credit%' 
-            OR LOWER(mt.payment_method) LIKE '%fleet%'
-            OR LOWER(mt.payment_status) IN ('unpaid','pending','partial','overdue')
+            LOWER(COALESCE(mt.payment_method, '')) LIKE '%credit%' 
+            OR LOWER(COALESCE(mt.payment_method, '')) LIKE '%fleet%'
+            OR LOWER(COALESCE(mt.payment_method, '')) LIKE '%partial%'
+            OR LOWER(COALESCE(mt.payment_status, '')) IN ('unpaid','pending','pending payment','partial','partially paid','overdue')
+            OR COALESCE(mt.balance_due, 0) > 0
           )
-        ORDER BY mt.created_at DESC
+        ORDER BY $arDateExpr DESC, mt.id DESC
     ");
-    $stmt_ar->execute([$station_id, $date_from, $date_to]);
+    $stmt_ar->execute([$station_id, $date_from, $date_to, $date_from, $date_to]);
     $ar_shift_rows = $stmt_ar->fetchAll(PDO::FETCH_ASSOC) ?: [];
-} catch (Exception $e) {}
-
-if (!$is_manager_or_admin && !empty($user_current_shift)) {
-    $ar_shift_rows = array_filter($ar_shift_rows, function($r) use ($user_current_shift) {
-        $shiftLabel = (string)($r['shift_period'] ?? $r['shift'] ?? '');
-        if ($shiftLabel === '' && !empty($r['created_at'])) {
-            $hour = (int)date('H', strtotime((string)$r['created_at']));
-            $shiftLabel = ($hour >= 6 && $hour < 14) ? 'Shift 1' : 'Shift 2';
-        }
-        $isS1 = is_shift1($shiftLabel);
-        return $user_current_shift === 'shift1' ? $isS1 : !$isS1;
-    });
+} catch (Exception $e) {
+    error_log('[staff_fuel_sales_summary] AR query error: ' . $e->getMessage());
 }
 
 // Shift Sales Summary Breakdown
 $merch_sales_summary_total = array_sum(array_map(fn($r) => (float)($r['total_amount'] ?? 0), $filtered_merchandise_rows));
 $labor_fee_summary_total   = array_sum(array_map(fn($r) => (float)($r['labor_fee'] ?? 0), $filtered_service_rows));
 $service_fee_summary_total = array_sum(array_map(fn($r) => (float)($r['service_fee'] ?? 0), $filtered_service_rows));
-$parts_sales_summary_total = 0; // All parts sales belong to Merchandise Sales
+$parts_sales_summary_total = array_sum(array_map(fn($r) => (float)($r['parts_cost'] ?? 0), $filtered_service_rows));
 $service_revenue_summary_total = $labor_fee_summary_total + $service_fee_summary_total;
 $credit_sales_summary_total = $accepted_payment_methods['Credit Account']['amount'] ?? 0;
 $fleet_sales_summary_total  = $accepted_payment_methods['Petron Fleet Card']['amount'] ?? 0;
-$overall_shift_sales_summary_total = $merch_sales_summary_total + $labor_fee_summary_total + $service_fee_summary_total;
+$overall_shift_sales_summary_total = $merch_sales_summary_total + $labor_fee_summary_total + $service_fee_summary_total + $parts_sales_summary_total;
 
 
 // ============================================================
@@ -1947,7 +2187,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
         fputcsv($output, ['Receipt No.', 'Time', 'Customer', 'Category', 'Product Name', 'Qty', 'Unit Price', 'Amount', 'Payment Method', 'Encoder']);
         
         $total_merch = 0;
-        foreach ($merchandise_report_transactions as $t) {
+        foreach ($filtered_merchandise_rows as $t) {
             $total_merch += $t['total_amount'];
             $raw_tid = $t['transaction_id'] ?? '';
             $mt_date_csv = !empty($t['created_at']) ? date('Ymd', strtotime($t['created_at'])) : date('Ymd');
@@ -1979,7 +2219,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'csv') {
         fputcsv($output, ['JO No.', 'Time', 'Customer', 'Vehicle', 'Mechanic', 'Labor Fee', 'Service Fee', 'Parts Cost', 'Total Amount', 'Payment Method']);
         
         $total_svc = 0;
-        foreach ($service_income_transactions as $t) {
+        foreach ($filtered_service_rows as $t) {
             $total_svc += (float)($t['total_amount'] ?? 0);
             $jo_csv = $t['job_order_number'] ?? '';
             if (empty($jo_csv)) {
@@ -3848,7 +4088,7 @@ require_once __DIR__ . '/../partials/flash_toast.php';
             <label style="font-weight:700;color:#002F6C;font-size:12px;text-transform:uppercase;letter-spacing:.4px;">Payment Method</label>
             <select id="filter_pm" style="padding:6px 10px;border:1px solid #e2e8f0;border-radius:4px;font-size:13px;background:#fff;">
                 <option value="">All Methods</option>
-                <?php foreach (['Cash', 'Credit Card', 'Debit Card', 'GCash', 'Maya', 'Petron Fleet Card', 'Credit Account'] as $pmOpt): ?>
+                <?php foreach (['Cash', 'Credit Card', 'Debit Card', 'GCash', 'Maya', 'Petron Value Card (PVC Points)', 'Petron Fleet Card', 'Credit Account', 'Partial Payment'] as $pmOpt): ?>
                     <option value="<?= htmlspecialchars($pmOpt) ?>" <?= strcasecmp($filter_pm, $pmOpt) === 0 ? 'selected' : '' ?>>
                         <?= htmlspecialchars($pmOpt) ?>
                     </option>
@@ -3914,7 +4154,7 @@ require_once __DIR__ . '/../partials/flash_toast.php';
                     <span><strong>Assigned Shift:</strong> <?= htmlspecialchars($shift_label_display) ?></span>
                     <span style="color:#94a3b8;">|</span>
                     <span><strong>Closing Status:</strong> 
-                        <?php if (!empty($closing_record)): ?>
+                        <?php if (!empty($closing_record) || ($has_approved_tx && !$has_pending_tx)): ?>
                             <span style="color:#16a34a; font-weight:700;"><i class="fas fa-check-circle"></i> VERIFIED / CLOSED</span>
                         <?php elseif (!empty($pending_closing_record) && strtoupper($pending_closing_record['status'] ?? '') === 'CLOSING_COMPLETED'): ?>
                             <span style="color:#d97706; font-weight:700;"><i class="fas fa-clock"></i> PENDING MANAGER APPROVAL</span>
@@ -3929,14 +4169,14 @@ require_once __DIR__ . '/../partials/flash_toast.php';
 
             <div class="content">
 
-                <?php if (!empty($pending_closing_record) && strtoupper($pending_closing_record['status'] ?? '') === 'CLOSING_COMPLETED'): ?>
+                <?php if (empty($closing_record) && !empty($pending_closing_record) && strtoupper($pending_closing_record['status'] ?? '') === 'CLOSING_COMPLETED' && $has_pending_tx): ?>
                 <div class="no-print" style="background:#fffbeb; border:1.5px solid #fde68a; border-radius:8px; padding:12px 16px; margin-bottom:16px; display:flex; align-items:center; gap:12px; color:#92400e; font-size:13px;">
                     <i class="fas fa-clock" style="font-size:22px; color:#f59e0b; flex-shrink:0;"></i>
                     <div>
                         <strong>Notice — Pending Manager Approval:</strong> Fuel sales closing for this date/shift was submitted by staff and is currently <strong>awaiting Manager Validation</strong>. Sales figures will not be finalized into official report calculations until validated and approved by the Manager.
                     </div>
                 </div>
-                <?php elseif (!empty($pending_closing_record) && strtoupper($pending_closing_record['status'] ?? '') === 'READINGS_SUBMITTED'): ?>
+                <?php elseif (empty($closing_record) && !empty($pending_closing_record) && strtoupper($pending_closing_record['status'] ?? '') === 'READINGS_SUBMITTED'): ?>
                 <div class="no-print" style="background:#eff6ff; border:1.5px solid #bfdbfe; border-radius:8px; padding:12px 16px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
                     <div style="display:flex; align-items:center; gap:10px; color:#1e40af; font-size:13px;">
                         <i class="fas fa-info-circle" style="font-size:22px; color:#3b82f6; flex-shrink:0;"></i>

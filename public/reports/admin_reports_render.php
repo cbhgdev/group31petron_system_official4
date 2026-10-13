@@ -1359,7 +1359,11 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                                     <td style="white-space:normal!important;word-break:break-word!important;padding:8px 5px!important;"><?= htmlspecialchars($r['approved_by'] ?? 'N/A') ?></td>
                                     <td style="white-space:normal!important;word-break:break-word!important;padding:8px 5px!important;"><strong><?= htmlspecialchars($r['supplier'] ?? 'Petron Corporation') ?></strong></td>
                                     <td class="text-center" style="white-space:normal!important;padding:8px 5px!important;"><?= number_format((int)($r['item_count'] ?? 0)) ?></td>
-                                    <td class="text-center fw-bold" style="white-space:normal!important;padding:8px 5px!important;"><?= number_format((float)($r['total_qty'] ?? 0)) ?></td>
+                                    <?php
+                                    $row_qty = (float)($r['total_qty'] ?? 0);
+                                    $row_qty_str = ($row_qty == floor($row_qty)) ? number_format($row_qty) : number_format($row_qty, 2);
+                                    ?>
+                                    <td class="text-center fw-bold" style="white-space:normal!important;padding:8px 5px!important;"><?= $row_qty_str ?></td>
                                     <td class="text-end fw-bold" style="white-space:nowrap!important;padding:8px 5px!important;">₱<?= number_format((float)($r['estimated_cost'] ?? 0), 2) ?></td>
                                     <td class="text-center" style="white-space:normal!important;padding:8px 5px!important;font-size:11px;"><?= !empty($r['expected_delivery_date']) ? date('m/d/Y', strtotime($r['expected_delivery_date'])) : 'N/A' ?></td>
                                     <td class="text-center" style="white-space:normal!important;padding:8px 5px!important;"><span class="badge <?= $badge ?>" style="font-size:10.5px;"><?= htmlspecialchars(ucfirst($r['status'] ?? '')) ?></span></td>
@@ -1369,7 +1373,11 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                         <tfoot>
                             <tr>
                                 <td colspan="6" class="fw-bold text-end">SUMMARY TOTALS:</td>
-                                <td class="text-center fw-bold"><?= number_format(array_sum(array_column($rows, 'total_qty'))) ?></td>
+                                <?php
+                                $tot_qty = (float)array_sum(array_column($rows, 'total_qty'));
+                                $tot_qty_str = ($tot_qty == floor($tot_qty)) ? number_format($tot_qty) : number_format($tot_qty, 2);
+                                ?>
+                                <td class="text-center fw-bold"><?= $tot_qty_str ?></td>
                                 <td class="text-end fw-bold text-success">₱<?= number_format(array_sum(array_column($rows, 'estimated_cost')), 2) ?></td>
                                 <td colspan="2"></td>
                             </tr>
@@ -1474,8 +1482,14 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                                 <tr>
                                     <td style="white-space:normal!important;word-break:break-all!important;padding:8px 5px!important;"><code style="font-size:10.5px;font-weight:700;word-break:break-all;"><?= htmlspecialchars($r['po_number'] ?? 'N/A') ?></code></td>
                                     <td style="white-space:normal!important;word-break:break-word!important;padding:8px 5px!important;"><strong><?= htmlspecialchars($r['product'] ?? '') ?></strong></td>
-                                    <td class="text-center fw-bold" style="white-space:normal!important;padding:8px 5px!important;"><?= number_format((float)($r['ordered_qty'] ?? 0)) ?></td>
-                                    <td class="text-center fw-bold" style="white-space:normal!important;padding:8px 5px!important;"><?= number_format((float)($r['received_qty'] ?? 0)) ?></td>
+                                    <?php
+                                    $ord_q = (float)($r['ordered_qty'] ?? 0);
+                                    $rec_q = (float)($r['received_qty'] ?? 0);
+                                    $ord_q_str = ($ord_q == floor($ord_q)) ? number_format($ord_q) : number_format($ord_q, 2);
+                                    $rec_q_str = ($rec_q == floor($rec_q)) ? number_format($rec_q) : number_format($rec_q, 2);
+                                    ?>
+                                    <td class="text-center fw-bold" style="white-space:normal!important;padding:8px 5px!important;"><?= $ord_q_str ?></td>
+                                    <td class="text-center fw-bold" style="white-space:normal!important;padding:8px 5px!important;"><?= $rec_q_str ?></td>
                                     <td class="text-center fw-bold <?= $var_class ?>" style="white-space:normal!important;padding:8px 5px!important;"><?= ($var > 0 ? '+' : '') . number_format($var, 2) ?></td>
                                     <td class="text-center" style="white-space:normal!important;padding:8px 5px!important;font-size:11px;"><?= !empty($r['expected_delivery_date']) ? date('m/d/Y', strtotime($r['expected_delivery_date'])) : 'N/A' ?></td>
                                     <td class="text-center" style="white-space:normal!important;padding:8px 5px!important;font-size:11px;"><?= !empty($r['actual_delivery']) ? date('m/d/Y', strtotime($r['actual_delivery'])) : '-' ?></td>
@@ -1487,8 +1501,14 @@ function renderAdminReportContent(string $cat, string $tab, array $report_data):
                         <tfoot>
                             <tr>
                                 <td colspan="2" class="fw-bold text-end">SUMMARY TOTALS:</td>
-                                <td class="text-center fw-bold"><?= number_format(array_sum(array_column($rows, 'ordered_qty'))) ?></td>
-                                <td class="text-center fw-bold"><?= number_format(array_sum(array_column($rows, 'received_qty'))) ?></td>
+                                <?php
+                                $tot_ord = (float)array_sum(array_column($rows, 'ordered_qty'));
+                                $tot_rec = (float)array_sum(array_column($rows, 'received_qty'));
+                                $tot_ord_str = ($tot_ord == floor($tot_ord)) ? number_format($tot_ord) : number_format($tot_ord, 2);
+                                $tot_rec_str = ($tot_rec == floor($tot_rec)) ? number_format($tot_rec) : number_format($tot_rec, 2);
+                                ?>
+                                <td class="text-center fw-bold"><?= $tot_ord_str ?></td>
+                                <td class="text-center fw-bold"><?= $tot_rec_str ?></td>
                                 <td class="text-center fw-bold <?= array_sum(array_column($rows, 'variance')) == 0 ? 'text-success' : (array_sum(array_column($rows, 'variance')) > 0 ? 'text-primary' : 'text-danger') ?>">
                                     <?= (array_sum(array_column($rows, 'variance')) > 0 ? '+' : '') . number_format(array_sum(array_column($rows, 'variance')), 2) ?>
                                 </td>

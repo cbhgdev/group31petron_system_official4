@@ -1,0 +1,32 @@
+388: $last_readings_by_pump = [];     // pump_label => validated ending reading value
+395: $__fetch_prev_readings = function() use ($pdo, $station_id, &$last_readings_by_pump) {
+415: if ($lbl !== '' && !isset($last_readings_by_pump[$lbl])) {
+416: $last_readings_by_pump[$lbl] = $val;
+417: $last_readings_by_pump[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $lbl))] = $val;
+418: $last_readings_by_pump[str_replace(' ', '', $lbl)] = $val;
+420: if ($ft_name !== '' && !isset($last_readings_by_pump[$ft_name])) {
+421: $last_readings_by_pump[$ft_name] = $val;
+422: $last_readings_by_pump[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $ft_name))] = $val;
+423: $last_readings_by_pump[str_replace(' ', '', $ft_name)] = $val;
+427: if (!isset($last_readings_by_pump[$p_key])) {
+428: $last_readings_by_pump[$p_key] = $val;
+467: $today_saved_readings = [];
+549: $today_saved_readings[$lbl_u] = $sr;
+550: $today_saved_readings[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $lbl_u))] = $sr;
+551: $today_saved_readings[str_replace(' ', '', $lbl_u)] = $sr;
+554: $today_saved_readings[$ft_u]  = $sr;
+555: $today_saved_readings[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $ft_u))] = $sr;
+556: $today_saved_readings[str_replace(' ', '', $ft_u)] = $sr;
+559: $today_saved_readings['PUMP_' . (int)$sr['pump_id']] = $sr;
+576: if (!$has_submitted_readings_unclosed && !empty($today_saved_readings)) {
+577: foreach ($today_saved_readings as $sr) {
+4970: $meter_reading_pumps = [];
+5144: $saved_row = $today_saved_readings[$lbl_key]
+5145: ?? ($p_id > 0 && isset($today_saved_readings['PUMP_' . $p_id]) ? $today_saved_readings['PUMP_' . $p_id] : null)
+5146: ?? ($today_saved_readings[strtoupper(trim($ft_name))] ?? null);
+5151: } elseif (isset($last_readings_by_pump[$lbl_key]) && (float)$last_readings_by_pump[$lbl_key] > 0) {
+5152: $pump_prev_reading = (float)$last_readings_by_pump[$lbl_key];
+5153: } elseif ($p_id > 0 && isset($last_readings_by_pump['PUMP_' . $p_id]) && (float)$last_readings_by_pump['PUMP_' . $p_id] > 0) {
+5154: $pump_prev_reading = (float)$last_readings_by_pump['PUMP_' . $p_id];
+5155: } elseif (isset($last_readings_by_pump[strtoupper(trim($ft_name))]) && (float)$last_readings_by_pump[strtoupper(trim($ft_name))] > 0) {
+5156: $pump_prev_reading = (float)$last_readings_by_pump[strtoupper(trim($ft_name))];

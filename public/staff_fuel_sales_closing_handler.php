@@ -7,6 +7,9 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 require_once __DIR__ . '/../backend/lib.php';
 require_once __DIR__ . '/db_connect.php';
+if (function_exists('petron_init_dynamic_timezone')) {
+    petron_init_dynamic_timezone();
+}
 require_login();
 
 header('Content-Type: application/json');
@@ -17,7 +20,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id    = (int)$_SESSION['user_id'];
-$station_id = (int)($_SESSION['station_id'] ?? 0);
+$station_id = function_exists('user_station_id') ? (int)user_station_id() : (int)($_SESSION['station_id'] ?? 0);
 
 if ($station_id <= 0 && $user_id > 0) {
     try {
@@ -94,6 +97,14 @@ if ($action === 'get_summary') {
         $shift, $shift, $shift, $shift_key, $shift_like
     ]);
     $meter_rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    if (empty($meter_rows) && $report_date !== date('Y-m-d')) {
+        $today_manila = date('Y-m-d');
+        $stmt->execute([
+            $station_id, $today_manila, $today_manila,
+            $shift, $shift, $shift, $shift_key, $shift_like
+        ]);
+        $meter_rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+    }
 
     // Summaries per fuel type
     $by_fuel = [
@@ -123,6 +134,17 @@ if ($action === 'get_summary') {
         $ftype  = strtolower(trim($row['fuel_type']));
         $amt    = (float)$row['total_amount'];
         $liters = (float)$row['liters_sold'];
+        $beg    = (float)($row['beginning_reading'] ?? 0);
+        $end    = (float)($row['ending_reading'] ?? 0);
+        $cal    = (float)($row['calibration'] ?? 0);
+        $price  = (float)($row['price_per_liter'] ?? 0);
+
+        if ($liters <= 0 && $end > $beg) {
+            $liters = max(0.0, ($end - $beg) - $cal);
+        }
+        if ($amt <= 0 && $liters > 0 && $price > 0) {
+            $amt = round($liters * $price, 2);
+        }
 
         $total_fuel_sales  += $amt;
         $total_liters_sold += $liters;
@@ -252,7 +274,34 @@ if ($action === 'save_closing') {
                 $readings_by_admin = true;
             }
         } catch (Exception $e) {}
-        $is_auto_approved = ($readings_by_admin || $is_admin_closing);
+
+        // Check if transactions for this date and shift have already been validated/approved by Manager/Admin
+        $already_approved_by_mgr = false;
+        try {
+            $chk_appr = $pdo->prepare("
+                SELECT COUNT(*) FROM fuel_transactions ft
+                WHERE ft.station_id = ? 
+                  AND (DATE(ft.transaction_date) = ? OR (ft.transaction_date IS NULL AND DATE(ft.created_at) = ?))
+                  AND (ft.shift_period = ? OR ft.shift_name = ? OR ? = '' OR LOWER(ft.shift_name) LIKE ?)
+                  AND (LOWER(COALESCE(ft.status,'')) IN ('verified','approved','validated','adjusted') OR ft.validated_by IS NOT NULL)
+            ");
+            $chk_appr->execute([$station_id, $report_date, $report_date, $shift_key, $shift, $shift, $shift_like]);
+            if ((int)$chk_appr->fetchColumn() > 0) {
+                $chk_pend = $pdo->prepare("
+                    SELECT COUNT(*) FROM fuel_transactions ft
+                    WHERE ft.station_id = ? 
+                      AND (DATE(ft.transaction_date) = ? OR (ft.transaction_date IS NULL AND DATE(ft.created_at) = ?))
+                      AND (ft.shift_period = ? OR ft.shift_name = ? OR ? = '' OR LOWER(ft.shift_name) LIKE ?)
+                      AND LOWER(COALESCE(ft.status,'')) IN ('pending','readings_submitted')
+                ");
+                $chk_pend->execute([$station_id, $report_date, $report_date, $shift_key, $shift, $shift, $shift_like]);
+                if ((int)$chk_pend->fetchColumn() === 0) {
+                    $already_approved_by_mgr = true;
+                }
+            }
+        } catch (Exception $e) {}
+
+        $is_auto_approved = ($readings_by_admin || $is_admin_closing || $already_approved_by_mgr);
         $closing_status   = $is_auto_approved ? 'Verified' : 'CLOSING_COMPLETED';
         $txn_status       = $is_auto_approved ? 'Verified' : 'CLOSING_COMPLETED';
 
@@ -292,26 +341,43 @@ if ($action === 'save_closing') {
             $saved_id = $pdo->lastInsertId();
         }
 
-        // Update corresponding fuel_transactions status
+        $today_manila = date('Y-m-d');
+
+        // Update corresponding fuel_transactions status (including today's Manila date if report_date had a UTC offset)
         if ($is_auto_approved) {
             $pdo->prepare("
                 UPDATE fuel_transactions
                 SET status = 'Verified', validated_by = COALESCE(validated_by, ?), validated_at = COALESCE(validated_at, NOW())
                 WHERE station_id = ?
-                  AND (DATE(transaction_date) = ? OR (transaction_date IS NULL AND DATE(created_at) = ?))
-                  AND (shift_period = ? OR shift_name = ? OR ? = '' OR LOWER(shift_name) LIKE ?)
+                  AND (
+                      DATE(transaction_date) IN (?, ?)
+                      OR (transaction_date IS NULL AND DATE(created_at) IN (?, ?))
+                  )
+                  AND (shift_period = ? OR shift_name = ? OR ? = '' OR LOWER(shift_name) LIKE ? OR UPPER(TRIM(COALESCE(status,''))) = 'READINGS_SUBMITTED')
                   AND LOWER(COALESCE(status,'')) NOT IN ('rejected','voided','cancelled','canceled')
-            ")->execute([$user_id, $station_id, $report_date, $report_date, $shift_key, $shift, $shift, $shift_like]);
+            ")->execute([$user_id, $station_id, $report_date, $today_manila, $report_date, $today_manila, $shift_key, $shift, $shift, $shift_like]);
         } else {
             $pdo->prepare("
                 UPDATE fuel_transactions
                 SET status = 'CLOSING_COMPLETED'
                 WHERE station_id = ?
-                  AND (DATE(transaction_date) = ? OR (transaction_date IS NULL AND DATE(created_at) = ?))
-                  AND (shift_period = ? OR shift_name = ? OR ? = '' OR LOWER(shift_name) LIKE ?)
-                  AND LOWER(COALESCE(status,'')) NOT IN ('rejected','voided','cancelled','canceled')
-            ")->execute([$station_id, $report_date, $report_date, $shift_key, $shift, $shift, $shift_like]);
+                  AND (
+                      DATE(transaction_date) IN (?, ?)
+                      OR (transaction_date IS NULL AND DATE(created_at) IN (?, ?))
+                  )
+                  AND (shift_period = ? OR shift_name = ? OR ? = '' OR LOWER(shift_name) LIKE ? OR UPPER(TRIM(COALESCE(status,''))) = 'READINGS_SUBMITTED')
+                  AND LOWER(COALESCE(status,'')) NOT IN ('rejected','voided','cancelled','canceled','verified','approved','validated','adjusted')
+            ")->execute([$station_id, $report_date, $today_manila, $report_date, $today_manila, $shift_key, $shift, $shift, $shift_like]);
         }
+
+        // Also ensure any stub fuel_sales_closing rows from today with READINGS_SUBMITTED are marked closed
+        $pdo->prepare("
+            UPDATE fuel_sales_closing
+            SET status = ?
+            WHERE station_id = ?
+              AND report_date IN (?, ?)
+              AND UPPER(TRIM(COALESCE(status, ''))) = 'READINGS_SUBMITTED'
+        ")->execute([$closing_status, $station_id, $report_date, $today_manila]);
 
         $pdo->commit();
 
@@ -424,60 +490,39 @@ if ($action === 'check_closing_status') {
     $readings_pending  = false;
 
     try {
-        // Check if a real (non-stub) closing exists with financial data
+        // Check if any unclosed READINGS_SUBMITTED meter readings exist for today/shift first
+        $stmt2 = $pdo->prepare("
+            SELECT COUNT(*) FROM fuel_transactions
+            WHERE station_id = ?
+              AND (DATE(transaction_date) = ? OR (transaction_date IS NULL AND DATE(created_at) = ?))
+              AND (shift_period = ? OR shift_name = ? OR ? = '' OR LOWER(shift_name) LIKE ?)
+              AND UPPER(TRIM(COALESCE(status,''))) = 'READINGS_SUBMITTED'
+              AND present_reading > 0
+        ");
+        $stmt2->execute([$station_id, $report_date, $report_date, $shift_key, $shift, $shift_key, $shift_like]);
+        if ((int)$stmt2->fetchColumn() > 0) {
+            $readings_pending = true;
+        }
+
+        // Check if a real (non-stub) closing exists with completed status
         $stmt = $pdo->prepare("
             SELECT id, status, total_fuel_sales, net_sales, total_cash, total_cash_bank,
-                   cash_shift1, cash_shift2, ar_shift1, ar_shift2, total_ar, checked_by
+                   cash_shift1, cash_shift2, ar_shift1, ar_shift2, total_ar, checked_by, encoded_by
             FROM fuel_sales_closing
-            WHERE station_id = ? AND report_date = ?
-              AND (shift = ? OR shift_period = ? OR LOWER(shift) LIKE ?)
+            WHERE station_id = ? AND (report_date = ? OR DATE(encoded_at) = ?)
+              AND (shift = ? OR shift_period = ? OR LOWER(shift) LIKE ? OR ? = '')
             ORDER BY id DESC LIMIT 1
         ");
-        $stmt->execute([$station_id, $report_date, $shift, $shift_key, $shift_like]);
+        $stmt->execute([$station_id, $report_date, $report_date, $shift, $shift_key, $shift_like, $shift_key]);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if ($row) {
             $status_up = strtoupper(trim($row['status'] ?? ''));
             $completed_statuses = ['CLOSING_COMPLETED', 'SAVED', 'REPORTED', 'VERIFIED', 'APPROVED', 'VALIDATED'];
 
-            if (in_array($status_up, $completed_statuses)) {
-                $has_data = (
-                    (float)($row['total_fuel_sales'] ?? 0) > 0 ||
-                    (float)($row['net_sales'] ?? 0) > 0 ||
-                    (float)($row['total_cash'] ?? 0) > 0 ||
-                    (float)($row['total_cash_bank'] ?? 0) > 0 ||
-                    (float)($row['cash_shift1'] ?? 0) > 0 ||
-                    (float)($row['cash_shift2'] ?? 0) > 0 ||
-                    (float)($row['ar_shift1'] ?? 0) > 0 ||
-                    (float)($row['ar_shift2'] ?? 0) > 0 ||
-                    (float)($row['total_ar'] ?? 0) > 0 ||
-                    !empty(trim($row['checked_by'] ?? '')) ||
-                    !empty(trim($row['encoded_by'] ?? ''))
-                );
-                // Completed if: has actual financial/encoded data,
-                // OR if fully verified/approved, OR if status is CLOSING_COMPLETED (already submitted by staff)
-                if ($has_data || in_array($status_up, ['CLOSING_COMPLETED', 'VERIFIED', 'APPROVED', 'VALIDATED', 'SAVED', 'REPORTED'])) {
-                    $closing_completed = true;
-                }
+            if (in_array($status_up, $completed_statuses, true) && !$readings_pending) {
+                $closing_completed = true;
             }
-        }
-
-        // Check if meter readings exist for this shift/date (readings pending = show button)
-        if (!$closing_completed) {
-            $stmt2 = $pdo->prepare("
-                SELECT COUNT(*) FROM fuel_transactions
-                WHERE station_id = ? AND DATE(transaction_date) = ?
-                  AND (shift_period = ? OR shift_name = ? OR ? = '')
-                  AND LOWER(COALESCE(status,'')) NOT IN ('rejected','voided','cancelled','canceled')
-                  AND present_reading > 0
-            ");
-            $stmt2->execute([$station_id, $report_date, $shift_key, $shift, $shift_key]);
-            if ((int)$stmt2->fetchColumn() > 0) {
-                $readings_pending = true;
-            }
-            // NOTE: We intentionally do NOT set readings_pending=true just because a stub row exists.
-            // A stub without financial data and without a completed status means closing is not yet done,
-            // but we only want the button visible if actual readings are present in fuel_transactions.
         }
     } catch (Exception $e) {}
 

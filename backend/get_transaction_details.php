@@ -16,6 +16,7 @@ header('Content-Type: application/json');
 require_once __DIR__ . '/../public/db_connect.php';
 require_once __DIR__ . '/lib.php';
 require_once __DIR__ . '/transaction_schema_fix.php';
+require_once __DIR__ . '/helpers/job_order_payment.php';
 
 // Verify login
 if (session_status() === PHP_SESSION_NONE) session_start();
@@ -132,15 +133,20 @@ try {
         if (!empty($items_rows)) {
             foreach ($items_rows as $it) {
                 $pname = trim((string)($it['product_name'] ?? ''));
+                $pcat  = trim((string)($it['category'] ?? ''));
                 if (in_array($pname, ['', '—', '-', 'N/A', 'n/a', 'none', 'None'], true)) {
                     $pname = 'Merchandise Item';
                 }
-                $item_sku_code = !empty($it['real_sku']) ? $it['real_sku'] : ('SKU-' . $it['product_id']);
+                if (strcasecmp($pname, 'Labor Charge') === 0 || strcasecmp($pname, 'Labor') === 0 || strcasecmp($pname, 'Labor Fee') === 0 || strcasecmp($pcat, 'Labor') === 0 || strcasecmp($pcat, 'Tip') === 0 || strcasecmp($pname, 'Tip') === 0) {
+                    $pname = 'Tip';
+                    $pcat  = 'Tip';
+                }
+                $item_sku_code = !empty($it['real_sku']) ? $it['real_sku'] : (!empty($it['product_id']) ? ('SKU-' . $it['product_id']) : ($pcat === 'Tip' ? 'TIP' : 'SVC'));
                 $sku_list[] = $item_sku_code;
                 $items_breakdown[] = [
                     'sku'          => $item_sku_code,
                     'product_name' => $pname,
-                    'category'     => $it['category'] ?: 'Merchandise',
+                    'category'     => $pcat ?: 'Merchandise',
                     'quantity'     => (float)$it['quantity'],
                     'unit_price'   => number_format((float)$it['unit_price'], 2),
                     'subtotal'     => number_format((float)$it['subtotal'], 2),
@@ -420,6 +426,11 @@ try {
                     $s->execute([$id, $row['transaction_id'] ?? '']);
                     return $s->fetch(PDO::FETCH_ASSOC) ?: null;
                 } catch (Exception $e) { return null; }
+            })(),
+            'payment_history' => (function() use ($pdo, $id, $row) {
+                try {
+                    return jo_payment_history($pdo, 'merchandise_transactions', $id, $row['station_id'] ?? null);
+                } catch (Throwable $e) { return []; }
             })()
         ]);
         
@@ -674,7 +685,12 @@ try {
                 } catch (Exception $e) { return []; }
             })(),
             'adjustment_history' => [],
-            'ar_record' => null
+            'ar_record' => null,
+            'payment_history' => (function() use ($pdo, $id, $row) {
+                try {
+                    return jo_payment_history($pdo, 'job_orders', $id, $row['station_id'] ?? null);
+                } catch (Throwable $e) { return []; }
+            })()
         ]);
         
     } else {

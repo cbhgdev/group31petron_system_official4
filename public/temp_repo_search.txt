@@ -1,0 +1,5 @@
+C:\xampp\htdocs\group31petron_system_official4\public\api_fuel_readings.php ==> MATCH: Ending = Previous
+C:\xampp\htdocs\group31petron_system_official4\public\manager_fuel_transactions.php ==> MATCH: present_reading = (float)$transaction['previous
+C:\xampp\htdocs\group31petron_system_official4\public\staff_reports.php ==> MATCH: Ending = Beginning
+C:\xampp\htdocs\group31petron_system_official4\public\staff_transactions_hub.php ==> MATCH: ending reading is blank or 0, but beginning exists, default Ending = Beginning
+C:\xampp\htdocs\group31petron_system_official4\public\temp_check_repo.php ==> MATCH: endingEl.value = beginning

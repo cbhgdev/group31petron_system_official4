@@ -15,6 +15,7 @@ require_once __DIR__ . '/../public/db_connect.php';
 require_once __DIR__ . '/../backend/transaction_schema_fix.php';
 require_once __DIR__ . '/../backend/customer_module_helpers.php';
 require_once __DIR__ . '/../backend/helpers/job_order_tracker_render.php';
+require_once __DIR__ . '/../backend/helpers/job_order_payment.php';
 require_login();
 
 // Set page_id based on section so sidebar highlights the correct nav item
@@ -30,7 +31,63 @@ $role       = role_key($me['role'] ?? '');
 $enable_void_transaction = function_exists('get_module_setting') ? (bool) get_module_setting('transactions', 'enable_void_transaction', true) : true;
 
 customer_ensure_optional_columns($pdo);
+customer_ensure_vehicle_columns($pdo);
 customer_ensure_request_table($pdo);
+
+if (isset($_GET['action']) && $_GET['action'] === 'get_customer_vehicles') {
+    while (ob_get_level()) { @ob_end_clean(); }
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-cache, no-store, must-revalidate');
+
+    $custId = (int)($_GET['customer_id'] ?? 0);
+    $plate  = strtoupper(trim($_GET['plate'] ?? ''));
+    $veh    = null;
+
+    if ($custId > 0) {
+        if ($plate !== '') {
+            $stmt = $pdo->prepare("SELECT * FROM customer_vehicles WHERE customer_id = ? AND (UPPER(TRIM(plate_number)) = ? OR REPLACE(UPPER(TRIM(plate_number)), ' ', '') = REPLACE(?, ' ', '')) ORDER BY id DESC LIMIT 1");
+            $stmt->execute([$custId, $plate, $plate]);
+            $veh = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+        if (!$veh) {
+            $stmt = $pdo->prepare("SELECT * FROM customer_vehicles WHERE customer_id = ? ORDER BY id DESC LIMIT 1");
+            $stmt->execute([$custId]);
+            $veh = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+        if (!$veh) {
+            $stmt = $pdo->prepare("SELECT vehicle_plate AS plate_number, vehicle_type, vehicle_brand AS brand, vehicle_model AS model, year_model, engine_number, chassis_number, color FROM customers WHERE id = ? LIMIT 1");
+            $stmt->execute([$custId]);
+            $veh = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+    } else if ($plate !== '') {
+        $stmt = $pdo->prepare("SELECT cv.*, c.first_name, c.last_name, c.name, c.contact_number FROM customer_vehicles cv LEFT JOIN customers c ON c.id = cv.customer_id WHERE (UPPER(TRIM(cv.plate_number)) = ? OR REPLACE(UPPER(TRIM(cv.plate_number)), ' ', '') = REPLACE(?, ' ', '')) ORDER BY cv.id DESC LIMIT 1");
+        $stmt->execute([$plate, $plate]);
+        $veh = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$veh) {
+            $stmt = $pdo->prepare("SELECT vehicle_plate AS plate_number, vehicle_type, vehicle_brand AS brand, vehicle_model AS model, year_model, engine_number, chassis_number, color, id AS customer_id, first_name, last_name, name, contact_number FROM customers WHERE (UPPER(TRIM(vehicle_plate)) = ? OR REPLACE(UPPER(TRIM(vehicle_plate)), ' ', '') = REPLACE(?, ' ', '')) ORDER BY id DESC LIMIT 1");
+            $stmt->execute([$plate, $plate]);
+            $veh = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+    }
+
+    if ($veh) {
+        $eng = trim((string)(!empty($veh['engine_number']) ? $veh['engine_number'] : (!empty($veh['engine_no']) ? $veh['engine_no'] : '')));
+        $cha = trim((string)(!empty($veh['chassis_number']) ? $veh['chassis_number'] : (!empty($veh['chassis_no']) ? $veh['chassis_no'] : '')));
+        $veh['engine_number'] = $eng;
+        $veh['engine_no']     = $eng;
+        $veh['chassis_number']= $cha;
+        $veh['chassis_no']    = $cha;
+        $veh['year_model']    = trim((string)($veh['year_model'] ?? ''));
+        $veh['vehicle_type']  = trim((string)($veh['vehicle_type'] ?? ''));
+        $veh['brand']         = trim((string)(!empty($veh['brand']) ? $veh['brand'] : (!empty($veh['vehicle_brand']) ? $veh['vehicle_brand'] : '')));
+        $veh['model']         = trim((string)(!empty($veh['model']) ? $veh['model'] : (!empty($veh['vehicle_model']) ? $veh['vehicle_model'] : '')));
+        $veh['plate_number']  = trim((string)(!empty($veh['plate_number']) ? $veh['plate_number'] : (!empty($veh['vehicle_plate']) ? $veh['vehicle_plate'] : '')));
+        echo json_encode(['success' => true, 'vehicle' => $veh]);
+    } else {
+        echo json_encode(['success' => false, 'vehicle' => null]);
+    }
+    exit;
+}
 
 // ── Generate a per-request API token so AJAX calls don't depend on session cookies ──
 if (empty($_SESSION['api_token'])) {
@@ -274,8 +331,8 @@ try {
     $customerLoyaltyCardExpr = customer_expr_col($pdo, 'c', 'loyalty_card_no', "''");
 
     $customerYearExpr = customer_expr_col($pdo, 'c', 'year_model', "''");
-    $customerEngineExpr = customer_expr_col($pdo, 'c', 'engine_number', "''");
-    $customerChassisExpr = customer_expr_col($pdo, 'c', 'chassis_number', "''");
+    $customerEngineExpr = customer_expr_col($pdo, 'c', 'engine_number', customer_expr_col($pdo, 'c', 'engine_no', "''"));
+    $customerChassisExpr = customer_expr_col($pdo, 'c', 'chassis_number', customer_expr_col($pdo, 'c', 'chassis_no', "''"));
 
     // Fetch customers with complete vehicle information (including engine & chassis numbers) for auto-fill
     $stmt = $pdo->prepare("
@@ -301,8 +358,8 @@ try {
             COALESCE(NULLIF(cv.model,''), {$customerModelExpr}) AS vehicle_model,
             COALESCE(NULLIF(cv.plate_number,''), {$customerPlateExpr}) AS plate_number,
             COALESCE(NULLIF(cv.year_model,''), {$customerYearExpr}) AS year_model,
-            COALESCE(NULLIF(cv.engine_no,''), {$customerEngineExpr}) AS engine_number,
-            COALESCE(NULLIF(cv.chassis_no,''), {$customerChassisExpr}) AS chassis_number
+            COALESCE(NULLIF(cv.engine_no,''), NULLIF(cv.engine_number,''), {$customerEngineExpr}) AS engine_number,
+            COALESCE(NULLIF(cv.chassis_no,''), NULLIF(cv.chassis_number,''), {$customerChassisExpr}) AS chassis_number
         FROM customers c
         LEFT JOIN loyalty_accounts la ON la.customer_id = c.id AND la.program_id = 1 AND la.status = 'active'
         LEFT JOIN (
@@ -310,7 +367,7 @@ try {
             INNER JOIN (
                 SELECT customer_id, MAX(id) as max_id
                 FROM customer_vehicles
-                WHERE status = 'active'
+                WHERE (status = 'active' OR status IS NULL OR status = '')
                 GROUP BY customer_id
             ) cv2 ON cv1.id = cv2.max_id
         ) cv ON cv.customer_id = c.id
@@ -412,15 +469,39 @@ try {
                 $ft_name = strtoupper(trim($row['fuel_type'] ?? ''));
                 $val = (float)$row['present_reading'];
 
-                if ($lbl !== '' && !isset($last_readings_by_pump[$lbl])) {
-                    $last_readings_by_pump[$lbl] = $val;
-                    $last_readings_by_pump[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $lbl))] = $val;
-                    $last_readings_by_pump[str_replace(' ', '', $lbl)] = $val;
+                if ($lbl !== '') {
+                    if (!isset($last_readings_by_pump[$lbl])) {
+                        $last_readings_by_pump[$lbl] = $val;
+                    }
+                    $lbl_sp = preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $lbl));
+                    if (!isset($last_readings_by_pump[$lbl_sp])) {
+                        $last_readings_by_pump[$lbl_sp] = $val;
+                    }
+                    $lbl_ns = str_replace(' ', '', $lbl);
+                    if (!isset($last_readings_by_pump[$lbl_ns])) {
+                        $last_readings_by_pump[$lbl_ns] = $val;
+                    }
+                    $lbl_norm = 'NORM_' . preg_replace('/[^A-Z0-9]/', '', $lbl);
+                    if (!isset($last_readings_by_pump[$lbl_norm])) {
+                        $last_readings_by_pump[$lbl_norm] = $val;
+                    }
                 }
-                if ($ft_name !== '' && !isset($last_readings_by_pump[$ft_name])) {
-                    $last_readings_by_pump[$ft_name] = $val;
-                    $last_readings_by_pump[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $ft_name))] = $val;
-                    $last_readings_by_pump[str_replace(' ', '', $ft_name)] = $val;
+                if ($ft_name !== '') {
+                    if (!isset($last_readings_by_pump[$ft_name])) {
+                        $last_readings_by_pump[$ft_name] = $val;
+                    }
+                    $ft_sp = preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $ft_name));
+                    if (!isset($last_readings_by_pump[$ft_sp])) {
+                        $last_readings_by_pump[$ft_sp] = $val;
+                    }
+                    $ft_ns = str_replace(' ', '', $ft_name);
+                    if (!isset($last_readings_by_pump[$ft_ns])) {
+                        $last_readings_by_pump[$ft_ns] = $val;
+                    }
+                    $ft_norm = 'NORM_' . preg_replace('/[^A-Z0-9]/', '', $ft_name);
+                    if (!isset($last_readings_by_pump[$ft_norm])) {
+                        $last_readings_by_pump[$ft_norm] = $val;
+                    }
                 }
                 if (!empty($row['pump_id'])) {
                     $p_key = 'PUMP_' . (int)$row['pump_id'];
@@ -466,50 +547,78 @@ $today_date = date('Y-m-d');
 $current_shift_status = 'DRAFT';
 $today_saved_readings = [];
 $is_closing_completed = false;
+$shift_like_val = '%' . strtolower($fuel_shift_key) . '%';
+
+// Self-heal: if ?closing_saved=1 is present OR the latest fuel_sales_closing entry saved today
+// has a completed status (even if report_date or shift label had a UTC/default mismatch),
+// ensure today's shift transactions and closing stub are marked CLOSING_COMPLETED.
+try {
+    $should_finalize_today = isset($_GET['closing_saved']);
+    if (!$should_finalize_today) {
+        $stmt_recent_cls = $pdo->prepare("
+            SELECT id, status, encoded_at, report_date
+            FROM fuel_sales_closing
+            WHERE station_id = ?
+              AND (report_date = ? OR DATE(encoded_at) = ?)
+            ORDER BY encoded_at DESC, id DESC LIMIT 1
+        ");
+        $stmt_recent_cls->execute([$station_id, $today_date, $today_date]);
+        $recent_cls = $stmt_recent_cls->fetch(PDO::FETCH_ASSOC);
+
+        if ($recent_cls) {
+            $recent_cls_stat = strtoupper(trim($recent_cls['status'] ?? ''));
+            if (in_array($recent_cls_stat, ['CLOSING_COMPLETED', 'SAVED', 'REPORTED', 'VERIFIED', 'APPROVED', 'VALIDATED'], true)) {
+                $should_finalize_today = true;
+            }
+        }
+    }
+
+    if ($should_finalize_today) {
+        $pdo->prepare("
+            UPDATE fuel_transactions
+            SET status = 'CLOSING_COMPLETED'
+            WHERE station_id = ?
+              AND DATE(transaction_date) = ?
+              AND UPPER(TRIM(COALESCE(status, ''))) = 'READINGS_SUBMITTED'
+        ")->execute([$station_id, $today_date]);
+
+        $pdo->prepare("
+            UPDATE fuel_sales_closing
+            SET status = 'CLOSING_COMPLETED', report_date = ?, shift = ?, shift_period = ?
+            WHERE station_id = ?
+              AND (report_date = ? OR DATE(encoded_at) = ?)
+              AND UPPER(TRIM(COALESCE(status, ''))) = 'READINGS_SUBMITTED'
+        ")->execute([$today_date, $fuel_shift_name, $fuel_shift_key, $station_id, $today_date, $today_date]);
+
+        if (isset($__fetch_prev_readings) && is_callable($__fetch_prev_readings)) {
+            $last_readings_by_pump = [];
+            $__fetch_prev_readings();
+        }
+    }
+} catch (Exception $e) {}
 
 try {
-    $shift_like_val = '%' . strtolower($fuel_shift_key) . '%';
     $stmt_cstat = $pdo->prepare("
         SELECT id, status, total_fuel_sales, net_sales, total_cash, total_cash_bank,
                cash_shift1, cash_shift2, ar_shift1, ar_shift2, total_ar, checked_by, verified_by
         FROM fuel_sales_closing
-        WHERE station_id = ? AND report_date = ? AND (shift = ? OR shift_period = ? OR LOWER(shift) LIKE ?)
-        ORDER BY id DESC LIMIT 1
+        WHERE station_id = ? AND (report_date = ? OR DATE(encoded_at) = ?) AND (shift = ? OR shift_period = ? OR LOWER(shift) LIKE ?)
+        ORDER BY CASE WHEN UPPER(TRIM(COALESCE(status,''))) IN ('CLOSING_COMPLETED','VERIFIED','APPROVED','VALIDATED','SAVED','REPORTED') THEN 0 ELSE 1 END, id DESC LIMIT 1
     ");
-    $stmt_cstat->execute([$station_id, $today_date, $fuel_shift_name, $fuel_shift_key, $shift_like_val]);
+    $stmt_cstat->execute([$station_id, $today_date, $today_date, $fuel_shift_name, $fuel_shift_key, $shift_like_val]);
     $found_closing = $stmt_cstat->fetch(PDO::FETCH_ASSOC);
     if ($found_closing && !empty($found_closing['status'])) {
         $current_shift_status = strtoupper(trim($found_closing['status']));
     }
 } catch (Exception $e) {}
 
-// A closing is truly completed ONLY if actual financial data was submitted/saved OR ?closing_saved is present.
-// Note: Stubs created during meter reading encoding have 0.00 sales and are NOT completed closings!
-$has_closing_data = false;
-if (!empty($found_closing)) {
-    $has_closing_data = (
-        (float)($found_closing['total_fuel_sales'] ?? 0) > 0 ||
-        (float)($found_closing['net_sales'] ?? 0) > 0 ||
-        (float)($found_closing['total_cash'] ?? 0) > 0 ||
-        (float)($found_closing['total_cash_bank'] ?? 0) > 0 ||
-        (float)($found_closing['cash_shift1'] ?? 0) > 0 ||
-        (float)($found_closing['cash_shift2'] ?? 0) > 0 ||
-        (float)($found_closing['ar_shift1'] ?? 0) > 0 ||
-        (float)($found_closing['ar_shift2'] ?? 0) > 0 ||
-        (float)($found_closing['total_ar'] ?? 0) > 0 ||
-        !empty(trim($found_closing['checked_by'] ?? ''))
-    );
-}
-
-if (isset($_GET['closing_saved']) || ($has_closing_data && in_array($current_shift_status, ['CLOSING_COMPLETED', 'SAVED', 'REPORTED', 'VERIFIED', 'APPROVED', 'VALIDATED']))) {
+if (!empty($should_finalize_today) || isset($_GET['closing_saved']) || in_array($current_shift_status, ['CLOSING_COMPLETED', 'SAVED', 'REPORTED', 'VERIFIED', 'APPROVED', 'VALIDATED'], true)) {
     $is_closing_completed = true;
-    $current_shift_status = 'CLOSING_COMPLETED';
+    if (!in_array($current_shift_status, ['VERIFIED', 'APPROVED', 'VALIDATED'], true)) {
+        $current_shift_status = 'CLOSING_COMPLETED';
+    }
 } else {
     $is_closing_completed = false;
-    if ($current_shift_status === 'CLOSING_COMPLETED' || $current_shift_status === 'VERIFIED') {
-        // If it was just an empty stub marked Verified/Completed without closing figures, treat status as READINGS_SUBMITTED
-        $current_shift_status = 'READINGS_SUBMITTED';
-    }
 }
 
 if (!$is_closing_completed && ($current_shift_status === 'DRAFT' || empty($current_shift_status))) {
@@ -524,10 +633,15 @@ if (!$is_closing_completed && ($current_shift_status === 'DRAFT' || empty($curre
         $found_txstat = $stmt_txstat->fetchColumn();
         if ($found_txstat) {
             $current_shift_status = strtoupper(trim($found_txstat));
+            if (in_array($current_shift_status, ['CLOSING_COMPLETED', 'VERIFIED', 'APPROVED', 'VALIDATED', 'SAVED', 'REPORTED'], true)) {
+                $is_closing_completed = true;
+            }
         }
     } catch (Exception $e) {}
 }
 
+$saved_rows = [];
+$latest_by_pump = [];
 try {
     $st_readings = $pdo->prepare("
         SELECT ft.id, COALESCE(NULLIF(fp.pump_number, ''), ft.fuel_type) AS pump_label, ft.fuel_type, ft.pump_id,
@@ -549,42 +663,41 @@ try {
             $today_saved_readings[$lbl_u] = $sr;
             $today_saved_readings[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $lbl_u))] = $sr;
             $today_saved_readings[str_replace(' ', '', $lbl_u)] = $sr;
+            $today_saved_readings['NORM_' . preg_replace('/[^A-Z0-9]/', '', $lbl_u)] = $sr;
         }
         if ($ft_u !== '') {
             $today_saved_readings[$ft_u]  = $sr;
             $today_saved_readings[preg_replace('/\s*-\s*/', ' - ', preg_replace('/\s+/', ' ', $ft_u))] = $sr;
             $today_saved_readings[str_replace(' ', '', $ft_u)] = $sr;
+            $today_saved_readings['NORM_' . preg_replace('/[^A-Z0-9]/', '', $ft_u)] = $sr;
         }
         if (!empty($sr['pump_id'])) {
             $today_saved_readings['PUMP_' . (int)$sr['pump_id']] = $sr;
         }
+        $dedup_k = !empty($sr['pump_id']) ? ('PUMP_' . (int)$sr['pump_id']) : ($lbl_u !== '' ? $lbl_u : $ft_u);
+        $latest_by_pump[$dedup_k] = $sr;
     }
 } catch (Exception $e) {}
 
-// Check if current shift has submitted readings awaiting closing input
-// The Fuel Sales Closing button appears when readings have been submitted AND closing is not completed!
+// Check if current shift has submitted readings awaiting closing input vs already closed readings
 $has_submitted_readings_unclosed = false;
-if (!$is_closing_completed) {
-    if (!empty($saved_rows)) {
-        foreach ($saved_rows as $sr) {
-            if ((float)($sr['present_reading'] ?? 0) > 0) {
-                $has_submitted_readings_unclosed = true;
-                break;
-            }
+$has_any_closed_readings = false;
+if (!empty($latest_by_pump)) {
+    foreach ($latest_by_pump as $sr) {
+        $sr_stat = strtoupper(trim($sr['status'] ?? ''));
+        if ($sr_stat === 'READINGS_SUBMITTED' && (float)($sr['present_reading'] ?? 0) > 0) {
+            $has_submitted_readings_unclosed = true;
+        } elseif (in_array($sr_stat, ['CLOSING_COMPLETED', 'VERIFIED', 'APPROVED', 'VALIDATED', 'SAVED', 'REPORTED', 'PENDING VALIDATION', 'PENDING', 'COMPLETED'], true)) {
+            $has_any_closed_readings = true;
         }
     }
-    if (!$has_submitted_readings_unclosed && !empty($today_saved_readings)) {
-        foreach ($today_saved_readings as $sr) {
-            if ((float)($sr['present_reading'] ?? 0) > 0) {
-                $has_submitted_readings_unclosed = true;
-                break;
-            }
-        }
-    }
-    // Also if a closing stub exists without completed financial data
-    if (!$has_submitted_readings_unclosed && !empty($found_closing)) {
-        $has_submitted_readings_unclosed = true;
-    }
+}
+if (!empty($should_finalize_today) || isset($_GET['closing_saved']) || ($has_any_closed_readings && !$has_submitted_readings_unclosed)) {
+    $is_closing_completed = true;
+    $has_submitted_readings_unclosed = false;
+    $current_shift_status = 'CLOSING_COMPLETED';
+} elseif ($has_submitted_readings_unclosed) {
+    $is_closing_completed = false;
 }
 
 // ── STAFF DASHBOARD KPI CARDS DATA ────────────────────────────────────────────
@@ -674,19 +787,6 @@ $jom_filter_status       = $_GET['jom_status'] ?? '';
 $jom_search              = trim($_GET['jom_search'] ?? '');
 
 // Pre-fetch pending transaction_requests for Merchandise History rows
-        // ── AJAX JSON POLLING ENDPOINT FOR MERCHANDISE HISTORY ─────────────────
-        if (isset($_GET['ajax_mh']) && $_GET['ajax_mh'] == '1') {
-            header('Content-Type: application/json');
-            echo json_encode([
-                'success' => true,
-                'kpis' => [
-                    'txn_count'     => count($mh_recent),
-                    'total_encoded' => '₱' . number_format($mh_kpi_total_encoded, 2)
-                ],
-                'mh_count' => count($mh_recent)
-            ]);
-            exit;
-        }
 
         $mh_pending_requests = [];
 try {
@@ -812,6 +912,7 @@ if ($section === 'merchandise') {
                    $mh_txnid_col AS transaction_id,
                    CONCAT('OR-', YEAR($mh_date_col), '-', LPAD(mt.id, 6, '0')) AS or_number,
                    mt.customer_name,
+                   COALESCE(mt.credit_customer_id, 0) AS credit_customer_id,
                    mt.payment_method,
                    mt.ewallet_provider,
                    mt.ewallet_reference,
@@ -845,25 +946,54 @@ if ($section === 'merchandise') {
         $mh_kpi_items_released = 0;
         $mh_kpi_total_encoded  = 0.00;
         try {
-            $mhkpi = $pdo->prepare("
-                SELECT COUNT(DISTINCT mt.id)   AS txn_count,
-                       COALESCE(SUM(mti.quantity), 0) AS items_released,
+            // Count distinct pure merchandise transactions today and calculate exact total_amount (no duplicate joins)
+            $mhkpi_tx = $pdo->prepare("
+                SELECT COUNT(*) AS txn_count,
                        COALESCE(SUM(mt.total_amount), 0) AS total_encoded
                 FROM merchandise_transactions mt
-                LEFT JOIN merchandise_transaction_items mti ON mti.transaction_id = mt.id
                 WHERE mt.station_id = ?
                   AND mt.staff_id   = ?
-                  AND DATE(mt.created_at) = CURDATE()
-                  AND COALESCE(mt.transaction_type,'merchandise') = 'merchandise'
+                  AND DATE(COALESCE($mh_date_col, mt.created_at)) = CURDATE()
+                  AND COALESCE(mt.transaction_type, 'merchandise') = 'merchandise'
+                  AND LOWER(COALESCE(mt.validation_status, '')) NOT IN ('voided', 'cancelled', 'canceled')
             ");
-            $mhkpi->execute([$station_id, $me['id']]);
-            $mhkpi_row = $mhkpi->fetch(PDO::FETCH_ASSOC);
+            $mhkpi_tx->execute([$station_id, $me['id']]);
+            $mhkpi_row = $mhkpi_tx->fetch(PDO::FETCH_ASSOC);
             if ($mhkpi_row) {
-                $mh_kpi_txn_count      = (int)$mhkpi_row['txn_count'];
-                $mh_kpi_items_released = (int)$mhkpi_row['items_released'];
-                $mh_kpi_total_encoded  = (float)$mhkpi_row['total_encoded'];
+                $mh_kpi_txn_count     = (int)$mhkpi_row['txn_count'];
+                $mh_kpi_total_encoded = (float)$mhkpi_row['total_encoded'];
             }
-        } catch (Exception $_mhkpie) {}
+
+            // Sum quantity of items released in pure merchandise transactions today
+            $mhkpi_itms = $pdo->prepare("
+                SELECT COALESCE(SUM(mti.quantity), 0) AS items_released
+                FROM merchandise_transaction_items mti
+                INNER JOIN merchandise_transactions mt ON mt.id = mti.transaction_id
+                WHERE mt.station_id = ?
+                  AND mt.staff_id   = ?
+                  AND DATE(COALESCE($mh_date_col, mt.created_at)) = CURDATE()
+                  AND COALESCE(mt.transaction_type, 'merchandise') = 'merchandise'
+                  AND LOWER(COALESCE(mt.validation_status, '')) NOT IN ('voided', 'cancelled', 'canceled')
+            ");
+            $mhkpi_itms->execute([$station_id, $me['id']]);
+            $mh_kpi_items_released = (int)$mhkpi_itms->fetchColumn();
+        } catch (Exception $_mhkpie) {
+            error_log('staff_transactions_hub merch KPI error: ' . $_mhkpie->getMessage());
+        }
+        // ── AJAX JSON POLLING ENDPOINT FOR MERCHANDISE HISTORY ─────────────────
+        if (isset($_GET['ajax_mh']) && $_GET['ajax_mh'] == '1') {
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => true,
+                'kpis' => [
+                    'txn_count'      => $mh_kpi_txn_count,
+                    'items_released' => $mh_kpi_items_released,
+                    'total_encoded'  => '₱' . number_format($mh_kpi_total_encoded, 2)
+                ],
+                'mh_count' => count($mh_recent)
+            ]);
+            exit;
+        }
 
         $stmt_sh = $pdo->query("SELECT shift_key, shift_name FROM shift_periods WHERE is_active = 1 ORDER BY sort_order ASC");
         $mh_available_shifts = $stmt_sh ? $stmt_sh->fetchAll(PDO::FETCH_ASSOC) : [];
@@ -898,6 +1028,7 @@ if ($section === 'merchandise') {
                 SELECT mt.id AS mt_id,
                        $mh_txnid_col AS transaction_id,
                        mt.customer_name,
+                       COALESCE(mt.credit_customer_id, 0) AS credit_customer_id,
                        mt.customer_contact,
                        COALESCE(mt.job_order_service, '') AS job_order_service,
                        COALESCE(mt.job_order_vehicle_plate, '') AS job_order_vehicle_plate,
@@ -925,6 +1056,7 @@ if ($section === 'merchandise') {
                        (SELECT GROUP_CONCAT(mti.product_name SEPARATOR ', ')
                         FROM merchandise_transaction_items mti
                         WHERE mti.transaction_id = mt.id AND COALESCE(mti.item_type,'merchandise') = 'service'
+                          AND mti.category NOT IN ('Labor', 'Tip') AND mti.product_name NOT LIKE '%Labor%' AND LOWER(TRIM(mti.product_name)) != 'tip' AND mti.product_name NOT LIKE '%Tip%'
                        ) AS service_summary
                 FROM merchandise_transactions mt
                 $jom_where
@@ -1170,14 +1302,14 @@ if ($section === 'history' || $section === 'fuel_history') {
                    COALESCE(NULLIF(TRIM(mt.job_order_service),''),'') AS job_order_service,
                    COALESCE(
                        jo_mt.estimated_cost,
-                       (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category != 'Labor' AND product_name NOT LIKE '%Labor%'),
+                       (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category NOT IN ('Labor', 'Tip') AND product_name NOT LIKE '%Labor%' AND LOWER(TRIM(product_name)) != 'tip' AND product_name NOT LIKE '%Tip%'),
                        CASE WHEN (mt.job_order_service IS NOT NULL AND TRIM(mt.job_order_service) != '') OR COALESCE($mt_type_col,'merchandise') IN ('job_order', 'combined') THEN mt.total_amount ELSE 0 END,
                        0
                    ) AS service_fee,
                    COALESCE(
-                       jo_mt.actual_labor_cost,
-                       jo_mt.estimated_labor_cost,
-                       (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category = 'Labor' OR product_name LIKE '%Labor%')),
+                       NULLIF(jo_mt.actual_labor_cost, 0),
+                       NULLIF(jo_mt.estimated_labor_cost, 0),
+                       (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category IN ('Labor', 'Tip') OR product_name LIKE '%Labor%' OR LOWER(TRIM(product_name)) = 'tip' OR product_name LIKE '%Tip%')),
                        0
                    ) AS labor_fee
             FROM merchandise_transactions mt
@@ -1542,6 +1674,10 @@ if ($section === 'merchandise') {
             try { $pdo->exec("ALTER TABLE merchandise_transactions ADD COLUMN released_at DATETIME NULL"); } catch (Exception $e) {}
         } catch (Exception $e) {}
 
+        if (trim($_POST['jo_action'] ?? '') === 'settle_payment') {
+            jo_payment_ensure_schema($pdo); // DDL must run before beginTransaction()
+        }
+
         $jo_action    = trim($_POST['jo_action'] ?? '');
         $jo_id        = (int)($_POST['jo_id'] ?? 0);
         $jo_src_raw   = trim($_POST['jo_source'] ?? 'job_orders');
@@ -1633,44 +1769,86 @@ if ($section === 'merchandise') {
 
             // 1. Settle Payment
             if ($jo_action === 'settle_payment') {
-                $amount_now     = round((float)($_POST['settle_amount'] ?? 0), 2);
-                $raw_pay_method = trim($_POST['settle_method'] ?? 'Cash');
-                $norm_pay       = normalize_payment_type($raw_pay_method);
-                $pay_method     = $norm_pay['payment_type'];
                 $remarks        = trim($_POST['settle_remarks'] ?? '');
                 $mark_complete  = !empty($_POST['mark_complete_on_settle']);
 
-                if ($amount_now <= 0) {
-                    throw new Exception('Please enter a valid payment amount greater than zero.');
+                // ── Duplicate submission guard (double-click / browser retry) ──
+                $dup_idem = substr(preg_replace('/[^A-Za-z0-9\-_]/', '', (string)($_POST['settle_idem'] ?? '')), 0, 64);
+                $dup_row  = jo_payment_find_duplicate($pdo, $dup_idem !== '' ? $dup_idem : null);
+                if ($dup_row) {
+                    $pdo->rollBack();
+                    $dup_msg = 'This payment was already processed (Receipt ' . ($dup_row['receipt_no'] ?? '—') . '). No duplicate payment was created.';
+                    if ($is_ajax) {
+                        header('Content-Type: application/json');
+                        echo json_encode([
+                            'success' => true, 'duplicate' => true, 'message' => $dup_msg,
+                            'jo_id' => $jo_id, 'jo_source' => $jo_src, 'new_status' => $cur_status,
+                            'payment_status' => $cur_pay_status, 'payment_method' => $cur_pay_method,
+                            'amount_paid' => $cur_amount_paid, 'total_amount' => $cur_total_amount, 'balance_due' => $cur_balance,
+                            'is_credit_approved' => $is_credit_approved,
+                            'payment_id' => (int)$dup_row['id'], 'receipt_no' => $dup_row['receipt_no'] ?? null,
+                            'receipt_url' => 'payment_receipt.php?id=' . (int)$dup_row['id'],
+                        ]);
+                        exit;
+                    }
+                    $_SESSION['success'] = $dup_msg;
+                    header("Location: staff_transactions_hub.php?section=merchandise&active_tab=tracker");
+                    exit;
                 }
 
-                // If complete & settle requested, validate status sequence
+                // ── Server-side validation (never trusts browser amounts) ──
+                $vctx           = jo_payment_validate($pdo, $cur, $jo_src, $jo_id, $station_id, $_POST, $cur_status, $role);
+                $amount_now     = $vctx['amount'];
+                $raw_pay_method = $vctx['raw_method'];
+                $norm_pay       = normalize_payment_type($raw_pay_method);
+                $pay_method     = $norm_pay['payment_type'];
+                $is_credit_txn  = $vctx['is_credit'];
+                // A credit (A/R) transaction keeps its Credit Account identity; the actual collection
+                // method is stored on the payment record itself.
+                $store_method   = $is_credit_txn ? $vctx['cur_pay_method'] : $pay_method;
+
+                $linked_mt_id = 0;
+                if ($jo_src === 'merchandise_transactions') {
+                    $linked_mt_id = $jo_id;
+                } else {
+                    try {
+                        $lk = $pdo->prepare("SELECT id FROM merchandise_transactions WHERE job_order_db_id = ? LIMIT 1");
+                        $lk->execute([$jo_id]);
+                        $linked_mt_id = (int)$lk->fetchColumn();
+                        $cur['linked_mt_id'] = $linked_mt_id;
+                    } catch (Exception $lk_err) {}
+                }
+
+                // If complete & process payment requested, validate status sequence
                 if ($mark_complete) {
                     if ($cur_status === 'Pending' || $cur_status === 'Waiting for Parts') {
-                        throw new Exception('Start the Job Order and move it to In Progress before completing and settling.');
+                        throw new Exception('Start the Job Order and move it to In Progress before completing and processing payment.');
                     }
                     if ($cur_status === 'Released') {
                         throw new Exception('Job Order has already been released.');
                     }
                     if ($cur_status === 'Voided') {
-                        throw new Exception('Cannot settle payment on a voided Job Order.');
+                        throw new Exception('Cannot process payment on a voided Job Order.');
                     }
                 }
 
-                $total_bill  = (float)$cur['current_total_amount'];
-                $prev_paid   = (float)$cur['current_amount_paid'];
+                $total_bill  = $vctx['total'];
+                $prev_paid   = $vctx['prev_paid'];
                 $new_paid    = round($prev_paid + $amount_now, 2);
                 $new_balance = max(0, round($total_bill - $new_paid, 2));
                 $new_status  = ($new_balance <= 0.009) ? 'Paid' : 'Partially Paid';
-                $new_ar_stat = ($new_balance <= 0.009) ? 'Settled' : 'Pending';
+                $new_ar_stat = ($new_balance <= 0.009) ? 'Settled' : ($is_credit_txn ? 'Active' : 'Pending');
 
-                // Only move to Completed if current status is In Progress
-                $should_complete = ($mark_complete || $new_balance <= 0.009) && ($cur_status === 'In Progress');
+                // Only move to Completed if current status is In Progress.
+                // Collecting a Credit Account balance never changes the service workflow by itself.
+                $should_complete = $is_credit_txn
+                    ? ($mark_complete && $cur_status === 'In Progress')
+                    : (($mark_complete || $new_balance <= 0.009) && ($cur_status === 'In Progress'));
                 $target_wf_status = $should_complete ? 'Completed' : $cur_status;
 
                 if ($jo_src === 'merchandise_transactions') {
                     $sets = "payment_status=?, ar_status=?, amount_paid=?, balance_due=?, payment_method=?, updated_at=NOW()";
-                    $params = [$new_status, $new_ar_stat, $new_paid, $new_balance, $pay_method];
+                    $params = [$new_status, $new_ar_stat, $new_paid, $new_balance, $store_method];
                     if ($should_complete) {
                         $sets .= ", workflow_status='Completed', completed_at=NOW()";
                     }
@@ -1678,7 +1856,7 @@ if ($section === 'merchandise') {
                         ->execute(array_merge($params, [$jo_id, $station_id, $station_id]));
 
                     // PVC Points deduction
-                    if ($pay_method === 'Petron Value Card (PVC Points)' && !empty($cur['customer_id'])) {
+                    if (!$is_credit_txn && $pay_method === 'Petron Value Card (PVC Points)' && !empty($cur['customer_id'])) {
                         try {
                             $cId = (int)$cur['customer_id'];
                             $pvcAcc = get_customer_pvc_account($pdo, $cId);
@@ -1703,19 +1881,15 @@ if ($section === 'merchandise') {
                         $jo_sync_sets = "payment_status=?, amount_paid=?, balance_due=?, payment_method=?, updated_at=NOW()";
                         if ($should_complete) { $jo_sync_sets .= ", status='Completed', completed_at=NOW()"; }
                         $pdo->prepare("UPDATE job_orders SET $jo_sync_sets WHERE (id = (SELECT job_order_db_id FROM merchandise_transactions WHERE id = ?) OR job_order_id = ?) AND (station_id=? OR ?=0)")
-                            ->execute(array_merge([$new_status, $new_paid, $new_balance, $pay_method], [$jo_id, $jo_id, $station_id, $station_id]));
+                            ->execute(array_merge([$new_status, $new_paid, $new_balance, $store_method], [$jo_id, $jo_id, $station_id, $station_id]));
                     } catch (Exception $j_sync) {}
 
-                    // Sync accounts receivable
-                    try {
-                        $pdo->prepare("UPDATE customer_accounts_receivable SET amount_paid = amount_paid + ?, outstanding_balance = ?, status = IF(? <= 0.009, 'Settled', 'Active'), updated_at = NOW() WHERE (transaction_db_id = ? OR transaction_id = ?) AND (station_id = ? OR ?=0)")
-                            ->execute([$amount_now, $new_balance, $new_balance, $jo_id, $cur['transaction_id'] ?? '', $station_id, $station_id]);
-                    } catch (Exception $ar_err) {}
-
-                    try { $pdo->prepare("INSERT INTO payment_audit_log (record_id, record_source, staff_id, station_id, amount_paid, payment_method, balance_due, payment_status, remarks, logged_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())")->execute([$jo_id,'merchandise_transactions',$me['id'],$station_id,$amount_now,$pay_method,$new_balance,$new_status,$remarks]); } catch(Exception $ae){}
+                    $pay_or_no = $cur['or_number'] ?? ('OR-' . date('Y', strtotime($cur['created_at'] ?? 'now')) . '-' . str_pad((string)$jo_id, 6, '0', STR_PAD_LEFT));
+                    $pay_rec = jo_payment_record($pdo, $cur, $vctx, 'merchandise_transactions', $jo_id, $station_id, $me, $role, $new_balance, $new_status, $pay_or_no, (string)$ref_label);
+                    jo_payment_sync_ar($pdo, $cur, $vctx, 'merchandise_transactions', $jo_id, $station_id, $me, $new_paid, $new_balance, $pay_or_no, (string)$ref_label, $pay_rec['receipt_no']);
                 } else {
-                    $sets = "payment_status=?, amount_paid=?, balance_due=?, payment_method=?, updated_at=NOW()";
-                    $params = [$new_status, $new_paid, $new_balance, $pay_method];
+                    $sets = "payment_status=?, ar_status=?, amount_paid=?, balance_due=?, payment_method=?, updated_at=NOW()";
+                    $params = [$new_status, $new_ar_stat, $new_paid, $new_balance, $store_method];
                     if ($should_complete) {
                         $sets .= ", status='Completed', completed_at=NOW()";
                     }
@@ -1723,7 +1897,7 @@ if ($section === 'merchandise') {
                         ->execute(array_merge($params, [$jo_id, $station_id, $station_id]));
 
                     // PVC Points deduction for job_orders
-                    if ($pay_method === 'Petron Value Card (PVC Points)') {
+                    if (!$is_credit_txn && $pay_method === 'Petron Value Card (PVC Points)') {
                         try {
                             $cId = !empty($cur['customer_id']) ? (int)$cur['customer_id'] : 0;
                             if (!$cId && !empty($cur['customer_name'])) {
@@ -1753,29 +1927,48 @@ if ($section === 'merchandise') {
                         $mt_sync_sets = "payment_status=?, amount_paid=?, balance_due=?, payment_method=?, updated_at=NOW()";
                         if ($should_complete) { $mt_sync_sets .= ", workflow_status='Completed', completed_at=NOW()"; }
                         $pdo->prepare("UPDATE merchandise_transactions SET $mt_sync_sets WHERE (job_order_db_id = ? OR id = ?) AND (station_id=? OR ?=0)")
-                            ->execute(array_merge([$new_status, $new_paid, $new_balance, $pay_method], [$jo_id, $jo_id, $station_id, $station_id]));
+                            ->execute(array_merge([$new_status, $new_paid, $new_balance, $store_method], [$jo_id, $jo_id, $station_id, $station_id]));
                     } catch (Exception $mt_sync) {}
 
-                    try { $pdo->prepare("INSERT INTO payment_audit_log (record_id, record_source, staff_id, station_id, amount_paid, payment_method, balance_due, payment_status, remarks, logged_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())")->execute([$jo_id,'job_orders',$me['id'],$station_id,$amount_now,$pay_method,$new_balance,$new_status,$remarks]); } catch(Exception $ae){}
+                    $pay_or_no = $cur['or_number'] ?? ('OR-' . date('Y', strtotime($cur['created_at'] ?? 'now')) . '-' . str_pad((string)$jo_id, 6, '0', STR_PAD_LEFT));
+                    $pay_rec = jo_payment_record($pdo, $cur, $vctx, 'job_orders', $jo_id, $station_id, $me, $role, $new_balance, $new_status, $pay_or_no, (string)$ref_label);
+                    jo_payment_sync_ar($pdo, $cur, $vctx, 'job_orders', $jo_id, $station_id, $me, $new_paid, $new_balance, $pay_or_no, (string)$ref_label, $pay_rec['receipt_no']);
                 }
 
-                // Audit trail & activity log
+                // Audit trail & activity log (who processed, how, how much, receipt reference)
                 try {
-                    $pdo->prepare("INSERT INTO audit_trail (transaction_id, manager_id, action_type, old_value, new_value, station_id) VALUES (?, ?, 'SETTLE_PAYMENT', ?, ?, ?)")
-                        ->execute([$ref_label, $me['id'] ?? 0, 'Balance: ' . number_format($cur_balance, 2), 'Paid: ' . number_format($amount_now, 2) . ' (' . $new_status . ')', $station_id]);
+                    $pdo->prepare("INSERT INTO audit_trail (transaction_id, manager_id, action_type, old_value, new_value, station_id) VALUES (?, ?, ?, ?, ?, ?)")
+                        ->execute([$ref_label, $me['id'] ?? 0, $is_credit_txn ? 'CREDIT_PAYMENT_PROCESSED' : 'SETTLE_PAYMENT',
+                            'Balance: ' . number_format($cur_balance, 2),
+                            'Paid: ' . number_format($amount_now, 2) . ' via ' . $raw_pay_method . ($vctx['reference'] ? ' (ref ' . $vctx['reference'] . ')' : '') . ' → ' . $new_status . ', Balance: ' . number_format($new_balance, 2) . ', Receipt: ' . $pay_rec['receipt_no'],
+                            $station_id]);
+                    // Enrich with structured columns when available
+                    $pdo->prepare("UPDATE audit_trail SET user_id=?, user_name=?, user_role=?, module=?, action=?, or_number=?, reason=?, entity_type=?, source_table=? WHERE id = ?")
+                        ->execute([(int)($me['id'] ?? 0), trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['username'] ?? ''), $role,
+                            $is_credit_txn ? 'Accounts Receivable' : 'Transactions',
+                            $is_credit_txn ? 'Credit Account payment processed' : 'Payment settled',
+                            $pay_or_no, $remarks !== '' ? $remarks : null, 'payment', $jo_src, (int)$pdo->lastInsertId()]);
                 } catch (Exception $ae) {}
 
-                log_activity($pdo, $me['id'] ?? 0, 'JO_SETTLE_PAYMENT', "Job Order #{$ref_label} payment settled: ₱" . number_format($amount_now, 2) . " via {$pay_method}. Balance: ₱" . number_format($new_balance, 2));
+                log_activity($pdo, $me['id'] ?? 0, 'JO_SETTLE_PAYMENT', "Job Order #{$ref_label} payment processed: ₱" . number_format($amount_now, 2) . " via {$raw_pay_method} (Receipt {$pay_rec['receipt_no']}). Balance: ₱" . number_format($new_balance, 2));
 
                 $action_success_msg = ($new_status === 'Paid')
-                    ? 'Payment fully settled. Balance: ₱0.00.'
-                    : 'Partial payment recorded. Balance due: ₱' . number_format($new_balance, 2) . '.';
+                    ? 'Payment fully settled. Balance: ₱0.00. Receipt ' . $pay_rec['receipt_no'] . '.'
+                    : 'Partial payment recorded. Balance due: ₱' . number_format($new_balance, 2) . '. Receipt ' . $pay_rec['receipt_no'] . '.';
+                if ($vctx['category'] === 'cash' && $vctx['change'] > 0.009) {
+                    $action_success_msg .= ' Change: ₱' . number_format($vctx['change'], 2) . '.';
+                }
                 if ($should_complete) {
                     $action_success_msg .= ' Job Order marked as Completed.';
                 }
                 $new_saved_status = $target_wf_status;
                 $cur_balance = $new_balance;
                 $cur_pay_status = $new_status;
+                $settle_response = [
+                    'payment_id' => $pay_rec['payment_id'], 'receipt_no' => $pay_rec['receipt_no'],
+                    'receipt_url' => 'payment_receipt.php?id=' . $pay_rec['payment_id'],
+                    'change' => $vctx['change'], 'amount_applied' => $amount_now, 'is_credit' => $is_credit_txn,
+                ];
 
             // 2. Start In Progress
             } elseif ($jo_action === 'set_in_progress') {
@@ -2096,15 +2289,16 @@ if ($section === 'merchandise') {
 
             $pdo->commit();
 
-            // Count completed job orders for real-time KPI updates
-            $completed_jo_count = 0;
+            // Count released job orders for real-time KPI updates
+            $released_jo_count = 0;
             try {
                 $kpi_q = $pdo->prepare("SELECT 
-                    (SELECT COUNT(*) FROM job_orders WHERE station_id = ? AND status = 'Completed') +
-                    (SELECT COUNT(*) FROM merchandise_transactions WHERE station_id = ? AND transaction_type IN ('job_order','combined') AND workflow_status = 'Completed' AND job_order_db_id IS NULL) AS cnt");
+                    (SELECT COUNT(*) FROM job_orders WHERE station_id = ? AND LOWER(TRIM(status)) = 'released') +
+                    (SELECT COUNT(*) FROM merchandise_transactions WHERE station_id = ? AND transaction_type IN ('job_order','combined') AND LOWER(TRIM(workflow_status)) = 'released' AND job_order_db_id IS NULL) AS cnt");
                 $kpi_q->execute([$station_id, $station_id]);
-                $completed_jo_count = (int)$kpi_q->fetchColumn();
+                $released_jo_count = (int)$kpi_q->fetchColumn();
             } catch (Exception $kpi_err) {}
+            $completed_jo_count = $released_jo_count;
 
             if ($is_ajax) {
                 header('Content-Type: application/json');
@@ -2120,8 +2314,9 @@ if ($section === 'merchandise') {
                     'total_amount'       => ($cur_total_amount ?? 0),
                     'balance_due'        => $cur_balance,
                     'is_credit_approved' => $is_credit_approved,
-                    'completed_jo'       => $completed_jo_count
-                ]);
+                    'released_jo'        => $released_jo_count,
+                    'completed_jo'       => $released_jo_count
+                ] + (isset($settle_response) ? $settle_response : []));
                 exit;
             }
 
@@ -2203,6 +2398,11 @@ if ($section === 'merchandise') {
                 $_jr['staff_remarks']      = $_jr['notes'] ?? '';
                 $_jr['manager_notes']      = $_jr['admin_remarks'] ?? '';
                 $_jr['inventory_deducted'] = 0; // job_orders uses required_parts JSON, handled below
+                $_tip_v = (float)($_jr['tip_amount'] ?? $_jr['tip'] ?? $_jr['actual_labor_cost'] ?? $_jr['estimated_labor_cost'] ?? $_jr['labor_cost'] ?? $_jr['labor_fee'] ?? 0);
+                $_jr['tip_amount']           = $_tip_v;
+                $_jr['tip']                  = $_tip_v;
+                $_jr['actual_labor_cost']    = $_tip_v;
+                $_jr['estimated_labor_cost'] = $_tip_v;
             }
             unset($_jr);
         } catch (Exception $e) {
@@ -2234,28 +2434,30 @@ if ($section === 'merchandise') {
             $stmt2 = $pdo->prepare("
                 SELECT
                     mt.id,
+                    mt.job_order_db_id,
                     mt.customer_name,
                     mt.transaction_type,
                     COALESCE($mt_col_est_duration, jo_ref.estimated_duration) AS estimated_duration,
                     COALESCE(
                         NULLIF(TRIM(mt.job_order_service), ''),
                         jo_ref.service_type,
-                        (SELECT GROUP_CONCAT(product_name SEPARATOR ', ') FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category != 'Labor' AND product_name NOT LIKE '%Labor%'),
+                        (SELECT GROUP_CONCAT(product_name SEPARATOR ', ') FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category NOT IN ('Labor', 'Tip') AND product_name NOT LIKE '%Labor%' AND LOWER(TRIM(product_name)) != 'tip' AND product_name NOT LIKE '%Tip%'),
                         'Service'
                     ) AS service_type,
                     COALESCE(jo_ref.service_description, '') AS service_description,
                     COALESCE(NULLIF(TRIM(mt.workflow_status), ''), jo_ref.status, NULLIF(TRIM(mt.validation_status), ''), 'Pending') AS status,
                     COALESCE(NULLIF(TRIM(mt.validation_status), ''), 'Pending') AS validation_status,
                     COALESCE(
-                        (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category != 'Labor' AND product_name NOT LIKE '%Labor%'),
+                        (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category NOT IN ('Labor', 'Tip') AND product_name NOT LIKE '%Labor%' AND LOWER(TRIM(product_name)) != 'tip' AND product_name NOT LIKE '%Tip%'),
                         mt.total_amount
                     ) AS service_fee,
                     COALESCE(
-                        (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category != 'Labor' AND product_name NOT LIKE '%Labor%'),
+                        (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category NOT IN ('Labor', 'Tip') AND product_name NOT LIKE '%Labor%' AND LOWER(TRIM(product_name)) != 'tip' AND product_name NOT LIKE '%Tip%'),
                         mt.total_amount
                     ) AS estimated_cost,
-                    (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category = 'Labor' OR product_name LIKE '%Labor%')) AS actual_labor_cost,
-                    (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category = 'Labor' OR product_name LIKE '%Labor%')) AS estimated_labor_cost,
+                    (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category IN ('Labor', 'Tip') OR product_name LIKE '%Labor%' OR LOWER(TRIM(product_name)) = 'tip' OR product_name LIKE '%Tip%')) AS tip_amount,
+                    (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category IN ('Labor', 'Tip') OR product_name LIKE '%Labor%' OR LOWER(TRIM(product_name)) = 'tip' OR product_name LIKE '%Tip%')) AS actual_labor_cost,
+                    (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category IN ('Labor', 'Tip') OR product_name LIKE '%Labor%' OR LOWER(TRIM(product_name)) = 'tip' OR product_name LIKE '%Tip%')) AS estimated_labor_cost,
                     mt.total_amount AS total_cost,
                     COALESCE($mt_col_staff_remarks, mt.remarks, '') AS notes,
                     COALESCE(NULLIF(TRIM(mt.job_order_vehicle_plate),''), jo_ref.vehicle_plate, c.vehicle_plate, '') AS vehicle_plate,
@@ -2332,6 +2534,45 @@ if ($section === 'merchandise') {
             error_log('staff_transactions_hub MT tracker query error: ' . $e->getMessage());
             $mt_rows = [];
         }
+
+        // Normalize mt_rows tip and service_fee, and index by linked job_order_db_id
+        $mt_by_linked_jo = [];
+        foreach ($mt_rows as &$_mr) {
+            $_mt_tip = (float)($_mr['tip_amount'] ?? $_mr['actual_labor_cost'] ?? $_mr['estimated_labor_cost'] ?? 0);
+            $_mr['tip_amount']           = $_mt_tip;
+            $_mr['tip']                  = $_mt_tip;
+            $_mr['actual_labor_cost']    = $_mt_tip;
+            $_mr['estimated_labor_cost'] = $_mt_tip;
+            $_mt_total = (float)($_mr['total_cost'] ?? 0);
+            $_mt_svc   = (float)($_mr['service_fee'] ?? $_mt_total);
+            if ($_mt_tip > 0 && $_mt_svc >= $_mt_total && $_mt_total > $_mt_tip) {
+                $_mr['service_fee']    = max(0, $_mt_total - $_mt_tip);
+                $_mr['estimated_cost'] = $_mr['service_fee'];
+            }
+            $_linked_jo_id = (int)($_mr['job_order_db_id'] ?? $_mr['job_order_number'] ?? 0);
+            if ($_linked_jo_id > 0) {
+                $mt_by_linked_jo[$_linked_jo_id] = $_mr;
+            }
+        }
+        unset($_mr);
+
+        // Enrich native jo_rows with tip/service_fee from linked merchandise_transactions if present
+        foreach ($jo_rows as &$_jr) {
+            $_jid = (int)($_jr['id'] ?? 0);
+            if ($_jid > 0 && isset($mt_by_linked_jo[$_jid])) {
+                $_linked_mt = $mt_by_linked_jo[$_jid];
+                if ((float)($_jr['tip_amount'] ?? 0) <= 0 && (float)($_linked_mt['tip_amount'] ?? 0) > 0) {
+                    $_jr['tip_amount']           = (float)$_linked_mt['tip_amount'];
+                    $_jr['tip']                  = (float)$_linked_mt['tip_amount'];
+                    $_jr['actual_labor_cost']    = (float)$_linked_mt['tip_amount'];
+                    $_jr['estimated_labor_cost'] = (float)$_linked_mt['tip_amount'];
+                }
+                if (empty($_jr['service_fee']) && !empty($_linked_mt['service_fee'])) {
+                    $_jr['service_fee'] = (float)$_linked_mt['service_fee'];
+                }
+            }
+        }
+        unset($_jr);
 
         // Build a set of native job_orders IDs so we can suppress duplicate mt rows
         $native_jo_ids = array_column($jo_rows, 'id');
@@ -2477,52 +2718,54 @@ if ($section === 'merchandise') {
 
         // ── Staff KPI Snapshot (today, current station, current user) ─────────────
         $kpi_jo_count       = 0;
-        $kpi_merch_released = 0;
-        $kpi_total_encoded  = 0.00;
-        try {
-            // Count JOs encoded today from merchandise_transactions
-            $kpi_stmt = $pdo->prepare("
-                SELECT COUNT(DISTINCT mt.id)   AS jo_count,
-                       COALESCE(SUM(
-                           CASE WHEN COALESCE(mti.item_type,'merchandise') != 'service'
-                                THEN mti.quantity ELSE 0 END
-                       ), 0)                   AS merch_released,
-                       COALESCE(SUM(mt.total_amount), 0) AS total_encoded
-                FROM merchandise_transactions mt
-                LEFT JOIN merchandise_transaction_items mti ON mti.transaction_id = mt.id
-                WHERE mt.station_id = ?
-                  AND mt.staff_id   = ?
-                  AND DATE(mt.created_at) = CURDATE()
-                  AND mt.transaction_type IN ('job_order','combined')
-            ");
-            $kpi_stmt->execute([$station_id, $me['id']]);
-            $kpi_row = $kpi_stmt->fetch(PDO::FETCH_ASSOC);
-            if ($kpi_row) {
-                $kpi_jo_count       += (int)$kpi_row['jo_count'];
-                $kpi_merch_released += (int)$kpi_row['merch_released'];
-                $kpi_total_encoded  += (float)$kpi_row['total_encoded'];
+        $today_jo_sales     = 0.00;
+        $today_jo_parts_qty = 0;
+
+        foreach ($job_orders as $_jo) {
+            $created_ts = !empty($_jo['created_at']) ? strtotime($_jo['created_at']) : 0;
+            $is_today   = ($created_ts && date('Y-m-d', $created_ts) === date('Y-m-d'));
+            $val_st     = strtolower(trim($_jo['validation_status'] ?? ''));
+            $st         = strtolower(trim($_jo['status'] ?? ''));
+            $is_voided  = in_array($val_st, ['voided', 'cancelled', 'canceled']) || in_array($st, ['cancelled', 'canceled', 'rejected']);
+
+            if ($is_today && !$is_voided) {
+                $kpi_jo_count++;
+                $today_jo_sales += (float)($_jo['total_cost'] ?? $_jo['estimated_cost'] ?? 0);
+
+                if (($_jo['_source'] ?? '') === 'merchandise_transactions') {
+                    $items = $mt_item_map[$_jo['id']] ?? [];
+                    foreach ($items as $_item) {
+                        $today_jo_parts_qty += (int)($_item['quantity'] ?? 1);
+                    }
+                } else {
+                    $rp_raw = $_jo['required_parts'] ?? '';
+                    $rp_decoded = is_string($rp_raw) ? (json_decode($rp_raw, true) ?? []) : ($rp_raw ?? []);
+                    if (is_array($rp_decoded)) {
+                        foreach ($rp_decoded as $_rp) {
+                            if (!is_array($_rp)) continue;
+                            $today_jo_parts_qty += (int)($_rp['qty'] ?? $_rp['quantity'] ?? 1);
+                        }
+                    }
+                }
             }
-        } catch (Exception $_kpie) {}
-        try {
-            // Also count from native job_orders table
-            $kpi_jo_stmt = $pdo->prepare("
-                SELECT COUNT(*) AS jo_count,
-                       COALESCE(SUM(COALESCE(total_cost, estimated_cost, 0)), 0) AS total_encoded
-                FROM job_orders
-                WHERE station_id  = ?
-                  AND created_by  = ?
-                  AND DATE(created_at) = CURDATE()
-            ");
-            $kpi_jo_stmt->execute([$station_id, $me['id']]);
-            $kpi_jo_row = $kpi_jo_stmt->fetch(PDO::FETCH_ASSOC);
-            if ($kpi_jo_row) {
-                $kpi_jo_count      += (int)$kpi_jo_row['jo_count'];
-                $kpi_total_encoded += (float)$kpi_jo_row['total_encoded'];
-            }
-        } catch (Exception $_kpije) {}
+        }
+
+        $mh_kpi_total_encoded  = $mh_kpi_total_encoded ?? 0.00;
+        $mh_kpi_items_released = $mh_kpi_items_released ?? 0;
+        $mh_kpi_txn_count      = $mh_kpi_txn_count ?? 0;
+
+        $kpi_total_encoded  = round((float)$mh_kpi_total_encoded + $today_jo_sales, 2);
+        $kpi_merch_released = (int)($mh_kpi_items_released + $today_jo_parts_qty);
+        $released_jo_count  = (int)array_reduce($job_orders, fn($c, $j) => $c + (strtolower(trim($j['status'] ?? '')) === 'released' ? 1 : 0), 0);
+        $completed_jo_count = $released_jo_count;
 
     } catch (Exception $e) {
-        $job_orders = [];
+        $job_orders         = [];
+        $kpi_jo_count       = 0;
+        $kpi_total_encoded  = 0.00;
+        $kpi_merch_released = 0;
+        $released_jo_count  = 0;
+        $completed_jo_count = 0;
     }
 
     $jo_pending_count  = count(array_filter($job_orders, fn($j) =>
@@ -2540,7 +2783,6 @@ if ($section === 'merchandise') {
     // ── AJAX JSON POLLING ENDPOINT FOR JOB ORDER TRACKER (LIVE DATA) ────────────────────
     if (isset($_GET['ajax_tracker']) && $_GET['ajax_tracker'] == '1') {
         header('Content-Type: application/json');
-        $completed_jo_count = (int)array_reduce($job_orders, fn($c,$j) => $c + (($j['status']??'')==='Completed'?1:0), 0);
         
         // Unique mechanics list from active tracker dataset
         $unique_mechs = [];
@@ -2576,7 +2818,8 @@ if ($section === 'merchandise') {
             'kpis' => [
                 'total_txns'   => (int)($mh_kpi_txn_count + $kpi_jo_count),
                 'total_sales'  => '₱' . number_format($kpi_total_encoded, 2),
-                'completed_jo' => $completed_jo_count,
+                'released_jo'  => $released_jo_count,
+                'completed_jo' => $released_jo_count,
                 'merch_sold'   => (int)$kpi_merch_released
             ],
             'jo_count'          => count($job_orders),
@@ -2801,6 +3044,23 @@ window.openRequestAdjustModal = function(arg1, arg2) {
         joData = arg1;
     }
 
+    var adjPayMethod = (joData.payment_method || '').toLowerCase();
+    var adjPayStatus = (joData.payment_status || '').toLowerCase();
+    var adjIsPaid = (adjPayStatus === 'paid');
+    var adjIsCredit = adjPayMethod.indexOf('credit') !== -1 || adjPayMethod.indexOf('receivable') !== -1;
+
+    if (adjIsPaid) {
+        var alertMsg = adjIsCredit
+            ? 'Adjustment cannot be requested for an Accounts Receivable transaction that has already been paid.'
+            : 'Adjustment cannot be requested for a paid cash transaction. Please request a Void instead.';
+        if (typeof showTxnAlert === 'function') {
+            showTxnAlert(alertMsg, 'warning');
+        } else {
+            alert(alertMsg);
+        }
+        return false;
+    }
+
     ['viewJobOrderModal', 'viewMerchandiseModal', 'updateStatusModal', 'adjustJobOrderModal', 'txnRequestModal', 'requestVoidModal'].forEach(function(id) {
         var m = document.getElementById(id);
         if (m) m.style.display = 'none';
@@ -2859,7 +3119,7 @@ window.openRequestAdjustModal = function(arg1, arg2) {
         if (isCombined) {
             selField.innerHTML = `
                 <option value="Job Order: Service Type">Job Order — Service Type</option>
-                <option value="Job Order: Labor Fee">Job Order — Labor Fee</option>
+                <option value="Job Order: Tip">Job Order — Tip</option>
                 <option value="Job Order: Mechanic Assignment">Job Order — Mechanic Assignment</option>
                 <option value="Job Order: Vehicle / Plate">Job Order — Vehicle / Plate</option>
                 <option value="Merchandise: Item Quantity">Merchandise — Item Quantity</option>
@@ -2881,7 +3141,7 @@ window.openRequestAdjustModal = function(arg1, arg2) {
             setVal('reqAdjCurrentValue', tot > 0 ? ('₱' + tot.toFixed(2)) : '₱0.00');
         } else {
             selField.innerHTML = `
-                <option value="Labor Fee">Labor Fee</option>
+                <option value="Tip">Tip</option>
                 <option value="Service Fee">Service Fee</option>
                 <option value="Service Type">Service Type</option>
                 <option value="Customer Information">Customer Information</option>
@@ -2893,7 +3153,8 @@ window.openRequestAdjustModal = function(arg1, arg2) {
             if (typeof window.onReqAdjFieldChange === 'function') {
                 window.onReqAdjFieldChange();
             } else {
-                setVal('reqAdjCurrentValue', joData.labor_fee ? ('₱' + parseFloat(joData.labor_fee).toFixed(2)) : '₱100.00');
+                var tipNum = parseFloat(joData.tip || joData.tip_amount || joData.labor_fee || 0);
+                setVal('reqAdjCurrentValue', tipNum > 0 ? ('₱' + tipNum.toFixed(2)) : '₱0.00');
             }
         }
     }
@@ -2922,6 +3183,7 @@ window.openRequestVoidModal = function(arg1, arg2) {
             customer: btn.getAttribute('data-jom-customer') || btn.getAttribute('data-jo-customer') || 'Walk-in Customer',
             workflow_status: btn.getAttribute('data-jom-status') || btn.getAttribute('data-jo-status') || 'Pending',
             payment_status: btn.getAttribute('data-jom-paystatus') || btn.getAttribute('data-jo-paystatus') || 'Paid',
+            payment_method: btn.getAttribute('data-jom-paymethod') || btn.getAttribute('data-jo-paymethod') || 'Cash',
             service: btn.getAttribute('data-jom-service') || btn.getAttribute('data-jo-service') || '',
             plate: btn.getAttribute('data-jom-plate') || btn.getAttribute('data-jo-plate') || '',
             mechanic: btn.getAttribute('data-jom-mechanic') || btn.getAttribute('data-jo-mech') || '',
@@ -2937,6 +3199,21 @@ window.openRequestVoidModal = function(arg1, arg2) {
         joData = extractBtnData(arg1);
     } else if (arg1 && typeof arg1 === 'object' && !arg1.stopPropagation) {
         joData = arg1;
+    }
+
+    var voidPayMethod = (joData.payment_method || '').toLowerCase();
+    var voidPayStatus = (joData.payment_status || '').toLowerCase();
+    var voidIsPaid = (voidPayStatus === 'paid');
+    var voidIsCredit = voidPayMethod.indexOf('credit') !== -1 || voidPayMethod.indexOf('receivable') !== -1;
+
+    if (voidIsCredit && voidIsPaid) {
+        var alertMsg = 'Void cannot be requested for an Accounts Receivable transaction that has already been paid/settled.';
+        if (typeof showTxnAlert === 'function') {
+            showTxnAlert(alertMsg, 'warning');
+        } else {
+            alert(alertMsg);
+        }
+        return false;
     }
 
     ['viewJobOrderModal', 'viewMerchandiseModal', 'updateStatusModal', 'adjustJobOrderModal', 'txnRequestModal', 'requestAdjustModal'].forEach(function(id) {
@@ -3044,6 +3321,29 @@ window.openTxnRequestModal = function(e, txnId, recordSource, requestType, custo
 </script>
 
 <style>
+/* ── Change Customer Button — Clean transparent outline ─────────────── */
+#joChangeCustomerBtn {
+    background: transparent !important;
+    background-color: transparent !important;
+    color: #047857 !important;
+    border: 1.5px solid #059669 !important;
+    box-shadow: none !important;
+}
+#joChangeCustomerBtn:hover {
+    background: #e6fcf5 !important;
+    background-color: #e6fcf5 !important;
+    color: #064e3b !important;
+    border-color: #047857 !important;
+}
+#joChangeCustomerBtn span,
+#joChangeCustomerBtn i {
+    color: #047857 !important;
+}
+#joChangeCustomerBtn:hover span,
+#joChangeCustomerBtn:hover i {
+    color: #064e3b !important;
+}
+
 /* ── Cart Wrapper — Flexbox Row Layout ──────────────────────────────── */
 .cart-wrapper {
     display: flex !important;
@@ -4396,13 +4696,47 @@ setTimeout(function() {
 
         function restoreFuelInputCache() {
             try {
+                var isClosingDone = <?= !empty($is_closing_completed) ? 'true' : 'false' ?>;
+                if (isClosingDone || window._isFuelClosingCompleted || window.location.search.indexOf('closing_saved=1') !== -1) {
+                    sessionStorage.removeItem('petron_fuel_reading_cache');
+                    return;
+                }
                 var raw = sessionStorage.getItem('petron_fuel_reading_cache');
                 if (!raw) return;
                 var data = JSON.parse(raw);
                 if (!data || typeof data !== 'object') return;
+
+                // Validate cache: if all cached ending readings are identical to beginning readings,
+                // or if cached beginning readings are stale (do not match rolled-over server beginning readings), purge cache
+                var endingKeys = Object.keys(data).filter(function(k) { return k.indexOf('ending_') === 0; });
+                if (endingKeys.length > 0) {
+                    var allIdentical = (endingKeys.length > 2);
+                    var staleRollover = false;
+                    endingKeys.forEach(function(ek) {
+                        var bk = ek.replace('ending_', 'beginning_');
+                        if (!data[bk] || data[ek] !== data[bk]) allIdentical = false;
+                        var domBeg = document.getElementById(bk);
+                        if (domBeg && domBeg.readOnly && data[bk] && domBeg.value.trim() !== '' && domBeg.value.trim() !== String(data[bk]).trim()) {
+                            staleRollover = true;
+                        }
+                    });
+                    if (allIdentical || staleRollover) {
+                        sessionStorage.removeItem('petron_fuel_reading_cache');
+                        return;
+                    }
+                }
+
                 Object.keys(data).forEach(function(id) {
                     var inp = document.getElementById(id);
                     if (inp && !inp.readOnly && !inp.disabled && data[id] !== undefined) {
+                        // Guard against restoring corrupt ending = beginning onto fresh fields
+                        if (id.indexOf('ending_') === 0) {
+                            var bkId = id.replace('ending_', 'beginning_');
+                            var bEl = document.getElementById(bkId);
+                            if (bEl && bEl.value.trim() === String(data[id]).trim()) {
+                                return;
+                            }
+                        }
                         inp.value = data[id];
                         var m = id.match(/^(?:beginning|ending|cal)_(.+)$/);
                         if (m && typeof window.updateFuelCalc === 'function') {
@@ -4697,9 +5031,32 @@ setTimeout(function() {
             </div>
         </div>
 
+        <script>
+        window._isFuelClosingCompleted = <?= (!empty($is_closing_completed) || isset($_GET['closing_saved'])) ? 'true' : 'false' ?>;
+        if (window._isFuelClosingCompleted) {
+            try {
+                sessionStorage.removeItem('petron_fuel_reading_cache');
+                sessionStorage.removeItem('petron_fuel_readings_submitted');
+                sessionStorage.removeItem('petron_fuel_reading_shift');
+                sessionStorage.removeItem('petron_fuel_reading_date');
+            } catch(e) {}
+        }
+        document.addEventListener('DOMContentLoaded', function() {
+            if (window._isFuelClosingCompleted) {
+                var _b1 = document.getElementById('fuelSalesClosingBtn');
+                var _b2 = document.getElementById('fuelSalesClosingBtnReadings');
+                if (_b1) _b1.style.display = 'none';
+                if (_b2) _b2.style.display = 'none';
+                if (typeof window._applyClosingBtnState === 'function') {
+                    window._applyClosingBtnState(false);
+                }
+            }
+        });
+        </script>
         <?php if (isset($_GET['closing_saved']) && $_GET['closing_saved'] == '1'): ?>
         <script>
         document.addEventListener('DOMContentLoaded', function() {
+            window._isFuelClosingCompleted = true;
             // Immediately hide the Fuel Sales Closing buttons — closing is done
             var _b1 = document.getElementById('fuelSalesClosingBtn');
             var _b2 = document.getElementById('fuelSalesClosingBtnReadings');
@@ -4711,6 +5068,7 @@ setTimeout(function() {
             }
             // Clear sessionStorage flags
             try {
+                sessionStorage.removeItem('petron_fuel_reading_cache');
                 sessionStorage.removeItem('petron_fuel_readings_submitted');
                 sessionStorage.removeItem('petron_fuel_reading_shift');
                 sessionStorage.removeItem('petron_fuel_reading_date');
@@ -5085,29 +5443,88 @@ setTimeout(function() {
                             $ft_name = $p_row['fuel_type'];
 
                             // ── Validated shift carry-over lookup ──
-                            $lbl_key   = strtoupper(trim($display_name));
-                            $saved_row = $today_saved_readings[$lbl_key] 
+                            $lbl_key      = strtoupper(trim($display_name));
+                            $norm_lbl_key = 'NORM_' . preg_replace('/[^A-Z0-9]/', '', $lbl_key);
+                            $ft_key       = strtoupper(trim($ft_name));
+                            $norm_ft_key  = 'NORM_' . preg_replace('/[^A-Z0-9]/', '', $ft_key);
+
+                            $saved_row = $today_saved_readings[$lbl_key]
+                                ?? ($today_saved_readings[$norm_lbl_key] ?? null)
                                 ?? ($p_id > 0 && isset($today_saved_readings['PUMP_' . $p_id]) ? $today_saved_readings['PUMP_' . $p_id] : null)
-                                ?? ($today_saved_readings[strtoupper(trim($ft_name))] ?? null);
+                                ?? ($today_saved_readings[$ft_key] ?? null)
+                                ?? ($today_saved_readings[$norm_ft_key] ?? null);
+
+                            $saved_row_status = strtoupper(trim($saved_row['status'] ?? ''));
+                            $is_row_closed    = $is_closing_completed || in_array($saved_row_status, ['CLOSING_COMPLETED', 'VERIFIED', 'APPROVED', 'VALIDATED', 'SAVED', 'REPORTED'], true);
 
                             // Determine Beginning reading:
-                            if ($saved_row && (float)($saved_row['present_reading'] ?? 0) > 0) {
-                                $pump_prev_reading = (float)$saved_row['present_reading'];
-                            } elseif (isset($last_readings_by_pump[$lbl_key]) && (float)$last_readings_by_pump[$lbl_key] > 0) {
-                                $pump_prev_reading = (float)$last_readings_by_pump[$lbl_key];
-                            } elseif ($p_id > 0 && isset($last_readings_by_pump['PUMP_' . $p_id]) && (float)$last_readings_by_pump['PUMP_' . $p_id] > 0) {
-                                $pump_prev_reading = (float)$last_readings_by_pump['PUMP_' . $p_id];
-                            } elseif (isset($last_readings_by_pump[strtoupper(trim($ft_name))]) && (float)$last_readings_by_pump[strtoupper(trim($ft_name))] > 0) {
-                                $pump_prev_reading = (float)$last_readings_by_pump[strtoupper(trim($ft_name))];
-                            } elseif ((float)($p_row['previous_reading'] ?? 0) > 0) {
-                                $pump_prev_reading = (float)$p_row['previous_reading'];
+                            // When Fuel Sales Closing is completed (or this pump's transaction is finalized),
+                            // the submitted Ending reading (present_reading) rolls over into the new Beginning reading!
+                            if ($is_row_closed) {
+                                if ($saved_row && (float)($saved_row['present_reading'] ?? 0) > 0) {
+                                    $pump_prev_reading = (float)$saved_row['present_reading'];
+                                } elseif (isset($last_readings_by_pump[$lbl_key]) && (float)$last_readings_by_pump[$lbl_key] > 0) {
+                                    $pump_prev_reading = (float)$last_readings_by_pump[$lbl_key];
+                                } elseif (isset($last_readings_by_pump[$norm_lbl_key]) && (float)$last_readings_by_pump[$norm_lbl_key] > 0) {
+                                    $pump_prev_reading = (float)$last_readings_by_pump[$norm_lbl_key];
+                                } elseif ($p_id > 0 && isset($last_readings_by_pump['PUMP_' . $p_id]) && (float)$last_readings_by_pump['PUMP_' . $p_id] > 0) {
+                                    $pump_prev_reading = (float)$last_readings_by_pump['PUMP_' . $p_id];
+                                } elseif (isset($last_readings_by_pump[$ft_key]) && (float)$last_readings_by_pump[$ft_key] > 0) {
+                                    $pump_prev_reading = (float)$last_readings_by_pump[$ft_key];
+                                } elseif (isset($last_readings_by_pump[$norm_ft_key]) && (float)$last_readings_by_pump[$norm_ft_key] > 0) {
+                                    $pump_prev_reading = (float)$last_readings_by_pump[$norm_ft_key];
+                                } elseif ($saved_row && (float)($saved_row['previous_reading'] ?? 0) > 0) {
+                                    $pump_prev_reading = (float)$saved_row['previous_reading'];
+                                } elseif ((float)($p_row['previous_reading'] ?? 0) > 0) {
+                                    $pump_prev_reading = (float)$p_row['previous_reading'];
+                                } else {
+                                    $pump_prev_reading = 0.00;
+                                }
+
+                                // Clear Ending and Calibration for the next cycle after closing is completed
+                                $saved_ending_val = '';
+                                $saved_calib_val  = '';
                             } else {
-                                $pump_prev_reading = 0.00;
+                                // Unclosed shift reading: keep Beginning as previous_reading and pre-fill Ending while awaiting closing
+                                if ($saved_row && (float)($saved_row['previous_reading'] ?? 0) > 0) {
+                                    $pump_prev_reading = (float)$saved_row['previous_reading'];
+                                } elseif (isset($last_readings_by_pump[$lbl_key]) && (float)$last_readings_by_pump[$lbl_key] > 0) {
+                                    $pump_prev_reading = (float)$last_readings_by_pump[$lbl_key];
+                                } elseif (isset($last_readings_by_pump[$norm_lbl_key]) && (float)$last_readings_by_pump[$norm_lbl_key] > 0) {
+                                    $pump_prev_reading = (float)$last_readings_by_pump[$norm_lbl_key];
+                                } elseif ($p_id > 0 && isset($last_readings_by_pump['PUMP_' . $p_id]) && (float)$last_readings_by_pump['PUMP_' . $p_id] > 0) {
+                                    $pump_prev_reading = (float)$last_readings_by_pump['PUMP_' . $p_id];
+                                } elseif (isset($last_readings_by_pump[$ft_key]) && (float)$last_readings_by_pump[$ft_key] > 0) {
+                                    $pump_prev_reading = (float)$last_readings_by_pump[$ft_key];
+                                } elseif (isset($last_readings_by_pump[$norm_ft_key]) && (float)$last_readings_by_pump[$norm_ft_key] > 0) {
+                                    $pump_prev_reading = (float)$last_readings_by_pump[$norm_ft_key];
+                                } elseif ((float)($p_row['previous_reading'] ?? 0) > 0) {
+                                    $pump_prev_reading = (float)$p_row['previous_reading'];
+                                } else {
+                                    $pump_prev_reading = 0.00;
+                                }
+
+                                $saved_ending_val = '';
+                                if ($saved_row && (float)($saved_row['present_reading'] ?? 0) > (float)($saved_row['previous_reading'] ?? 0)) {
+                                    $saved_ending_val = number_format((float)$saved_row['present_reading'], 2, '.', ',');
+                                }
+
+                                if ($saved_ending_val !== '') {
+                                    if ($saved_row && isset($saved_row['calibration']) && (float)$saved_row['calibration'] >= 0) {
+                                        $saved_calib_val = number_format((float)$saved_row['calibration'], 2, '.', '');
+                                    } else {
+                                        $saved_calib_val = ((float)($p_row['calibration_default'] ?? 0) > 0) ? number_format((float)$p_row['calibration_default'], 2, '.', '') : '0.00';
+                                    }
+                                } else {
+                                    $saved_calib_val = '';
+                                }
                             }
 
-                            // Input fields are ALWAYS empty and ready for encoding after submission or closing:
-                            $saved_ending_val = '';
-                            $saved_calib_val  = '0.00';
+                            // Precompute initial volume and total amount for pristine rendering before JS fires
+                            $init_ending_num = ($saved_ending_val !== '') ? (float)str_replace(',', '', $saved_ending_val) : 0.0;
+                            $init_calib_num  = ($saved_calib_val !== '') ? (float)str_replace(',', '', $saved_calib_val) : 0.0;
+                            $init_vol_num    = ($init_ending_num > $pump_prev_reading) ? max(0.0, ($init_ending_num - $pump_prev_reading) - $init_calib_num) : 0.0;
+                            $init_amt_num    = $init_vol_num * $price_per_liter;
                     ?>
                     <tr id="fuelRow_<?= $ft_id ?>" style="border-bottom:1px solid #e2e8f0;<?= $is_deactivated ? 'background:#fcfcfd;opacity:0.75;' : '' ?>">
                         <!-- NAME Column (plain text, no icon) -->
@@ -5178,7 +5595,7 @@ setTimeout(function() {
                         <!-- PRICE / LITER Column (Auto — read-only, from fuel_inventory) -->
                         <td style="border:1px solid #e2e8f0;padding:6px 6px;background:#f8fafc;">
                             <span id="price_display_<?= $ft_id ?>"
-                                  style="display:block;width:100%;box-sizing:border-box;padding:7px 8px;font-size:12.5px;font-weight:700;color:#334155;text-align:right;font-family:monospace;">
+                                   style="display:block;width:100%;box-sizing:border-box;padding:7px 8px;font-size:12.5px;font-weight:700;color:#334155;text-align:right;font-family:monospace;">
                                 &#x20B1;<?= number_format($price_per_liter, 2) ?>
                             </span>
                             <input type="hidden"
@@ -5193,14 +5610,15 @@ setTimeout(function() {
                             <input type="text"
                                    id="volume_<?= $ft_id ?>"
                                    style="width:100%;box-sizing:border-box;padding:7px 8px;font-size:12.5px;height:34px;background:transparent;border:1.5px solid #86efac;border-radius:6px;text-align:right;font-weight:700;font-family:monospace;color:#15803d;"
-                                   value="0.00"
+                                   value="<?= ($saved_ending_val !== '') ? number_format($init_vol_num, 2, '.', ',') : '' ?>"
+                                   placeholder="0.00"
                                    readonly
                                    title="Net Volume Sold = (Ending - Beginning) - Calibration">
                             <input type="hidden"
                                    form="fuelForm_<?= $ft_id ?>"
                                    name="volume_liters"
                                    id="volume_value_<?= $ft_id ?>"
-                                   value="0.00">
+                                   value="<?= number_format($init_vol_num, 2, '.', '') ?>">
                         </td>
 
                         <!-- TOTAL AMOUNT Column (Auto-calculated: Net Volume × Price/Liter) -->
@@ -5210,7 +5628,8 @@ setTimeout(function() {
                                 <input type="text"
                                        id="amount_<?= $ft_id ?>"
                                        style="width:100%;box-sizing:border-box;padding:7px 0 7px 4px;font-size:12.5px;background:transparent;border:none;outline:none;text-align:right;font-weight:800;font-family:monospace;color:#1d4ed8;"
-                                       value="0.00"
+                                       value="<?= ($saved_ending_val !== '') ? number_format($init_amt_num, 2, '.', ',') : '' ?>"
+                                       placeholder="0.00"
                                        readonly
                                        autocomplete="off"
                                        title="Total Amount = Net Volume Sold × Price per Liter">
@@ -5219,7 +5638,7 @@ setTimeout(function() {
                                    form="fuelForm_<?= $ft_id ?>"
                                    name="total_amount"
                                    id="amount_value_<?= $ft_id ?>"
-                                   value="0.00">
+                                   value="<?= number_format($init_amt_num, 2, '.', '') ?>">
                         </td>
                     </tr>
                     <?php 
@@ -5227,6 +5646,22 @@ setTimeout(function() {
                     endif;
                     ?>
                     </tbody>
+                    <tfoot style="background:#f8fafc; border-top:2px solid #00264D; font-weight:800;">
+                        <tr>
+                            <td style="border:1px solid #cbd5e1; padding:9px 8px; color:#002F70; font-size:12px; text-transform:uppercase;">
+                                <i class="fas fa-calculator"></i> TOTALS (<span id="total_encoded_nozzles">0 / <?= count($meter_reading_pumps) ?></span> Encoded)
+                            </td>
+                            <td colspan="4" style="border:1px solid #cbd5e1; padding:9px 8px; text-align:right; color:#475569; font-size:11.5px; text-transform:uppercase; font-weight:700; letter-spacing:0.3px;">
+                                Shift Net Volume &amp; Total Sales:
+                            </td>
+                            <td style="border:1px solid #cbd5e1; padding:9px 8px; text-align:right; background:#dcfce7; color:#15803d; font-family:monospace; font-size:13px; font-weight:900;" id="overall_net_volume">
+                                0.00 L
+                            </td>
+                            <td style="border:1px solid #cbd5e1; padding:9px 8px; text-align:right; background:#dbeafe; color:#1e40af; font-family:monospace; font-size:13px; font-weight:900;" id="overall_total_amount">
+                                &#x20B1; 0.00
+                            </td>
+                        </tr>
+                    </tfoot>
                 </table>
             </div><!-- /fet-wrap -->
 
@@ -5234,17 +5669,31 @@ setTimeout(function() {
             // ── Emit JS array of all ft_ids for page-load init ──
             $all_ft_ids_js = array_column($meter_reading_pumps, 'ft_id');
             ?>
-            <!-- ═══ STANDALONE FUEL CALC SCRIPT — no external dependencies ═══ -->
             <script>
             (function() {
                 'use strict';
 
-                // Only purge stale/corrupted draft form entries; NEVER remove navigation or sidebar state
+                // Purge corrupted session cache or stale drafts
                 try {
                     for (var i = localStorage.length - 1; i >= 0; i--) {
                         var lk = localStorage.key(i);
                         if (lk && lk.indexOf('petron_draft_') === 0 && (lk.indexOf('fuel') !== -1 || lk.indexOf('meter') !== -1 || lk.indexOf('reading') !== -1 || lk.indexOf('transactions_hub') !== -1 || (localStorage.getItem(lk) && localStorage.getItem(lk).indexOf('Γé') !== -1))) {
                             localStorage.removeItem(lk);
+                        }
+                    }
+                    var rawCache = sessionStorage.getItem('petron_fuel_reading_cache');
+                    if (rawCache) {
+                        var parsed = JSON.parse(rawCache);
+                        var endKeys = Object.keys(parsed).filter(function(k) { return k.indexOf('ending_') === 0; });
+                        if (endKeys.length > 2) {
+                            var sameCount = 0;
+                            endKeys.forEach(function(ek) {
+                                var bk = ek.replace('ending_', 'beginning_');
+                                if (parsed[bk] && parsed[ek] && parsed[bk] === parsed[ek]) sameCount++;
+                            });
+                            if (sameCount === endKeys.length) {
+                                sessionStorage.removeItem('petron_fuel_reading_cache');
+                            }
                         }
                     }
                 } catch(e) {}
@@ -5277,11 +5726,11 @@ setTimeout(function() {
                     var ending    = parseNum(eEl.value);
                     var cal       = parseNum(cEl.value);
                     var price     = parseNum(pEl.value);
+                    var hasEnding = eEl.value.trim() !== '';
 
                     /* ── Validation ── */
                     var errMsg = '';
-                    var hasEndingVal = eEl.value.trim() !== '';
-                    if (hasEndingVal && ending < beginning) {
+                    if (hasEnding && ending < beginning) {
                         errMsg = 'Ending Reading cannot be lower than Beginning Reading.';
                         eEl.style.borderColor = '#dc2626';
                     } else {
@@ -5293,6 +5742,7 @@ setTimeout(function() {
                     } else {
                         cEl.style.borderColor = '';
                     }
+
                     if (msgEl && errMsg) {
                         msgEl.style.display = 'block';
                         msgEl.textContent = errMsg;
@@ -5302,28 +5752,88 @@ setTimeout(function() {
                     }
 
                     /* ── Formulas ── */
-                    /* Net Fuel Dispensed = Ending - Beginning - Calibration */
-                    var net    = ending - beginning - cal;
-                    var volume = net > 0 ? net : 0;
-                    /* Fuel Sales Amount = Net Volume × Price/Liter */
-                    var amount = volume * price;
+                    var volume = 0;
+                    var amount = 0;
+
+                    if (hasEnding && ending >= beginning) {
+                        /* Net Fuel Dispensed = (Ending - Beginning) - Calibration */
+                        var gross = ending - beginning;
+                        var net   = Math.max(0, gross - cal);
+                        volume    = net;
+                        /* Fuel Sales Amount = Net Volume × Price/Liter */
+                        amount    = volume * price;
+                    }
 
                     /* ── Update display fields ── */
-                    vEl.value = fmtNum(volume);
-                    if (vvEl) vvEl.value = volume.toFixed(2);
-                    aEl.value = fmtNum(amount);
-                    if (avEl) avEl.value = amount.toFixed(2);
+                    if (hasEnding) {
+                        vEl.value = fmtNum(volume);
+                        if (vvEl) vvEl.value = volume.toFixed(2);
+                        aEl.value = fmtNum(amount);
+                        if (avEl) avEl.value = amount.toFixed(2);
+                    } else {
+                        vEl.value = '';
+                        if (vvEl) vvEl.value = '0.00';
+                        aEl.value = '';
+                        if (avEl) avEl.value = '0.00';
+                    }
+
+                    /* Update overall summary totals */
+                    updateOverallTotals();
+                }
+
+                /* ── Calculate overall totals across all rows ── */
+                function updateOverallTotals() {
+                    var totalVol = 0;
+                    var totalAmt = 0;
+                    var encodedCount = 0;
+                    var allRows = document.querySelectorAll('tr[id^="fuelRow_"]');
+                    var totalRows = allRows.length;
+
+                    allRows.forEach(function(row) {
+                        var ftId = row.id.replace('fuelRow_', '');
+                        var eEl = document.getElementById('ending_' + ftId);
+                        var vEl = document.getElementById('volume_' + ftId);
+                        var aEl = document.getElementById('amount_' + ftId);
+
+                        if (eEl && eEl.value.trim() !== '') {
+                            encodedCount++;
+                        }
+                        if (vEl) {
+                            totalVol += parseNum(vEl.value);
+                        }
+                        if (aEl) {
+                            totalAmt += parseNum(aEl.value);
+                        }
+                    });
+
+                    var countEl = document.getElementById('total_encoded_nozzles');
+                    var volEl   = document.getElementById('overall_net_volume');
+                    var amtEl   = document.getElementById('overall_total_amount');
+
+                    if (countEl) countEl.textContent = encodedCount + ' / ' + totalRows;
+                    if (volEl)   volEl.textContent   = fmtNum(totalVol) + ' L';
+                    if (amtEl)   amtEl.textContent   = '\u20B1 ' + fmtNum(totalAmt);
                 }
 
                 /* ── Attach listeners to all fuel inputs ── */
                 function attachAll() {
-                    /* Find all ending_fuel_* and cal_fuel_* inputs */
-                    var allEnding = document.querySelectorAll('input[id^="ending_fuel_"]');
-                    var allCal    = document.querySelectorAll('input[id^="cal_fuel_"]');
-                    var allBeg    = document.querySelectorAll('input[id^="beginning_fuel_"]:not([readonly])');
+                    /* Find all ending_fuel_*, cal_fuel_*, and beginning_fuel_* inputs */
+                    var allEnding = document.querySelectorAll('input[id^="ending_"]');
+                    var allCal    = document.querySelectorAll('input[id^="cal_"]');
+                    var allBeg    = document.querySelectorAll('input[id^="beginning_"]:not([readonly])');
+
+                    if (window._isFuelClosingCompleted) {
+                        [].slice.call(allEnding).forEach(function(inp) {
+                            if (!inp._userTyped) inp.value = '';
+                        });
+                        [].slice.call(allCal).forEach(function(inp) {
+                            if (!inp._userTyped) inp.value = '';
+                        });
+                    }
 
                     function makeHandler(inp) {
-                        return function() {
+                        return function(ev) {
+                            if (ev && ev.isTrusted) inp._userTyped = true;
                             var m = inp.id.match(/^(?:ending|beginning|cal)_(.+)$/);
                             if (m) calcRow(m[1]);
                         };
@@ -5337,6 +5847,11 @@ setTimeout(function() {
                         inp.addEventListener('change', fn);
                         inp.addEventListener('keyup',  fn);
                     });
+
+                    /* Restore any in-progress input values from current session (skipped if closing completed) */
+                    if (!window._isFuelClosingCompleted && typeof window.restoreFuelInputCache === 'function') {
+                        window.restoreFuelInputCache();
+                    }
 
                     /* Run initial calc for each row */
                     var allFuelIds = <?= json_encode($all_ft_ids_js) ?>;
@@ -5353,31 +5868,27 @@ setTimeout(function() {
                             if (m) calcRow(m[1]);
                         });
                     }
-                    /* Restore any in-progress input values from current session */
-                    if (typeof window.restoreFuelInputCache === 'function') {
-                        window.restoreFuelInputCache();
-                    }
+
+                    updateOverallTotals();
                 }
 
                 /* ── Expose globally so inline oninput handlers can call it ── */
                 window.updateFuelCalc = function(ftId) { calcRow(ftId); };
+                window.updateOverallTotals = updateOverallTotals;
 
                 /* ── Boot ── */
                 if (document.readyState === 'loading') {
                     document.addEventListener('DOMContentLoaded', function() {
                         attachAll();
-                        if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
                     });
                 } else {
                     attachAll();
-                    if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
                 }
                 window.addEventListener('load', function() {
                     attachAll();
-                    if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
                 });
                 window.addEventListener('pageshow', function() {
-                    if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
+                    attachAll();
                 });
 
             })();
@@ -5603,7 +6114,7 @@ setTimeout(function() {
 
             function _checkClosingStatus(silent) {
                 // Quick local checks first (no network call needed)
-                if (window.location.search.indexOf('closing_saved=1') !== -1) {
+                if (window._isFuelClosingCompleted || window.location.search.indexOf('closing_saved=1') !== -1) {
                     _applyClosingBtnState(false);
                     return;
                 }
@@ -5754,6 +6265,13 @@ setTimeout(function() {
             formData.set('calibration', calibrationRaw);
             const calibrationVal = parseFloat(calibrationRaw) || 0;
 
+            const volEl = document.getElementById('volume_value_' + ftId);
+            const amtEl = document.getElementById('amount_value_' + ftId);
+            const prEl  = document.getElementById('price_' + ftId);
+            if (volEl) formData.set('volume_liters', volEl.value || '0.00');
+            if (amtEl) formData.set('total_amount', amtEl.value || '0.00');
+            if (prEl)  formData.set('price_per_liter', prEl.value || '0.00');
+
             // Validation Rule 2: Calibration ≥ 0
             if (calibrationVal < 0) {
                 showRowMsg(msgEl, 'error', 'Calibration value cannot be negative.');
@@ -5833,10 +6351,10 @@ setTimeout(function() {
 
                     // Clear ending and computed fields
                     if (endingEl)    endingEl.value    = '';
-                    if (calEl)       calEl.value       = '0.00';
-                    if (volumeEl)    volumeEl.value    = '0.00';
+                    if (calEl)       calEl.value       = '';
+                    if (volumeEl)    volumeEl.value    = '';
                     if (volumeValEl) volumeValEl.value = '0.00';
-                    if (amountEl)    amountEl.value    = '0.00';
+                    if (amountEl)    amountEl.value    = '';
                     if (amountValEl) amountValEl.value = '0.00';
                     try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
 
@@ -5890,10 +6408,10 @@ setTimeout(function() {
                 beginningEl.value = '';
             }
             if (endingEl) endingEl.value = '';
-            if (calEl) calEl.value = '0.00';
-            if (volumeEl) volumeEl.value = '0.00';
+            if (calEl) calEl.value = '';
+            if (volumeEl) volumeEl.value = '';
             if (volumeValueEl) volumeValueEl.value = '0.00';
-            if (amountEl) amountEl.value = '0.00';
+            if (amountEl) amountEl.value = '';
             if (amountValueEl) amountValueEl.value = '0.00';
             if (msgEl) showRowMsg(msgEl, '', '');
         }
@@ -5941,6 +6459,7 @@ setTimeout(function() {
                 window.PetronDraft.clear('fuel_meter_readings_fuel');
             }
             try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
+            if (typeof window.updateOverallTotals === 'function') window.updateOverallTotals();
 
             showToast('All fuel readings have been reset.', 'info');
         }
@@ -6010,7 +6529,7 @@ setTimeout(function() {
 
                 let endingRaw    = (endingEl    ? endingEl.value    : '').replace(/,/g, '').trim();
                 let beginningRaw = (beginningEl ? beginningEl.value : '').replace(/,/g, '').trim();
-                let calRaw       = (calEl       ? calEl.value       : '0.00').replace(/,/g, '').trim();
+                let calRaw       = ((calEl ? calEl.value : '') || '0.00').replace(/,/g, '').trim() || '0.00';
 
                 let endingVal    = parseFloat(endingRaw)    || 0;
                 let beginningVal = parseFloat(beginningRaw) || 0;
@@ -6023,28 +6542,9 @@ setTimeout(function() {
                     beginningVal = 0;
                 }
 
-                // If ending reading is blank or <= 0:
-                // Auto-default Ending = Beginning (meaning NO sales / 0 net volume / "walay halin" for this pump during this shift)
-                if (!endingRaw || endingVal <= 0) {
-                    if (beginningVal > 0) {
-                        endingVal = beginningVal;
-                        endingRaw = beginningVal.toFixed(2);
-                        calVal = 0;
-                        calRaw = '0.00';
-                        if (endingEl) {
-                            endingEl.value = beginningEl.value;
-                        }
-                        if (calEl) {
-                            calEl.value = '0.00';
-                        }
-                        const volEl = document.getElementById('volume_' + ftId);
-                        const amtEl = document.getElementById('amount_' + ftId);
-                        if (volEl) volEl.value = '0.00';
-                        if (amtEl) amtEl.value = '0.00';
-                    } else {
-                        endingVal = 0;
-                        endingRaw = '0.00';
-                    }
+                // If ending reading is blank, skip this row — it has not been encoded yet
+                if (!endingRaw || endingRaw === '') {
+                    return;
                 }
 
                 // Ending cannot be lower than Beginning
@@ -6099,6 +6599,13 @@ setTimeout(function() {
                     formData.set('calibration',        calRaw);
                     formData.set('notes',              globalRemarks);
 
+                    const volEl = document.getElementById('volume_value_' + ftId);
+                    const amtEl = document.getElementById('amount_value_' + ftId);
+                    const prEl  = document.getElementById('price_' + ftId);
+                    if (volEl) formData.set('volume_liters', volEl.value || '0.00');
+                    if (amtEl) formData.set('total_amount', amtEl.value || '0.00');
+                    if (prEl)  formData.set('price_per_liter', prEl.value || '0.00');
+
                     const targetUrl = window.location.pathname.replace(/[^\\/]+$/, '') + 'api_fuel_readings.php';
                     const response = await fetch(targetUrl, {
                         method: 'POST',
@@ -6145,10 +6652,10 @@ setTimeout(function() {
                             }
                         }
                         if (endingEl)    endingEl.value    = '';
-                        if (calEl)       calEl.value       = '0.00';
-                        if (volumeEl)    volumeEl.value    = '0.00';
+                        if (calEl)       calEl.value       = '';
+                        if (volumeEl)    volumeEl.value    = '';
                         if (volumeValEl) volumeValEl.value = '0.00';
-                        if (amountEl)    amountEl.value    = '0.00';
+                        if (amountEl)    amountEl.value    = '';
                         if (amountValEl) amountValEl.value = '0.00';
                     } else {
                         errorCount++;
@@ -6179,11 +6686,13 @@ setTimeout(function() {
                 }
                 try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
 
+                window._isFuelClosingCompleted = false;
+
                 // Mark sessionStorage so if user navigates back the button re-appears
                 try {
                     sessionStorage.setItem('petron_fuel_readings_submitted', '1');
                     sessionStorage.setItem('petron_fuel_reading_shift', '<?= htmlspecialchars($fuel_shift_name, ENT_QUOTES) ?>');
-                    sessionStorage.setItem('petron_fuel_reading_date', new Date().toISOString().split('T')[0]);
+                    sessionStorage.setItem('petron_fuel_reading_date', '<?= date('Y-m-d') ?>');
                 } catch(e) {}
 
                 // Show closing buttons immediately (before AJAX round-trip)
@@ -6199,7 +6708,7 @@ setTimeout(function() {
 
                 showToast('Meter readings submitted! Redirecting to Fuel Sales Closing...', 'success');
                 setTimeout(() => {
-                    const todayStr = new Date().toISOString().split('T')[0];
+                    const todayStr = '<?= date('Y-m-d') ?>';
                     const shiftStr = '<?= htmlspecialchars($fuel_shift_name, ENT_QUOTES) ?>';
                     window.location.href = 'staff_fuel_sales_closing.php?date=' + encodeURIComponent(todayStr) + '&shift=' + encodeURIComponent(shiftStr) + '&from_readings=1';
                 }, 1500);
@@ -6550,16 +7059,32 @@ setTimeout(function() {
                 const fuelStr = r._seq_label || (r.fuel_type || '—').toUpperCase();
                 const staffStr = r.staff_name || '—';
 
+                let rBeg = parseFloat(r.beginning) || 0;
+                let rEnd = parseFloat(r.ending) || 0;
+                let rCal = parseFloat(r.cal !== undefined && r.cal !== null ? r.cal : (r.calibration !== undefined ? r.calibration : (r.staff_calibration || 0))) || 0;
+                let rVol = parseFloat(r.volume_liters !== undefined && r.volume_liters !== null ? r.volume_liters : (r.liters_sold || 0)) || 0;
+                let rPrice = parseFloat(r.price_per_liter) || 0;
+                let rAmt = parseFloat(r.amount !== undefined && r.amount !== null ? r.amount : (r.total_amount || 0)) || 0;
+
+                // Robust frontend fallback calculation: if volume or amount is 0 but readings exist
+                if (rVol <= 0 && rEnd > rBeg) {
+                    let gross = Math.max(0, rEnd - rBeg);
+                    rVol = Math.max(0, gross - rCal);
+                }
+                if (rAmt <= 0 && rVol > 0 && rPrice > 0) {
+                    rAmt = rVol * rPrice;
+                }
+
                 html += `<tr style="border-bottom:1px solid #e2e8f0; background:#ffffff; transition: background-color 0.15s ease;" onmouseover="this.style.backgroundColor='#f0f5ff';" onmouseout="this.style.backgroundColor='#ffffff';">
                     <td style="padding:8px 6px; color:#0f172a; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; text-overflow:ellipsis !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${dateStr}">${dateStr}</td>
                     <td style="padding:8px 6px; color:#334155; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; text-overflow:ellipsis !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${shiftStr}">${shiftStr}</td>
                     <td style="padding:8px 6px; font-weight:700; color:#002F70; font-size:12px; white-space:nowrap !important; overflow:hidden !important; text-overflow:ellipsis !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fuelStr}">${fuelStr}</td>
-                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#0f172a; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(r.beginning)}">${fmt(r.beginning)}</td>
-                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#0f172a; font-weight:700; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(r.ending)}">${fmt(r.ending)}</td>
-                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#475569; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(r.cal,3)}">${fmt(r.cal,3)}</td>
-                    <td style="padding:8px 6px; text-align:right; font-weight:700; font-variant-numeric:tabular-nums; color:#0f172a; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(r.volume_liters)} L">${fmt(r.volume_liters)} L</td>
-                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; color:#334155; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="₱${fmt(r.price_per_liter)}">₱${fmt(r.price_per_liter)}</td>
-                    <td style="padding:8px 6px; text-align:right; font-weight:800; font-variant-numeric:tabular-nums; color:#002F70; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="₱${fmt(r.amount)}">₱${fmt(r.amount)}</td>
+                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#0f172a; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(rBeg)}">${fmt(rBeg)}</td>
+                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#0f172a; font-weight:700; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(rEnd)}">${fmt(rEnd)}</td>
+                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#475569; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(rCal,3)}">${fmt(rCal,3)}</td>
+                    <td style="padding:8px 6px; text-align:right; font-weight:700; font-variant-numeric:tabular-nums; color:#0f172a; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(rVol)} L">${fmt(rVol)} L</td>
+                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; color:#334155; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="₱${fmt(rPrice)}">₱${fmt(rPrice)}</td>
+                    <td style="padding:8px 6px; text-align:right; font-weight:800; font-variant-numeric:tabular-nums; color:#002F70; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="₱${fmt(rAmt)}">₱${fmt(rAmt)}</td>
                     <td class="cell-encoded-by" style="padding:8px 6px; color:#1e293b; font-weight:700; font-size:11.5px; line-height:1.25 !important; white-space:normal !important; word-break:normal !important; overflow-wrap:break-word !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${staffStr}">${staffStr}</td>
                     <td style="padding:8px 6px; font-size:12px; text-align:center; vertical-align:middle; white-space:nowrap !important; box-sizing:border-box; border:1px solid #e2e8f0;">${badge(r.status)}</td>
                 </tr>`;
@@ -6833,9 +7358,22 @@ setTimeout(function() {
                         <div id="merchFirstNameResults" style="display:none;"></div>
 
                         <!-- Customer Input Fields -->
-                        <div id="joCustomerLockedBanner" style="display:none;background:#ecfdf5;border:1.5px solid #6ee7b7;border-radius:8px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#065f46;align-items:center;gap:8px;">
-                            <i class="fas fa-lock" style="color:#059669;"></i>
-                            <span>Customer info locked (registered customer selected).</span>
+                        <div id="joCustomerLockedBanner" style="display:none;background:#ecfdf5;border:1.5px solid #6ee7b7;border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:12.5px;color:#065f46;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <i class="fas fa-lock" style="color:#059669;font-size:13px;"></i>
+                                <span>Customer info locked (<strong id="joLockedCustName" style="color:#047857;">registered customer</strong> selected).</span>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:8px;margin-left:auto;">
+                                <button type="button" 
+                                        id="joChangeCustomerBtn"
+                                        onclick="changeSelectedCustomer('jo')" 
+                                        style="display:inline-flex !important;align-items:center !important;gap:5px !important;padding:4px 12px !important;font-size:12px !important;font-weight:800 !important;color:#047857 !important;background:transparent !important;background-color:transparent !important;border:1.5px solid #059669 !important;border-radius:6px !important;cursor:pointer !important;transition:all .15s ease !important;box-shadow:none !important;line-height:1.2 !important;text-decoration:none !important;" 
+                                        onmouseover="this.style.setProperty('background-color','#e6fcf5','important');this.style.setProperty('color','#064e3b','important');this.style.setProperty('border-color','#047857','important');" 
+                                        onmouseout="this.style.setProperty('background-color','transparent','important');this.style.setProperty('color','#047857','important');this.style.setProperty('border-color','#059669','important');"
+                                        title="Change or select another customer">
+                                    <i class="fas fa-sync-alt" style="color:#047857 !important;font-size:11px;"></i> <span style="color:#047857 !important;font-weight:800 !important;font-size:12px !important;">Change</span>
+                                </button>
+                            </div>
                         </div>
                         <div class="txn-form-grid" style="margin-bottom:14px;">
                             <div class="txn-field" style="position:relative;">
@@ -6845,6 +7383,7 @@ setTimeout(function() {
                                        class="txn-input"
                                        placeholder="Type customer name or search..."
                                        autocomplete="off"
+                                       onclick="if(this.hasAttribute('readonly')){changeSelectedCustomer('jo');}"
                                        oninput="this.value = this.value.replace(/[^a-zA-Z\s\-'\.\u00C0-\u024F]/g, ''); if(window.syncCustomerMirror) syncCustomerMirror(); unlockCustomerIfNeeded('jo'); searchCustomerByName('jo');"
                                        onfocus="searchCustomerByName('jo')">
                                 <!-- First Name Dropdown -->
@@ -6942,7 +7481,9 @@ setTimeout(function() {
                                        placeholder="e.g. ABC 1234"
                                        style="text-transform:uppercase;"
                                        autocomplete="off"
-                                       oninput="this.value = this.value.toUpperCase().replace(/[^a-zA-Z0-9\s\-]/g, '');">
+                                       oninput="this.value = this.value.toUpperCase().replace(/[^a-zA-Z0-9\s\-]/g, '');"
+                                       onchange="autoFetchVehicleByPlate(this.value);"
+                                       onblur="autoFetchVehicleByPlate(this.value);">
                             </div>
                         </div>
                         
@@ -7651,7 +8192,7 @@ setTimeout(function() {
                                         class="txn-btn success">
                                     <i class="fas fa-chart-bar"></i> My KPI Today
                                     <?php if ($mh_kpi_txn_count > 0): ?>
-                                    <span style="background:#dcfce7;padding:1px 7px;border-radius:10px;
+                                    <span id="mh_kpi_badge_count" style="background:#dcfce7;padding:1px 7px;border-radius:10px;
                                                  font-size:10px;font-weight:800;color:#1d6f42;"><?= (int)$mh_kpi_txn_count ?> txn<?= $mh_kpi_txn_count > 1 ? 's' : '' ?></span>
                                     <?php endif; ?>
                                 </button>
@@ -7672,7 +8213,7 @@ setTimeout(function() {
                                     <div style="background:#fff;border-radius:8px;padding:12px;
                                                 border:1px solid #dbeafe;text-align:center;
                                                 box-shadow:0 1px 4px rgba(0,47,110,.06);">
-                                        <div style="font-size:26px;font-weight:800;color:#002F6C;line-height:1.1;">
+                                        <div style="font-size:26px;font-weight:800;color:#002F6C;line-height:1.1;" id="mh_kpi_txn_count">
                                             <?= (int)$mh_kpi_txn_count ?>
                                         </div>
                                         <div style="font-size:10px;font-weight:600;color:#64748b;
@@ -7684,7 +8225,7 @@ setTimeout(function() {
                                     <div style="background:#fff;border-radius:8px;padding:12px;
                                                 border:1px solid #dbeafe;text-align:center;
                                                 box-shadow:0 1px 4px rgba(0,47,110,.06);">
-                                        <div style="font-size:26px;font-weight:800;color:#002F6C;line-height:1.1;">
+                                        <div style="font-size:26px;font-weight:800;color:#002F6C;line-height:1.1;" id="mh_kpi_items_released">
                                             <?= (int)$mh_kpi_items_released ?>
                                         </div>
                                         <div style="font-size:10px;font-weight:600;color:#64748b;
@@ -7756,6 +8297,19 @@ setTimeout(function() {
                                      $mh_is_adjusted = ($mh_val_status === 'adjusted');
                                      $mh_adj_req     = ($mh_pending_type === 'Adjustment');
                                      $mh_void_req    = ($mh_pending_type === 'Void');
+
+                                     $mh_pmethod_raw = trim($txn['payment_method'] ?? 'Cash');
+                                     $mh_pmethod_lc  = strtolower($mh_pmethod_raw);
+                                     $mh_is_paid     = ($mh_pay_status === 'paid');
+                                     $mh_is_credit   = (in_array($mh_pmethod_lc, ['credit account', 'credit', 'receivable', 'account receivable'])
+                                                        || !empty($txn['credit_customer_id'])
+                                                        || in_array($mh_pay_status, ['credit account', 'credit', 'account receivable', 'ar']));
+
+                                     // Workflow rule:
+                                     // - Adjust: Allowed for Credit Account / AR while Pending. Paid transactions cannot be adjusted (must be voided if cash).
+                                     // - Void: Allowed for Cash (even if Paid) and Credit Account while Pending. NOT allowed once Credit Account has been Paid.
+                                     $mh_can_adjust  = $mh_is_credit ? (!$mh_is_paid) : (!$mh_is_paid);
+                                     $mh_can_void    = !($mh_is_credit && $mh_is_paid);
                                  ?>
                                  <tr class="mh-row">
                                     <!-- 1. OR NO. / TXN ID -->
@@ -7851,7 +8405,7 @@ setTimeout(function() {
 
                                     <!-- 7. ACTIONS -->
                                     <td style="padding:8px 6px;text-align:center;vertical-align:middle;box-sizing:border-box;">
-                                        <div style="display:flex;flex-direction:column;gap:4px;width:100%;max-width:140px;margin:0 auto;">
+                                        <div style="display:flex;justify-content:center;align-items:center;width:100%;max-width:140px;margin:0 auto;">
                                             <button type="button"
                                                 onclick="window.viewMerchandiseDetails('<?= addslashes($txn['transaction_id'] ?? $txn['mt_id']) ?>', this); return false;"
                                                 class="txn-btn secondary"
@@ -7861,65 +8415,6 @@ setTimeout(function() {
                                                 title="View Transaction Details">
                                                 <i class="fas fa-eye" style="font-size:11px !important;"></i> <span style="font-size:11px !important;font-weight:800 !important;color:#002F70 !important;white-space:nowrap !important;display:inline !important;">View</span>
                                             </button>
-                                            <?php if ($mh_is_adjusted || strtolower(trim($txn['validation_status'] ?? '')) === 'adjusted'): ?>
-                                                <button type="button"
-                                                        onclick="event.stopPropagation(); printMerchandiseReceipt('<?= addslashes($txn['transaction_id'] ?? $txn['mt_id']) ?>'); return false;"
-                                                        class="txn-btn secondary"
-                                                        style="display:inline-flex;align-items:center;justify-content:center;gap:5px;width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;border:1.5px solid #0284c7 !important;background:#f0f9ff !important;color:#0369a1 !important;border-radius:5px;box-sizing:border-box;text-decoration:none;white-space:nowrap !important;cursor:pointer !important;"
-                                                        onmouseover="this.style.background='#e0f2fe';this.style.borderColor='#0284c7';"
-                                                        onmouseout="this.style.background='#f0f9ff';this.style.borderColor='#0284c7';"
-                                                        title="Reprint Receipt">
-                                                    <i class="fas fa-print" style="font-size:11px !important;"></i> <span style="font-size:11px !important;font-weight:700 !important;color:#0369a1 !important;white-space:nowrap !important;display:inline !important;">Reprint</span>
-                                                </button>
-                                            <?php endif; ?>
-                                            <?php if ($mh_is_voided): ?>
-                                                <span style="font-size:10.5px;color:#991b1b;background:#fee2e2;border:1px solid #fca5a5;padding:2px 6px;border-radius:4px;font-weight:800;text-align:center;white-space:nowrap;"><i class="fas fa-ban"></i> Voided</span>
-                                            <?php else: ?>
-                                                <div style="display:flex;flex-direction:column;gap:3px;width:100%;">
-                                                    <?php if ($mh_adj_req): ?>
-                                                        <span style="width:100%;font-size:10.5px;color:#d97706;background:#fef3c7;border:1px solid #fde68a;padding:3px 2px;border-radius:4px;font-weight:800;text-align:center;white-space:nowrap;" title="Adjustment request pending"><i class="fas fa-clock"></i> Adj. Req</span>
-                                                    <?php else: ?>
-                                                        <button type="button"
-                                                                data-jo-id="<?= (int)$txn['mt_id'] ?>"
-                                                                data-jo-source="merchandise_transactions"
-                                                                data-jo-ref="<?= htmlspecialchars($txn['transaction_id'] ?? ('#'.$txn['mt_id'])) ?>"
-                                                                data-jo-customer="<?= htmlspecialchars($txn['customer_name'] ?? 'Walk-in Customer') ?>"
-                                                                data-jo-status="<?= htmlspecialchars($txn['validation_status'] ?? 'Completed') ?>"
-                                                                data-jo-paystatus="<?= htmlspecialchars($txn['payment_status'] ?? 'Paid') ?>"
-                                                                data-jo-paymethod="<?= htmlspecialchars($txn['payment_method'] ?? 'Cash') ?>"
-                                                                data-jo-total="<?= (float)$total_amount ?>"
-                                                                onclick="return openRequestAdjustModal(event, this);"
-                                                                class="txn-btn secondary"
-                                                                style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;border:1.5px solid #94a3b8 !important;background:#f1f5f9 !important;color:#334155 !important;border-radius:5px;cursor:pointer !important;display:inline-flex;align-items:center;justify-content:center;gap:4px;white-space:nowrap !important;"
-                                                                onmouseover="this.style.background='#dbeafe';this.style.color='#002F70';this.style.borderColor='#3b82f6';"
-                                                                onmouseout="this.style.background='#f1f5f9';this.style.color='#334155';this.style.borderColor='#94a3b8';"
-                                                                title="Request Adjustment">
-                                                            <i class="fas fa-sliders-h" style="font-size:11px !important;"></i> <span style="font-size:11px !important;font-weight:700 !important;white-space:nowrap !important;display:inline !important;"><?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Req. Adjust' ?></span>
-                                                        </button>
-                                                    <?php endif; ?>
-
-                                                    <?php if ($enable_void_transaction): ?>
-                                                        <?php if ($mh_void_req): ?>
-                                                            <span style="width:100%;font-size:10.5px;color:#dc2626;background:#fee2e2;border:1px solid #fca5a5;padding:3px 2px;border-radius:4px;font-weight:800;text-align:center;white-space:nowrap;" title="Void request pending"><i class="fas fa-clock"></i> Void Req</span>
-                                                        <?php else: ?>
-                                                            <button type="button"
-                                                                    data-jo-id="<?= (int)$txn['mt_id'] ?>"
-                                                                    data-jo-source="merchandise_transactions"
-                                                                    data-jo-ref="<?= htmlspecialchars($txn['transaction_id'] ?? ('#'.$txn['mt_id'])) ?>"
-                                                                    data-jo-customer="<?= htmlspecialchars($txn['customer_name'] ?? 'Walk-in Customer') ?>"
-                                                                    data-jo-status="<?= htmlspecialchars($txn['validation_status'] ?? 'Completed') ?>"
-                                                                    data-jo-paystatus="<?= htmlspecialchars($txn['payment_status'] ?? 'Paid') ?>"
-                                                                    data-jo-total="<?= (float)$total_amount ?>"
-                                                                    onclick="return openRequestVoidModal(event, this);"
-                                                                    class="void-btn"
-                                                                    style="width:100%;"
-                                                                    title="Request Void">
-                                                                <i class="fas fa-ban"></i> <span><?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Req. Void' ?></span>
-                                                            </button>
-                                                        <?php endif; ?>
-                                                    <?php endif; ?>
-                                                </div>
-                                            <?php endif; ?>
                                         </div>
                                     </td>
                                  </tr>
@@ -7930,12 +8425,14 @@ setTimeout(function() {
                             <!-- Rows per page + Pagination controls -->
                             <div id="mhPaginationFooter" style="display:flex; justify-content:space-between; align-items:center; padding:14px 20px; border-top:1px solid #e2e8f0; background:#ffffff; border-radius:0 0 12px 12px; font-size:13px; color:#475569; flex-wrap:wrap; gap:12px;">
                                 <div style="display:flex; align-items:center;">
-                                    <span id="mhShowingEntriesText" style="font-size:13px; color:#64748b; font-weight:600;">Showing 1–10 of 10 entries</span>
+                                    <span id="mhShowingEntriesText" style="font-size:13px; color:#64748b; font-weight:600;">Showing <?= empty($mh_recent) ? '0' : '1–'.min(10, count($mh_recent)) ?> of <?= count($mh_recent) ?> entries</span>
                                 </div>
                                 <div style="display:flex; align-items:center; gap:16px;">
                                     <div style="display:flex; align-items:center; gap:8px;">
                                         <label style="margin:0; font-weight:600; color:#64748b; font-size:13px;">Rows per page:</label>
                                         <select id="mhPerPage" onchange="mhChangePerPage()" style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:600; background:transparent !important; color:#334155; outline:none; cursor:pointer;">
+                                            <option value="2">2</option>
+                                            <option value="5">5</option>
                                             <option value="10" selected>10</option>
                                             <option value="20">20</option>
                                             <option value="50">50</option>
@@ -7945,13 +8442,13 @@ setTimeout(function() {
                                     <div style="display:flex; align-items:center; gap:6px;">
                                         <button id="mhPrevBtn" onclick="mhGoPage(mhState.page - 1)" 
                                                 style="width:32px; height:32px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; cursor:not-allowed; color:#cbd5e1; display:flex; align-items:center; justify-content:center; transition: all 0.2s;"
-                                                onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';">
+                                                onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';" disabled>
                                             <i class="fas fa-chevron-left"></i>
                                         </button>
-                                        <span id="mhPageLabel" style="color:#334155; font-size:13px; font-weight:600; padding:0 4px;">Page 1 of 1</span>
+                                        <span id="mhPageLabel" style="color:#334155; font-size:13px; font-weight:600; padding:0 4px;">Page 1 of <?= max(1, ceil(count($mh_recent) / 10)) ?></span>
                                         <button id="mhNextBtn" onclick="mhGoPage(mhState.page + 1)" 
-                                                style="width:32px; height:32px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; cursor:not-allowed; color:#cbd5e1; display:flex; align-items:center; justify-content:center; transition: all 0.2s;"
-                                                onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';">
+                                                style="width:32px; height:32px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; cursor:<?= count($mh_recent) > 10 ? 'pointer' : 'not-allowed' ?>; color:<?= count($mh_recent) > 10 ? '#475569' : '#cbd5e1' ?>; display:flex; align-items:center; justify-content:center; transition: all 0.2s;"
+                                                onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';" <?= count($mh_recent) > 10 ? '' : 'disabled' ?>>
                                             <i class="fas fa-chevron-right"></i>
                                         </button>
                                     </div>
@@ -8084,6 +8581,15 @@ setTimeout(function() {
                                     $jom_is_void = in_array($jom_vstatus,['voided','cancelled','canceled','void']);
                                     $jom_void_req = ($jom_pr && $jom_pr['request_type'] === 'Void');
                                     $jom_adj_req  = ($jom_pr && $jom_pr['request_type'] === 'Adjustment');
+
+                                    $jom_pmethod_raw = trim($jom['payment_method'] ?? 'Cash');
+                                    $jom_pmethod_lc  = strtolower($jom_pmethod_raw);
+                                    $jom_is_paid     = ($jps === 'paid');
+                                    $jom_is_credit   = (in_array($jom_pmethod_lc, ['credit account', 'credit', 'receivable', 'account receivable'])
+                                                        || !empty($jom['credit_customer_id'])
+                                                        || in_array($jps, ['credit account', 'credit', 'account receivable', 'ar']));
+                                    $jom_can_adjust  = $jom_is_credit ? (!$jom_is_paid) : (!$jom_is_paid);
+                                    $jom_can_void    = !($jom_is_credit && $jom_is_paid);
                                 ?>
                                 <tr class="jom-row" onclick="window.viewMerchandiseDetails('<?= addslashes($jom['transaction_id'] ?? $jom_id) ?>')" title="Click to view details">
                                     <!-- 1. TXN ID -->
@@ -8145,81 +8651,16 @@ setTimeout(function() {
                                     </td>
                                     <!-- 8. ACTIONS -->
                                     <td style="text-align:center;box-sizing:border-box;padding:8px 6px;" onclick="event.stopPropagation();">
-                                        <div style="display:flex;flex-direction:column;gap:4px;width:100%;max-width:140px;margin:0 auto;">
+                                        <div style="display:flex;justify-content:center;align-items:center;width:100%;max-width:140px;margin:0 auto;">
                                             <button type="button"
                                                     onclick="window.viewMerchandiseDetails('<?= addslashes($jom['transaction_id'] ?? $jom_id) ?>'); return false;"
                                                     class="txn-btn secondary"
-                                                    style="display:inline-flex;align-items:center;justify-content:center;gap:5px;width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;border:1.5px solid #94a3b8 !important;background:#f1f5f9 !important;color:#002F70 !important;border-radius:5px;box-sizing:border-box;text-decoration:none;white-space:nowrap !important;cursor:pointer !important;"
+                                                    style="display:inline-flex;align-items:center;justify-content:center;gap:5px;width:100%;padding:6px 10px;font-size:11px !important;font-weight:800 !important;border:1.5px solid #94a3b8 !important;background:#f1f5f9 !important;color:#002F70 !important;border-radius:5px;box-sizing:border-box;text-decoration:none;white-space:nowrap !important;cursor:pointer !important;"
                                                     onmouseover="this.style.background='#dbeafe';this.style.color='#002F70';this.style.borderColor='#3b82f6';"
                                                     onmouseout="this.style.background='#f1f5f9';this.style.color='#002F70';this.style.borderColor='#94a3b8';"
                                                     title="View Transaction Details">
-                                                <i class="fas fa-eye" style="font-size:11px !important;"></i> <span style="font-size:11px !important;font-weight:700 !important;color:#002F70 !important;white-space:nowrap !important;display:inline !important;">View</span>
+                                                <i class="fas fa-eye" style="font-size:11px !important;"></i> <span style="font-size:11px !important;font-weight:800 !important;color:#002F70 !important;white-space:nowrap !important;display:inline !important;">View</span>
                                             </button>
-                                            <?php if ($jom_vstatus === 'adjusted' || ($jom['validation_status'] ?? '') === 'Adjusted'): ?>
-                                                <button type="button"
-                                                        onclick="event.stopPropagation(); printMerchandiseReceipt('<?= addslashes($jom['transaction_id'] ?? $jom_id) ?>'); return false;"
-                                                        class="txn-btn secondary"
-                                                        style="display:inline-flex;align-items:center;justify-content:center;gap:5px;width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;border:1.5px solid #0284c7 !important;background:#f0f9ff !important;color:#0369a1 !important;border-radius:5px;box-sizing:border-box;text-decoration:none;white-space:nowrap !important;cursor:pointer !important;"
-                                                        onmouseover="this.style.background='#e0f2fe';this.style.borderColor='#0284c7';"
-                                                        onmouseout="this.style.background='#f0f9ff';this.style.borderColor='#0284c7';"
-                                                        title="Reprint Receipt">
-                                                    <i class="fas fa-print" style="font-size:11px !important;"></i> <span style="font-size:11px !important;font-weight:700 !important;color:#0369a1 !important;white-space:nowrap !important;display:inline !important;">Reprint</span>
-                                                </button>
-                                            <?php endif; ?>
-                                            <?php if ($jom_is_void): ?>
-                                                <span style="font-size:10.5px;color:#991b1b;background:#fee2e2;border:1px solid #fca5a5;padding:2px 6px;border-radius:4px;font-weight:800;text-align:center;white-space:nowrap;"><i class="fas fa-ban"></i> Voided</span>
-                                            <?php else: ?>
-                                                <div style="display:flex;flex-direction:column;gap:3px;width:100%;">
-                                                    <?php if ($jom_adj_req): ?>
-                                                        <span style="width:100%;font-size:10.5px;color:#d97706;background:#fef3c7;border:1px solid #fde68a;padding:3px 2px;border-radius:4px;font-weight:800;text-align:center;white-space:nowrap;" title="Adjustment request pending"><i class="fas fa-clock"></i> Adj. Req</span>
-                                                    <?php else: ?>
-                                                        <button type="button"
-                                                                data-jom-id="<?= $jom_id ?>"
-                                                                data-jom-tid="<?= $jom_tid ?>"
-                                                                data-jom-customer="<?= $jom_cname ?>"
-                                                                data-jom-status="<?= htmlspecialchars($jom['validation_status'] ?? 'Completed') ?>"
-                                                                data-jom-paystatus="<?= htmlspecialchars($jom_pstatus) ?>"
-                                                                data-jom-paymethod="<?= htmlspecialchars($jom['payment_method'] ?? 'Cash') ?>"
-                                                                data-jom-total="<?= (float)$jom_total_amt ?>"
-                                                                data-jom-service="<?= $jom_service ?>"
-                                                                data-jom-plate="<?= $jom_plate ?>"
-                                                                data-jom-mechanic="<?= $jom_mechanic ?>"
-                                                                data-jom-merch="<?= $jom_merch_sum ?>"
-                                                                onclick="return openCombinedAdjustModal(event, this);"
-                                                                class="txn-btn secondary"
-                                                                style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;border:1.5px solid #94a3b8 !important;background:#f1f5f9 !important;color:#334155 !important;border-radius:5px;cursor:pointer !important;display:inline-flex;align-items:center;justify-content:center;gap:4px;white-space:nowrap !important;"
-                                                                onmouseover="this.style.background='#dbeafe';this.style.color='#002F70';this.style.borderColor='#3b82f6';"
-                                                                onmouseout="this.style.background='#f1f5f9';this.style.color='#334155';this.style.borderColor='#94a3b8';"
-                                                                title="Request Combined Adjustment">
-                                                            <i class="fas fa-sliders-h" style="font-size:11px !important;"></i> <span style="font-size:11px !important;font-weight:700 !important;white-space:nowrap !important;display:inline !important;"><?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Req. Adjust' ?></span>
-                                                        </button>
-                                                    <?php endif; ?>
-
-                                                    <?php if ($enable_void_transaction): ?>
-                                                        <?php if ($jom_void_req): ?>
-                                                            <span style="width:100%;font-size:10.5px;color:#dc2626;background:#fee2e2;border:1px solid #fca5a5;padding:3px 2px;border-radius:4px;font-weight:800;text-align:center;white-space:nowrap;" title="Void request pending"><i class="fas fa-clock"></i> Void Req</span>
-                                                        <?php else: ?>
-                                                            <button type="button"
-                                                                    data-jom-id="<?= $jom_id ?>"
-                                                                    data-jom-tid="<?= $jom_tid ?>"
-                                                                    data-jom-customer="<?= $jom_cname ?>"
-                                                                    data-jom-status="<?= htmlspecialchars($jom['validation_status'] ?? 'Completed') ?>"
-                                                                    data-jom-paystatus="<?= htmlspecialchars($jom_pstatus) ?>"
-                                                                    data-jom-total="<?= (float)$jom_total_amt ?>"
-                                                                    data-jom-service="<?= $jom_service ?>"
-                                                                    data-jom-plate="<?= $jom_plate ?>"
-                                                                    data-jom-mechanic="<?= $jom_mechanic ?>"
-                                                                    data-jom-merch="<?= $jom_merch_sum ?>"
-                                                                    onclick="return openCombinedVoidModal(event, this);"
-                                                                    class="void-btn"
-                                                                    style="width:100%;"
-                                                                    title="Request Combined Void">
-                                                                <i class="fas fa-ban"></i> <span><?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Req. Void' ?></span>
-                                                            </button>
-                                                        <?php endif; ?>
-                                                    <?php endif; ?>
-                                                </div>
-                                            <?php endif; ?>
                                         </div>
                                     </td>
                                 </tr>
@@ -8230,24 +8671,27 @@ setTimeout(function() {
 
                             <!-- Pagination Footer -->
                             <div id="jomPaginationFooter" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-top:1px solid #e2e8f0;background:#ffffff;border-radius:0 0 12px 12px;font-size:13.5px;color:#475569;flex-wrap:wrap;gap:12px;">
-                                <div><span id="jomShowingEntriesText" style="font-size:13.5px;color:#475569;font-weight:700;">Showing 1–<?= min(10,count($jom_recent)) ?> of <?= count($jom_recent) ?> entries</span></div>
+                                <div><span id="jomShowingEntriesText" style="font-size:13.5px;color:#475569;font-weight:700;">Showing <?= empty($jom_recent) ? '0' : '1–'.min(10,count($jom_recent)) ?> of <?= count($jom_recent) ?> entries</span></div>
                                 <div style="display:flex;align-items:center;gap:16px;">
                                     <div style="display:flex;align-items:center;gap:8px;">
                                         <label style="margin:0;font-weight:700;color:#334155;font-size:13.5px;">Rows per page:</label>
                                         <select id="jomPerPage" onchange="jomChangePerPage()" style="padding:5px 10px;border:1.5px solid #cbd5e1;border-radius:6px;font-size:13.5px;font-weight:700;background:transparent;color:#0f172a;outline:none;cursor:pointer;">
+                                            <option value="2">2</option>
+                                            <option value="5">5</option>
                                             <option value="10" selected>10</option>
                                             <option value="20">20</option>
                                             <option value="50">50</option>
+                                            <option value="100">100</option>
                                         </select>
                                     </div>
                                     <div style="display:flex;align-items:center;gap:6px;">
                                         <button id="jomPrevBtn" onclick="jomGoPage(jomState.page-1)"
-                                                style="width:34px;height:34px;background:#fff;border:1.5px solid #cbd5e1;border-radius:6px;cursor:not-allowed;color:#cbd5e1;display:flex;align-items:center;justify-content:center;">
+                                                style="width:34px;height:34px;background:#fff;border:1.5px solid #cbd5e1;border-radius:6px;cursor:not-allowed;color:#cbd5e1;display:flex;align-items:center;justify-content:center;" disabled>
                                             <i class="fas fa-chevron-left"></i>
                                         </button>
                                         <span id="jomPageLabel" style="color:#0f172a;font-size:13.5px;font-weight:700;padding:0 6px;">Page 1 of <?= max(1,ceil(count($jom_recent)/10)) ?></span>
                                         <button id="jomNextBtn" onclick="jomGoPage(jomState.page+1)"
-                                                style="width:34px;height:34px;background:#fff;border:1.5px solid #cbd5e1;border-radius:6px;cursor:<?= count($jom_recent)>10?'pointer':'not-allowed' ?>;color:<?= count($jom_recent)>10?'#002F70':'#cbd5e1' ?>;display:flex;align-items:center;justify-content:center;">
+                                                style="width:34px;height:34px;background:#fff;border:1.5px solid #cbd5e1;border-radius:6px;cursor:<?= count($jom_recent)>10?'pointer':'not-allowed' ?>;color:<?= count($jom_recent)>10?'#002F70':'#cbd5e1' ?>;display:flex;align-items:center;justify-content:center;" <?= count($jom_recent)>10?'':'disabled' ?>>
                                             <i class="fas fa-chevron-right"></i>
                                         </button>
                                     </div>
@@ -8269,8 +8713,10 @@ setTimeout(function() {
                         function mhRender() {
                             var rows = document.querySelectorAll('#mhTableBody .mh-row');
                             var total = rows.length;
-                            var perPage = mhState.per_page || 10;
-                            var page = mhState.page;
+                            var perPageEl = document.getElementById('mhPerPage');
+                            var perPage = (perPageEl ? parseInt(perPageEl.value, 10) : mhState.per_page) || 10;
+                            mhState.per_page = perPage;
+                            var page = mhState.page || 1;
 
                             var totalPages = Math.max(1, Math.ceil(total / perPage));
                             if (page > totalPages) { mhState.page = page = totalPages; }
@@ -8307,20 +8753,27 @@ setTimeout(function() {
                             }
                         }
 
+                        window.mhRender = mhRender;
                         window.mhState = mhState;
                         window.mhGoPage = function(p) {
                             var rows = document.querySelectorAll('#mhTableBody .mh-row');
-                            var totalPages = Math.max(1, Math.ceil(rows.length / (mhState.per_page || 10)));
+                            var perPage = mhState.per_page || 10;
+                            var totalPages = Math.max(1, Math.ceil(rows.length / perPage));
                             if (p < 1 || p > totalPages) return;
                             mhState.page = p;
                             mhRender();
                         };
                         window.mhChangePerPage = function() {
                             var sel = document.getElementById('mhPerPage');
-                            if (sel) mhState.per_page = parseInt(sel.value, 10);
+                            if (sel) mhState.per_page = parseInt(sel.value, 10) || 10;
                             mhState.page = 1;
                             mhRender();
                         };
+
+                        var mhSelEl = document.getElementById('mhPerPage');
+                        if (mhSelEl) {
+                            mhSelEl.addEventListener('change', window.mhChangePerPage);
+                        }
 
                         // ── Tab switcher ──────────────────────────────────────
                         window.switchMerchTab = function switchMerchTab(tab) {
@@ -8363,6 +8816,13 @@ setTimeout(function() {
                             var headerBtns = document.getElementById('merchHistoryHeaderButtons');
                             if (headerBtns) headerBtns.style.display = (!isForm) ? 'flex' : 'none';
 
+                            if (isHistory && typeof window.mhRender === 'function') {
+                                window.mhRender();
+                            }
+                            if (isCombined && typeof window.jomRender === 'function') {
+                                window.jomRender();
+                            }
+
                             // Update URL
                             if (window.history && window.history.replaceState) {
                                 var url = new URL(window.location.href);
@@ -8392,8 +8852,10 @@ setTimeout(function() {
                         function jomRender() {
                             var rows = document.querySelectorAll('#jomTableBody .jom-row');
                             var total = rows.length;
-                            var perPage = jomState.per_page;
-                            var page = jomState.page;
+                            var perPageEl = document.getElementById('jomPerPage');
+                            var perPage = (perPageEl ? parseInt(perPageEl.value, 10) : jomState.per_page) || 10;
+                            jomState.per_page = perPage;
+                            var page = jomState.page || 1;
                             var totalPages = Math.max(1, Math.ceil(total / perPage));
                             if (page > totalPages) jomState.page = page = totalPages;
                             if (page < 1) jomState.page = page = 1;
@@ -8409,22 +8871,28 @@ setTimeout(function() {
                             if (prev) { prev.disabled=(page<=1); prev.style.cursor=prev.disabled?'not-allowed':'pointer'; prev.style.color=prev.disabled?'#cbd5e1':'#475569'; }
                             if (next) { next.disabled=(page>=totalPages); next.style.cursor=next.disabled?'not-allowed':'pointer'; next.style.color=next.disabled?'#cbd5e1':'#475569'; }
                         }
+                        window.jomRender = jomRender;
                         window.jomState = jomState;
                         window.jomGoPage = function(p) {
                             var rows = document.querySelectorAll('#jomTableBody .jom-row');
-                            var totalPages = Math.max(1, Math.ceil(rows.length / (jomState.per_page||10)));
+                            var perPage = jomState.per_page || 10;
+                            var totalPages = Math.max(1, Math.ceil(rows.length / perPage));
                             if (p < 1 || p > totalPages) return;
                             jomState.page = p; jomRender();
                         };
                         window.jomChangePerPage = function() {
                             var sel = document.getElementById('jomPerPage');
-                            if (sel) jomState.per_page = parseInt(sel.value, 10);
+                            if (sel) jomState.per_page = parseInt(sel.value, 10) || 10;
                             jomState.page = 1; jomRender();
                         };
+                        var jomSelEl = document.getElementById('jomPerPage');
+                        if (jomSelEl) {
+                            jomSelEl.addEventListener('change', window.jomChangePerPage);
+                        }
                         jomRender();
-                        // ── 10-SECOND REAL-TIME AUTO REFRESH FOR MERCHANDISE HISTORY ──
+                        // ── REAL-TIME AUTO REFRESH FOR MERCHANDISE & COMBINED HISTORY ──
                         var _isRefreshingMH = false;
-                        async function autoRefreshMerchandiseHistory() {
+                        async function autoRefreshMerchandiseHistory(force) {
                             if (_isRefreshingMH) return;
                             if (document.hidden) return; // Skip if tab is in background
 
@@ -8433,43 +8901,50 @@ setTimeout(function() {
                             var vm = document.getElementById('viewMerchandiseModal');
                             if (vm && vm.style.display !== 'none' && vm.style.display !== '') return;
 
-                            // Only refresh if Merchandise History tab is currently visible
-                            var histPanel = document.getElementById('merchTab_history');
-                            if (!histPanel || histPanel.style.display === 'none') return;
-
-                            // Do not refresh if user is currently interacting with an input or dropdown
+                            // Do not refresh if user is currently typing in an input
                             var activeEl = document.activeElement;
-                            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT') && histPanel.contains(activeEl)) return;
+                            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') && !activeEl.readOnly && !activeEl.disabled) {
+                                return;
+                            }
 
                             try {
                                 _isRefreshingMH = true;
-                                var fetchUrl = new URL(window.location.href);
-                                fetchUrl.searchParams.set('ajax_mh', '1');
-
-                                var resp = await fetch(fetchUrl.toString(), {
-                                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
-                                });
-                                if (!resp.ok) return;
-                                var data = await resp.json();
-
-                                if (data && data.kpis) {
-                                    if (document.getElementById('mhKpiTxnCount') && typeof data.kpis.txn_count !== 'undefined') {
-                                        document.getElementById('mhKpiTxnCount').textContent = data.kpis.txn_count;
-                                    }
-                                    if (document.getElementById('mhKpiTotalEncoded') && typeof data.kpis.total_encoded !== 'undefined') {
-                                        document.getElementById('mhKpiTotalEncoded').textContent = data.kpis.total_encoded;
-                                    }
+                                if (window.PetronRealtime) {
+                                    await window.PetronRealtime.refreshActiveView({ force: !!force });
                                 }
-                                // Silent KPI refresh only — NEVER reload page in background
+                                // Update Merchandise KPIs smoothly
+                                try {
+                                    const mhResp = await fetch('staff_transactions_hub.php?section=merchandise&ajax_mh=1', {
+                                        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                                    });
+                                    if (mhResp.ok) {
+                                        const mhData = await mhResp.json();
+                                        if (mhData && mhData.success && mhData.kpis) {
+                                            const tc = document.getElementById('mh_kpi_txn_count');
+                                            if (tc) tc.textContent = mhData.kpis.txn_count;
+                                            const ir = document.getElementById('mh_kpi_items_released');
+                                            if (ir) ir.textContent = mhData.kpis.items_released;
+                                            const te = document.getElementById('mh_kpi_total_encoded');
+                                            if (te) te.textContent = mhData.kpis.total_encoded;
+                                            const bc = document.getElementById('mh_kpi_badge_count');
+                                            if (bc) bc.textContent = mhData.kpis.txn_count + ' txn' + (mhData.kpis.txn_count > 1 ? 's' : '');
+                                        }
+                                    }
+                                } catch (_) {}
+                                if (typeof window.mhRender === 'function') window.mhRender();
+                                if (typeof window.jomRender === 'function') window.jomRender();
                             } catch (e) {
-                                // Silent background fail
+                                // Silent background catch
                             } finally {
                                 _isRefreshingMH = false;
                             }
                         }
+                        window.autoRefreshMerchandiseHistory = autoRefreshMerchandiseHistory;
 
                         // Run silent background refresh every 10 seconds
-                        setInterval(autoRefreshMerchandiseHistory, 10000);
+                        setInterval(function() {
+                            autoRefreshMerchandiseHistory(false);
+                        }, 10000);
 
                         // Init
                         mhRender();
@@ -8502,8 +8977,8 @@ setTimeout(function() {
 
                     <!-- Payment Method -->
                     <div class="txn-field" style="margin-bottom:8px;">
-                        <label style="font-size:10px;font-weight:600;color:#475569;">Payment Method <span style="color:#dc2626;">*</span></label>
-                        <select id="paymentMethod" class="txn-select" style="font-size:12px;padding:7px 10px;" onchange="onPaymentChange()" required>
+                        <label style="font-size:10px;font-weight:600;color:#475569;">Payment Method</label>
+                        <select id="paymentMethod" class="txn-select" style="font-size:12px;padding:7px 10px;" onchange="onPaymentChange()">
                             <option value="">-- Select Payment Method --</option>
                             <option value="Cash">Cash</option>
                             <option value="Card">Card</option>
@@ -8694,8 +9169,10 @@ setTimeout(function() {
                         </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
                             <div class="txn-field">
-                                <label style="font-size:10px;font-weight:600;color:#475569;">PO Number (Opt)</label>
-                                <input type="text" id="creditPoNumber" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="PO #">
+                                <label style="font-size:10px;font-weight:600;color:#475569;display:flex;align-items:center;gap:4px;">
+                                    PO Number <span style="background:#e0f2fe;color:#0369a1;font-size:9px;padding:1px 5px;border-radius:4px;font-weight:700;">AUTO</span>
+                                </label>
+                                <input type="text" id="creditPoNumber" class="txn-input" style="font-size:12px;padding:7px 10px;background:#f8fafc;font-weight:600;letter-spacing:0.3px;color:#0f172a;" placeholder="Auto-generated (e.g. PO-20261012-0001)">
                             </div>
                             <div class="txn-field">
                                 <label style="font-size:10px;font-weight:600;color:#475569;">Due Date</label>
@@ -9413,14 +9890,18 @@ setTimeout(function() {
             let subtotal = currentCart.reduce((s, i) => s + (parseFloat(i.quantity) || 0) * (parseFloat(i.unit_price) || 0), 0);
 
             // Seamlessly incorporate Job Order service fee and tip if entered in form and not yet committed to cart
-            const hasServiceInCart = currentCart.some(i => i.item_type === 'service');
-            if (!hasServiceInCart) {
-                const formSvcType = (document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim();
-                const formSvcPrice = parseFloat(document.getElementById('joServicePrice')?.value || 0) || 0;
-                const formLaborPrice = parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) || 0;
-                if (formSvcType && (formSvcPrice > 0 || formLaborPrice > 0)) {
-                    subtotal += (formSvcPrice + formLaborPrice);
-                }
+            const isTipItem = i => i.item_type === 'service' && (i.category === 'Tip' || i.category === 'Labor' || i.product_name === 'Tip' || i.product_name === 'Labor Charge');
+            const hasMainServiceInCart = currentCart.some(i => i.item_type === 'service' && !isTipItem(i));
+            const hasTipInCart = currentCart.some(isTipItem);
+            const formSvcType = (document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim();
+            const formSvcPrice = parseFloat(document.getElementById('joServicePrice')?.value || 0) || 0;
+            const formLaborPrice = parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) || 0;
+
+            if (!hasMainServiceInCart && formSvcType && formSvcPrice > 0) {
+                subtotal += formSvcPrice;
+            }
+            if (!hasTipInCart && formLaborPrice > 0 && (hasMainServiceInCart || formSvcType)) {
+                subtotal += formLaborPrice;
             }
 
             // Selling prices are already VAT-inclusive. Do NOT multiply by 1.12.
@@ -10582,8 +11063,12 @@ setTimeout(function() {
             }
 
             syncServiceCheckboxes();
-            renderCart();
-            updateCheckoutBtn();
+            if (typeof onJoLaborChargeInput === 'function') {
+                onJoLaborChargeInput();
+            } else {
+                renderCart();
+                updateCheckoutBtn();
+            }
         }
 
         function removeServiceByName(name) {
@@ -11130,18 +11615,15 @@ setTimeout(function() {
                     existingLabor.category = 'Tip';
                     existingLabor.unit_price = laborCharge;
                 } else {
-                    const hasServiceInCart = cart.some(i => i.item_type === 'service');
-                    if (hasServiceInCart) {
-                        cart.push({
-                            item_type:    'service',
-                            product_name: laborLabel,
-                            category:     'Tip',
-                            size_variant: '',
-                            product_id:   null,
-                            quantity:     1,
-                            unit_price:   laborCharge,
-                        });
-                    }
+                    cart.push({
+                        item_type:    'service',
+                        product_name: laborLabel,
+                        category:     'Tip',
+                        size_variant: '',
+                        product_id:   null,
+                        quantity:     1,
+                        unit_price:   laborCharge,
+                    });
                 }
             } else if (existingLabor) {
                 cart = cart.filter(i => i.category !== 'Labor' && i.category !== 'Tip' && i.product_name !== 'Labor Charge' && i.product_name !== 'Tip');
@@ -11154,6 +11636,8 @@ setTimeout(function() {
         // ── Customer data for search and autocomplete ─────────────────────────────
         // Store complete customer data including vehicle info
         const customerData = <?= json_encode(array_map(function($customer) {
+            $eng = trim((string)($customer['engine_number'] ?? $customer['engine_no'] ?? ''));
+            $cha = trim((string)($customer['chassis_number'] ?? $customer['chassis_no'] ?? ''));
             return [
                 'id' => $customer['id'],
                 'full_name' => trim($customer['name'] ?? ''),
@@ -11165,8 +11649,10 @@ setTimeout(function() {
                 'vehicle_model' => $customer['vehicle_model'] ?? '',
                 'year_model' => $customer['year_model'] ?? '',
                 'plate_number' => $customer['plate_number'] ?? '',
-                'engine_number' => $customer['engine_number'] ?? '',
-                'chassis_number' => $customer['chassis_number'] ?? '',
+                'engine_number' => $eng,
+                'engine_no' => $eng,
+                'chassis_number' => $cha,
+                'chassis_no' => $cha,
                 'loyalty_account_id' => (int)($customer['loyalty_account_id'] ?? 0),
                 'points' => (int)($customer['pvc_points_balance'] ?? $customer['points'] ?? 0),
                 'pvc_points_balance' => (int)($customer['pvc_points_balance'] ?? $customer['points'] ?? 0),
@@ -11444,22 +11930,33 @@ setTimeout(function() {
         }
 
         function clearSelectedCustomer(prefix) {
+            prefix = prefix || 'jo';
+            const otherPrefix = prefix === 'jo' ? 'merch' : 'jo';
+
             if (Object.prototype.hasOwnProperty.call(selectedCustomerIds, prefix)) {
                 selectedCustomerIds[prefix] = null;
             }
+            if (Object.prototype.hasOwnProperty.call(selectedCustomerIds, otherPrefix)) {
+                selectedCustomerIds[otherPrefix] = null;
+            }
+
             // Unlock customer fields for prefix (do NOT clear values — user may be typing)
-            const fields = [prefix + 'FirstName', prefix + 'LastName', prefix + 'ContactNumber'];
-            fields.forEach(id => {
-                const el = document.getElementById(id);
-                if (el) {
-                    el.removeAttribute('readonly');
-                    el.style.background = '';
-                    el.style.cursor = '';
-                    el.style.color = '';
-                }
+            [prefix, otherPrefix].forEach(p => {
+                const fields = [p + 'FirstName', p + 'LastName', p + 'ContactNumber'];
+                fields.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        el.removeAttribute('readonly');
+                        el.style.background = '#fff';
+                        el.style.cursor = 'text';
+                        el.style.color = '#1e293b';
+                    }
+                });
+                const banner = document.getElementById(p + 'CustomerLockedBanner');
+                if (banner) banner.style.display = 'none';
+                const nameEl = document.getElementById(p + 'LockedCustName');
+                if (nameEl) nameEl.textContent = 'registered customer';
             });
-            const banner = document.getElementById(prefix + 'CustomerLockedBanner');
-            if (banner) banner.style.display = 'none';
 
             // Reset loyalty fields when customer is unlinked
             const loyaltyProgram = document.getElementById('loyaltyProgram');
@@ -11477,7 +11974,15 @@ setTimeout(function() {
             }
             const eligibilityBadge = document.getElementById('loyaltyEligibilityBadge');
             if (eligibilityBadge) eligibilityBadge.style.display = 'none';
+            const pvcCardDisplay = document.getElementById('pvcCardNumberDisplay');
+            if (pvcCardDisplay) pvcCardDisplay.value = 'No linked PVC card';
+            const pvcAvailEl = document.getElementById('pvcAvailablePoints');
+            if (pvcAvailEl) pvcAvailEl.value = 0;
+            const pvcNotice = document.getElementById('pvcCustomerNotice');
+            if (pvcNotice) pvcNotice.style.display = 'block';
+
             if (typeof onLoyaltyChange === 'function') onLoyaltyChange();
+            if (window.syncCustomerMirror) syncCustomerMirror();
         }
 
         // Full reset — clears all fields (used by reset button only)
@@ -11491,14 +11996,176 @@ setTimeout(function() {
             if (cn) cn.value = '';
         }
 
-        // Called on oninput \u2014 only unlocks the field if it was locked (readonly), never clears values
+        // ── CHANGE CUSTOMER: Staff selected the wrong customer and wants to change ──
+        window.changeSelectedCustomer = function changeSelectedCustomer(prefix) {
+            prefix = prefix || 'jo';
+            const otherPrefix = prefix === 'jo' ? 'merch' : 'jo';
+
+            selectedCustomerIds[prefix] = null;
+            selectedCustomerIds[otherPrefix] = null;
+
+            // Unlock and clear customer name & contact
+            [prefix, otherPrefix].forEach(p => {
+                const fields = [p + 'FirstName', p + 'LastName', p + 'ContactNumber'];
+                fields.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        el.value = '';
+                        el.removeAttribute('readonly');
+                        el.style.background = '#fff';
+                        el.style.cursor = 'text';
+                        el.style.color = '#1e293b';
+                    }
+                });
+                const banner = document.getElementById(p + 'CustomerLockedBanner');
+                if (banner) banner.style.display = 'none';
+                const nameEl = document.getElementById(p + 'LockedCustName');
+                if (nameEl) nameEl.textContent = 'registered customer';
+            });
+
+            // Unlock and clear vehicle fields so wrong customer's vehicle doesn't linger
+            const vFields = [
+                prefix + 'VehicleType', prefix + 'VehicleBrand', prefix + 'VehicleModel',
+                prefix + 'VehiclePlate', prefix + 'YearModel', prefix + 'EngineNumber', prefix + 'ChassisNumber'
+            ];
+            vFields.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.value = '';
+                    el.removeAttribute('readonly');
+                    el.style.background = '#fff';
+                    el.style.cursor = 'text';
+                }
+            });
+
+            // Reset loyalty fields
+            const loyaltyProgram = document.getElementById('loyaltyProgram');
+            if (loyaltyProgram) loyaltyProgram.value = 'No Loyalty';
+            const loyaltyCardNo = document.getElementById('loyaltyCardNo');
+            if (loyaltyCardNo) loyaltyCardNo.value = '';
+            const loyaltyCardDisplay = document.getElementById('loyaltyCardDisplay');
+            if (loyaltyCardDisplay) loyaltyCardDisplay.textContent = 'Card: None';
+            const loyaltyPointsBalance = document.getElementById('loyaltyPointsBalance');
+            if (loyaltyPointsBalance) loyaltyPointsBalance.value = 0;
+            const applyCheckbox = document.getElementById('loyaltyApplyRedemption');
+            if (applyCheckbox) {
+                applyCheckbox.checked = false;
+                applyCheckbox.disabled = true;
+            }
+            const eligibilityBadge = document.getElementById('loyaltyEligibilityBadge');
+            if (eligibilityBadge) eligibilityBadge.style.display = 'none';
+            const pvcCardDisplay = document.getElementById('pvcCardNumberDisplay');
+            if (pvcCardDisplay) pvcCardDisplay.value = 'No linked PVC card';
+            const pvcAvailEl = document.getElementById('pvcAvailablePoints');
+            if (pvcAvailEl) pvcAvailEl.value = 0;
+            const pvcNotice = document.getElementById('pvcCustomerNotice');
+            if (pvcNotice) pvcNotice.style.display = 'block';
+
+            if (typeof onLoyaltyChange === 'function') onLoyaltyChange();
+            if (window.syncCustomerMirror) syncCustomerMirror();
+
+            // Focus on First Name and open search dropdown immediately
+            const fn = document.getElementById(prefix + 'FirstName');
+            if (fn) {
+                fn.focus();
+                if (typeof searchCustomerByName === 'function') {
+                    searchCustomerByName(prefix);
+                }
+            }
+
+            if (typeof showTxnAlert === 'function') {
+                showTxnAlert('Customer selection cleared. You can now choose or search another customer.', 'info');
+            }
+        };
+
+        // ── REVERT TO WALK-IN: Switch back to walk-in customer ──
+        window.clearSelectedCustomerToWalkin = function clearSelectedCustomerToWalkin(prefix) {
+            prefix = prefix || 'jo';
+            const otherPrefix = prefix === 'jo' ? 'merch' : 'jo';
+
+            selectedCustomerIds[prefix] = null;
+            selectedCustomerIds[otherPrefix] = null;
+
+            [prefix, otherPrefix].forEach(p => {
+                const fields = [p + 'FirstName', p + 'LastName', p + 'ContactNumber'];
+                fields.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        el.removeAttribute('readonly');
+                        el.style.background = '#fff';
+                        el.style.cursor = 'text';
+                        el.style.color = '#1e293b';
+                    }
+                });
+                const banner = document.getElementById(p + 'CustomerLockedBanner');
+                if (banner) banner.style.display = 'none';
+                const nameEl = document.getElementById(p + 'LockedCustName');
+                if (nameEl) nameEl.textContent = 'registered customer';
+            });
+
+            // Set to Walk-In Customer
+            const fn = document.getElementById(prefix + 'FirstName');
+            if (fn) fn.value = 'Walk-In';
+            const ln = document.getElementById(prefix + 'LastName');
+            if (ln) ln.value = 'Customer';
+            const cn = document.getElementById(prefix + 'ContactNumber');
+            if (cn) cn.value = '';
+
+            const modeEl = document.getElementById(prefix + 'CustomerModeType');
+            if (modeEl) modeEl.value = 'walkin';
+
+            // Clear vehicle fields
+            const vFields = [
+                prefix + 'VehicleType', prefix + 'VehicleBrand', prefix + 'VehicleModel',
+                prefix + 'VehiclePlate', prefix + 'YearModel', prefix + 'EngineNumber', prefix + 'ChassisNumber'
+            ];
+            vFields.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.value = '';
+                    el.removeAttribute('readonly');
+                    el.style.background = '#fff';
+                }
+            });
+
+            // Reset loyalty fields
+            const loyaltyProgram = document.getElementById('loyaltyProgram');
+            if (loyaltyProgram) loyaltyProgram.value = 'No Loyalty';
+            const loyaltyCardNo = document.getElementById('loyaltyCardNo');
+            if (loyaltyCardNo) loyaltyCardNo.value = '';
+            const loyaltyCardDisplay = document.getElementById('loyaltyCardDisplay');
+            if (loyaltyCardDisplay) loyaltyCardDisplay.textContent = 'Card: None';
+            const loyaltyPointsBalance = document.getElementById('loyaltyPointsBalance');
+            if (loyaltyPointsBalance) loyaltyPointsBalance.value = 0;
+            const applyCheckbox = document.getElementById('loyaltyApplyRedemption');
+            if (applyCheckbox) {
+                applyCheckbox.checked = false;
+                applyCheckbox.disabled = true;
+            }
+            const eligibilityBadge = document.getElementById('loyaltyEligibilityBadge');
+            if (eligibilityBadge) eligibilityBadge.style.display = 'none';
+            const pvcCardDisplay = document.getElementById('pvcCardNumberDisplay');
+            if (pvcCardDisplay) pvcCardDisplay.value = 'No linked PVC card';
+            const pvcAvailEl = document.getElementById('pvcAvailablePoints');
+            if (pvcAvailEl) pvcAvailEl.value = 0;
+            const pvcNotice = document.getElementById('pvcCustomerNotice');
+            if (pvcNotice) pvcNotice.style.display = 'block';
+
+            if (typeof onLoyaltyChange === 'function') onLoyaltyChange();
+            if (window.syncCustomerMirror) syncCustomerMirror();
+
+            if (typeof showTxnAlert === 'function') {
+                showTxnAlert('Switched to Walk-In Customer.', 'info');
+            }
+        };
+
+        // Called on oninput — only unlocks the field if it was locked (readonly), never clears values
         window.unlockCustomerIfNeeded = function unlockCustomerIfNeeded(prefix) {
             const fn = document.getElementById(prefix + 'FirstName');
             if (fn && fn.hasAttribute('readonly')) {
-                // User is editing a locked field \u2014 clear the selected customer and unlock
+                // User is editing a locked field — clear the selected customer and unlock
                 clearSelectedCustomer(prefix);
             }
-            // else: field is already unlocked (fresh entry), just let typing happen normally
         }
 
         function searchCustomer(prefix) {
@@ -11712,24 +12379,39 @@ setTimeout(function() {
             const firstNameInput = document.getElementById(prefix + 'FirstName');
             const lastNameInput  = document.getElementById(prefix + 'LastName');
             const contactInput   = document.getElementById(prefix + 'ContactNumber');
-            const vehicleType    = document.getElementById(prefix + 'VehicleType');
-            const vehicleBrand   = document.getElementById(prefix + 'VehicleBrand');
-            const vehicleModel   = document.getElementById(prefix + 'VehicleModel');
-            const vehiclePlate   = document.getElementById(prefix + 'VehiclePlate');
-            const yearModel      = document.getElementById(prefix + 'YearModel');
-            const engineNumber   = document.getElementById(prefix + 'EngineNumber');
-            const chassisNumber  = document.getElementById(prefix + 'ChassisNumber');
+            const vehicleType    = document.getElementById(prefix + 'VehicleType') || document.getElementById('joVehicleType');
+            const vehicleBrand   = document.getElementById(prefix + 'VehicleBrand') || document.getElementById('joVehicleBrand');
+            const vehicleModel   = document.getElementById(prefix + 'VehicleModel') || document.getElementById('joVehicleModel');
+            const vehiclePlate   = document.getElementById(prefix + 'VehiclePlate') || document.getElementById('joVehiclePlate');
+            const yearModel      = document.getElementById(prefix + 'YearModel') || document.getElementById('joYearModel');
+            const engineNumber   = document.getElementById(prefix + 'EngineNumber') || document.getElementById('joEngineNumber');
+            const chassisNumber  = document.getElementById(prefix + 'ChassisNumber') || document.getElementById('joChassisNumber');
             
             if (firstNameInput) firstNameInput.value = customer.first_name || '';
             if (lastNameInput) lastNameInput.value = customer.last_name || '';
             if (contactInput) contactInput.value = customer.contact_number || '';
             if (vehicleType) vehicleType.value = customer.vehicle_type || '';
-            if (vehicleBrand) vehicleBrand.value = customer.vehicle_brand || '';
-            if (vehicleModel) vehicleModel.value = customer.vehicle_model || '';
-            if (vehiclePlate) vehiclePlate.value = customer.plate_number || '';
+            if (vehicleBrand) vehicleBrand.value = customer.vehicle_brand || customer.brand || '';
+            if (vehicleModel) vehicleModel.value = customer.vehicle_model || customer.model || '';
+            if (vehiclePlate) vehiclePlate.value = customer.plate_number || customer.plate || '';
             if (yearModel) yearModel.value = customer.year_model || '';
-            if (engineNumber) engineNumber.value = customer.engine_number || '';
-            if (chassisNumber) chassisNumber.value = customer.chassis_number || '';
+            if (engineNumber) engineNumber.value = customer.engine_number || customer.engine_no || '';
+            if (chassisNumber) chassisNumber.value = customer.chassis_number || customer.chassis_no || '';
+            
+            // Lock customer fields (jo and merch prefixes)
+            const lockFields = [firstNameInput, lastNameInput, contactInput];
+            lockFields.forEach(el => {
+                if (!el) return;
+                el.setAttribute('readonly', true);
+                el.style.background = '#f0fdf4';
+                el.style.cursor = 'not-allowed';
+                el.style.color = '#15803d';
+            });
+            const banner = document.getElementById(prefix + 'CustomerLockedBanner');
+            if (banner) banner.style.display = 'flex';
+            const custFullName = ((customer.first_name || '') + ' ' + (customer.last_name || '')).trim() || 'registered customer';
+            const nameEl = document.getElementById(prefix + 'LockedCustName') || document.getElementById('joLockedCustName');
+            if (nameEl) nameEl.textContent = custFullName;
             
             // Auto-switch loyalty dropdown based on Customer Master Data
             applyCustomerLoyalty(customer);
@@ -11743,12 +12425,28 @@ setTimeout(function() {
             if (otherFirst) otherFirst.value = customer.first_name || '';
             if (otherLast) otherLast.value = customer.last_name || '';
             if (otherContact) otherContact.value = customer.contact_number || '';
+            [otherFirst, otherLast, otherContact].forEach(el => {
+                if (!el) return;
+                el.setAttribute('readonly', true);
+                el.style.background = '#f0fdf4';
+                el.style.cursor = 'not-allowed';
+                el.style.color = '#15803d';
+            });
+            const otherBanner = document.getElementById(otherPrefix + 'CustomerLockedBanner');
+            if (otherBanner) otherBanner.style.display = 'flex';
+            const otherNameEl = document.getElementById(otherPrefix + 'LockedCustName');
+            if (otherNameEl) otherNameEl.textContent = custFullName;
 
             // Hide search results and clear search input
             const resultsDiv = document.getElementById(prefix + 'CustomerResults');
             const searchInput = document.getElementById(prefix + 'SearchCustomer');
             if (resultsDiv) resultsDiv.style.display = 'none';
             if (searchInput) searchInput.value = (customer.first_name + ' ' + customer.last_name).trim();
+
+            // Auto-fetch latest vehicle specs (Engine No, Chassis No) from DB
+            if (typeof autoFetchCustomerVehicleDetails === 'function') {
+                autoFetchCustomerVehicleDetails(customer.id, customer.plate_number || (vehiclePlate ? vehiclePlate.value : ''));
+            }
         }
 
         function showCustomerResults(prefix) {
@@ -11857,24 +12555,24 @@ setTimeout(function() {
             const firstNameInput = document.getElementById(prefix + 'FirstName');
             const lastNameInput  = document.getElementById(prefix + 'LastName');
             const contactInput   = document.getElementById(prefix + 'ContactNumber');
-            const vehicleType    = document.getElementById(prefix + 'VehicleType');
-            const vehicleBrand   = document.getElementById(prefix + 'VehicleBrand');
-            const vehicleModel   = document.getElementById(prefix + 'VehicleModel');
-            const vehiclePlate   = document.getElementById(prefix + 'VehiclePlate');
-            const yearModel      = document.getElementById(prefix + 'YearModel');
-            const engineNumber   = document.getElementById(prefix + 'EngineNumber');
-            const chassisNumber  = document.getElementById(prefix + 'ChassisNumber');
+            const vehicleType    = document.getElementById(prefix + 'VehicleType') || document.getElementById('joVehicleType');
+            const vehicleBrand   = document.getElementById(prefix + 'VehicleBrand') || document.getElementById('joVehicleBrand');
+            const vehicleModel   = document.getElementById(prefix + 'VehicleModel') || document.getElementById('joVehicleModel');
+            const vehiclePlate   = document.getElementById(prefix + 'VehiclePlate') || document.getElementById('joVehiclePlate');
+            const yearModel      = document.getElementById(prefix + 'YearModel') || document.getElementById('joYearModel');
+            const engineNumber   = document.getElementById(prefix + 'EngineNumber') || document.getElementById('joEngineNumber');
+            const chassisNumber  = document.getElementById(prefix + 'ChassisNumber') || document.getElementById('joChassisNumber');
             
             if (firstNameInput) firstNameInput.value = customer.first_name || '';
             if (lastNameInput) lastNameInput.value = customer.last_name || '';
             if (contactInput) contactInput.value = customer.contact_number || '';
             if (vehicleType) vehicleType.value = customer.vehicle_type || '';
-            if (vehicleBrand) vehicleBrand.value = customer.vehicle_brand || '';
-            if (vehicleModel) vehicleModel.value = customer.vehicle_model || '';
-            if (vehiclePlate) vehiclePlate.value = customer.plate_number || '';
+            if (vehicleBrand) vehicleBrand.value = customer.vehicle_brand || customer.brand || '';
+            if (vehicleModel) vehicleModel.value = customer.vehicle_model || customer.model || '';
+            if (vehiclePlate) vehiclePlate.value = customer.plate_number || customer.plate || '';
             if (yearModel) yearModel.value = customer.year_model || '';
-            if (engineNumber) engineNumber.value = customer.engine_number || '';
-            if (chassisNumber) chassisNumber.value = customer.chassis_number || '';
+            if (engineNumber) engineNumber.value = customer.engine_number || customer.engine_no || '';
+            if (chassisNumber) chassisNumber.value = customer.chassis_number || customer.chassis_no || '';
 
             // Lock customer fields (jo and merch prefixes)
             const lockFields = [firstNameInput, lastNameInput, contactInput];
@@ -11887,6 +12585,9 @@ setTimeout(function() {
             });
             const banner = document.getElementById(prefix + 'CustomerLockedBanner');
             if (banner) banner.style.display = 'flex';
+            const custFullName = ((customer.first_name || '') + ' ' + (customer.last_name || '')).trim() || 'registered customer';
+            const nameEl = document.getElementById(prefix + 'LockedCustName') || document.getElementById('joLockedCustName');
+            if (nameEl) nameEl.textContent = custFullName;
             
             // Also sync other form prefix (merch/jo) so customer is uniform across both
             const otherPrefix = prefix === 'jo' ? 'merch' : 'jo';
@@ -11906,6 +12607,8 @@ setTimeout(function() {
             });
             const otherBanner = document.getElementById(otherPrefix + 'CustomerLockedBanner');
             if (otherBanner) otherBanner.style.display = 'flex';
+            const otherNameEl = document.getElementById(otherPrefix + 'LockedCustName');
+            if (otherNameEl) otherNameEl.textContent = custFullName;
 
             // Automatically fill loyalty fields if customer matches
             applyCustomerLoyalty(customer);
@@ -11913,7 +12616,68 @@ setTimeout(function() {
             // Hide the first name dropdown
             const resultsDiv = document.getElementById(prefix + 'FirstNameResults');
             if (resultsDiv) resultsDiv.style.display = 'none';
+
+            // Auto-fetch latest vehicle specs (Engine No, Chassis No) from DB
+            if (typeof autoFetchCustomerVehicleDetails === 'function') {
+                autoFetchCustomerVehicleDetails(customer.id, customer.plate_number || (vehiclePlate ? vehiclePlate.value : ''));
+            }
         }
+
+        // ── Auto-fetch Customer Vehicle details (Engine No, Chassis No, etc.) ───
+        window.autoFetchCustomerVehicleDetails = function autoFetchCustomerVehicleDetails(customerId, plateNumber) {
+            if (!customerId && !plateNumber) return;
+            const params = new URLSearchParams({ action: 'get_customer_vehicles' });
+            if (customerId) params.append('customer_id', customerId);
+            if (plateNumber) params.append('plate', plateNumber);
+
+            fetch('staff_transactions_hub.php?' + params.toString())
+                .then(r => r.json())
+                .then(data => {
+                    if (data && data.success && data.vehicle) {
+                        const v = data.vehicle;
+                        const engineEl  = document.getElementById('joEngineNumber') || document.getElementById('merchEngineNumber');
+                        const chassisEl = document.getElementById('joChassisNumber') || document.getElementById('merchChassisNumber');
+                        const yearEl    = document.getElementById('joYearModel') || document.getElementById('merchYearModel');
+                        const typeEl    = document.getElementById('joVehicleType') || document.getElementById('merchVehicleType');
+                        const brandEl   = document.getElementById('joVehicleBrand') || document.getElementById('merchVehicleBrand');
+                        const modelEl   = document.getElementById('joVehicleModel') || document.getElementById('merchVehicleModel');
+                        const plateEl   = document.getElementById('joVehiclePlate') || document.getElementById('merchVehiclePlate');
+
+                        if (engineEl && (v.engine_number || v.engine_no)) {
+                            engineEl.value = v.engine_number || v.engine_no;
+                        }
+                        if (chassisEl && (v.chassis_number || v.chassis_no)) {
+                            chassisEl.value = v.chassis_number || v.chassis_no;
+                        }
+                        if (yearEl && v.year_model && !yearEl.value) {
+                            yearEl.value = v.year_model;
+                        }
+                        if (typeEl && v.vehicle_type && !typeEl.value) {
+                            typeEl.value = v.vehicle_type;
+                        }
+                        if (brandEl && (v.brand || v.vehicle_brand) && !brandEl.value) {
+                            brandEl.value = v.brand || v.vehicle_brand;
+                        }
+                        if (modelEl && (v.model || v.vehicle_model) && !modelEl.value) {
+                            modelEl.value = v.model || v.vehicle_model;
+                        }
+                        if (plateEl && (v.plate_number || v.plate) && !plateEl.value) {
+                            plateEl.value = v.plate_number || v.plate;
+                        }
+
+                        if (typeof checkVehicleSecurityWarning === 'function') {
+                            checkVehicleSecurityWarning();
+                        }
+                    }
+                })
+                .catch(err => console.warn('autoFetchCustomerVehicleDetails error:', err));
+        };
+
+        window.autoFetchVehicleByPlate = function autoFetchVehicleByPlate(plateNumber) {
+            const trimmed = (plateNumber || '').trim();
+            if (!trimmed || trimmed.length < 3) return;
+            autoFetchCustomerVehicleDetails(null, trimmed);
+        };
 
         function escapeHtml(text) {
             const div = document.createElement('div');
@@ -12989,14 +13753,10 @@ setTimeout(function() {
                 return;
             }
 
-            // ── Check payment method before anything else ─────────────────────
-            const method = (document.getElementById('paymentMethod')?.value || '').trim();
+            // ── Resolve payment method (defaults to Partial Payment if unselected) ──
+            let method = (document.getElementById('paymentMethod')?.value || '').trim();
             if (!method) {
-                showTxnAlert('Please select a Payment Method before submitting the Job Order.', 'warning');
-                // Scroll payment method into view
-                const pmEl = document.getElementById('paymentMethod');
-                if (pmEl) pmEl.focus();
-                return;
+                method = 'Partial Payment';
             }
 
             // ── Ensure service is in cart ─────────────────────────────────────
@@ -13768,21 +14528,73 @@ setTimeout(function() {
                 calcLoyaltyPoints();
             }
 
+            if (method === 'Credit Account') {
+                const poEl = document.getElementById('creditPoNumber');
+                if (poEl && (!poEl.value.trim() || poEl.dataset.autoGenerated === 'true')) {
+                    const custVal = document.getElementById('creditCustomer')?.value || '';
+                    poEl.value = window.generateAutoPoNumber(custVal);
+                    poEl.dataset.autoGenerated = 'true';
+                }
+                const dueEl = document.getElementById('creditDueDate');
+                if (dueEl && !dueEl.value) {
+                    const due = new Date();
+                    due.setDate(due.getDate() + 30);
+                    dueEl.value = due.toISOString().split('T')[0];
+                }
+            }
+
             computeChange();
             onPaymentAmountInput();
             updatePaymentStatusBadge();
             updateCheckoutBtn();
         }
 
+        window.generateAutoPoNumber = function generateAutoPoNumber(custId) {
+            const today = new Date();
+            const yyyy = today.getFullYear();
+            const mm = String(today.getMonth() + 1).padStart(2, '0');
+            const dd = String(today.getDate()).padStart(2, '0');
+            const dateStr = `${yyyy}${mm}${dd}`;
+            const rand = Math.floor(1000 + Math.random() * 9000);
+            if (custId && !isNaN(parseInt(custId))) {
+                return `PO-${dateStr}-${String(custId).padStart(4, '0')}-${rand.toString().slice(-2)}`;
+            }
+            return `PO-${dateStr}-${rand}`;
+        };
+
+        window.regeneratePoNumber = function regeneratePoNumber() {
+            const custVal = document.getElementById('creditCustomer')?.value || '';
+            const poEl = document.getElementById('creditPoNumber');
+            if (poEl) {
+                poEl.value = window.generateAutoPoNumber(custVal);
+                poEl.dataset.autoGenerated = 'true';
+                if (typeof showTxnAlert === 'function') {
+                    showTxnAlert('Generated PO Number: ' + poEl.value, 'info');
+                }
+            }
+        };
+
         window.onCreditCustomerChange = function onCreditCustomerChange() {
             const select = document.getElementById('creditCustomer');
             const compInput = document.getElementById('creditCompanyName');
             const accInput  = document.getElementById('creditAccountNumber');
+            const poInput   = document.getElementById('creditPoNumber');
+            const dueInput  = document.getElementById('creditDueDate');
+
             if (select && select.value) {
                 const opt  = select.options[select.selectedIndex];
                 const name = opt.getAttribute('data-name') || '';
                 if (compInput) compInput.value = name;
                 if (accInput && !accInput.value) accInput.value = 'ACC-' + String(select.value).padStart(5, '0');
+                if (poInput && (!poInput.value.trim() || poInput.dataset.autoGenerated === 'true' || poInput.value.startsWith('PO-'))) {
+                    poInput.value = window.generateAutoPoNumber(select.value);
+                    poInput.dataset.autoGenerated = 'true';
+                }
+                if (dueInput && !dueInput.value) {
+                    const due = new Date();
+                    due.setDate(due.getDate() + 30);
+                    dueInput.value = due.toISOString().split('T')[0];
+                }
             } else {
                 if (compInput) compInput.value = '';
                 if (accInput)  accInput.value  = '';
@@ -13834,7 +14646,7 @@ setTimeout(function() {
             const grand       = getGrandTotal();
             const tenderedInp = document.getElementById('amountTendered');
             let tendered      = parseFloat(tenderedInp?.value || 0);
-            const method      = document.getElementById('paymentMethod')?.value || 'Cash';
+            const method      = document.getElementById('paymentMethod')?.value || '';
             if (method === 'Cash' && (!tendered || tendered <= 0) && grand > 0 && tenderedInp && !tenderedInp.value) {
                 tendered = grand;
             }
@@ -13842,17 +14654,20 @@ setTimeout(function() {
             const changeEl   = document.getElementById('changeAmount');
             const balWrap    = document.getElementById('cashBalanceWrap');
             const balEl      = document.getElementById('cashBalanceDue');
-            if (tendered >= grand && grand > 0) {
+            if (method === 'Cash' && tendered >= grand && grand > 0) {
                 if (changeWrap) changeWrap.style.display = 'block';
                 if (changeEl)   changeEl.value = (tendered - grand).toFixed(2);
                 if (balWrap)    balWrap.style.display = 'none';
                 if (balEl)      balEl.value = '';
-            } else {
+            } else if (method === 'Cash') {
                 if (changeWrap) changeWrap.style.display = 'none';
                 if (changeEl)   changeEl.value = '';
                 const bal = Math.max(0, grand - tendered);
                 if (balWrap) balWrap.style.display = grand > 0 ? 'block' : 'none';
                 if (balEl)   balEl.value = bal > 0 ? bal.toFixed(2) : '';
+            } else {
+                if (changeWrap) changeWrap.style.display = 'none';
+                if (balWrap)    balWrap.style.display = 'none';
             }
             updatePaymentStatusBadge();
         }
@@ -13864,12 +14679,21 @@ setTimeout(function() {
             const icon   = document.getElementById('payStatusIcon');
             const lbl    = document.getElementById('payStatusLabel');
             const sub    = document.getElementById('payStatusSub');
-            if (!wrap || !method) { if (wrap) wrap.style.display = 'none'; return; }
+            if (!wrap) return;
 
             const grand = getGrandTotal();
+            if (grand === 0 && cart.length === 0) {
+                wrap.style.display = 'none';
+                return;
+            }
+
             let status, color, border, bg, iconClass, subText = '';
 
-            if (method === 'Credit Account') {
+            if (!method || method === 'Partial Payment') {
+                status = 'Partially Paid'; color = '#92400e'; border = '#fde68a'; bg = '#fef9c3';
+                iconClass = 'fas fa-exclamation-circle';
+                subText = 'No payment method selected. Tagged as Partial Payment (Balance: ₱' + fmtNum(grand) + ').';
+            } else if (method === 'Credit Account') {
                 status = 'Pending'; color = '#6b21a8'; border = '#d8b4fe'; bg = '#f3e8ff';
                 iconClass = 'fas fa-handshake';
                 const sel = document.getElementById('creditCustomer');
@@ -13917,7 +14741,7 @@ setTimeout(function() {
             const method = document.getElementById('paymentMethod')?.value || '';
             if (!btn) return;
             const hasPendingSvc = ((document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim() !== '') && ((parseFloat(document.getElementById('joServicePrice')?.value || 0) > 0) || (parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) > 0));
-            let disabled = (cart.length === 0 && !hasPendingSvc) || !method;
+            let disabled = (cart.length === 0 && !hasPendingSvc);
             if (method === 'Credit Account') {
                 if (!document.getElementById('creditCustomer')?.value) disabled = true;
             }
@@ -13944,8 +14768,28 @@ setTimeout(function() {
                 const pendingSvcType = (document.getElementById('joServiceTypeValue')?.value || document.getElementById('joServiceType')?.value || '').trim();
                 const pendingSvcPrice = parseFloat(document.getElementById('joServicePrice')?.value || 0);
                 const pendingLabor = parseFloat((document.getElementById('joLaborCharge')?.value || '0').replace(/[^0-9.]/g, '')) || 0;
-                if (pendingSvcType && (pendingSvcPrice > 0 || pendingLabor > 0) && !cart.some(i => i.item_type === 'service')) {
+                const isTipCartItem = i => i.item_type === 'service' && (i.category === 'Tip' || i.category === 'Labor' || i.product_name === 'Tip' || i.product_name === 'Labor Charge');
+                const hasMainServiceInCart = cart.some(i => i.item_type === 'service' && !isTipCartItem(i));
+                if (pendingSvcType && (pendingSvcPrice > 0 || pendingLabor > 0) && !hasMainServiceInCart) {
                     await applyJobOrderToCart();
+                }
+                if (pendingLabor > 0) {
+                    const existingTip = cart.find(isTipCartItem);
+                    if (existingTip) {
+                        existingTip.product_name = 'Tip';
+                        existingTip.category = 'Tip';
+                        existingTip.unit_price = pendingLabor;
+                    } else {
+                        cart.push({
+                            item_type:    'service',
+                            product_name: 'Tip',
+                            category:     'Tip',
+                            size_variant: '',
+                            product_id:   null,
+                            quantity:     1,
+                            unit_price:   pendingLabor,
+                        });
+                    }
                 }
 
                 if (cart.length === 0) {
@@ -13954,11 +14798,10 @@ setTimeout(function() {
                     return;
                 }
 
-                const method = document.getElementById('paymentMethod')?.value || '';
+                let method = (document.getElementById('paymentMethod')?.value || '').trim();
+                const isPartial = (!method || method === 'Partial Payment');
                 if (!method) {
-                    showTxnAlert('Please select a payment method.', 'warning');
-                    _resetSubmitBtn();
-                    return;
+                    method = 'Partial Payment';
                 }
 
                 const gross = getGrossTotal();
@@ -14034,6 +14877,7 @@ setTimeout(function() {
                     job_order_mechanic_name:      (document.getElementById('joMechanicName')?.value || '').trim(),
                     job_order_contact:            contactNumber,
                     job_order_estimated_duration: (document.getElementById('joEstimatedDuration')?.value?.trim() !== '' && parseInt(document.getElementById('joEstimatedDuration').value) > 0) ? parseInt(document.getElementById('joEstimatedDuration').value) : null,
+                    job_order_tip:                pendingLabor > 0 ? pendingLabor : 0,
                 };
             }
 
@@ -14042,7 +14886,10 @@ setTimeout(function() {
                 amountPaid = grand;
             }
             let paymentStatus;
-            if (method === 'Credit Account') {
+            if (isPartial) {
+                amountPaid = 0.00;
+                paymentStatus = 'Partially Paid';
+            } else if (method === 'Credit Account') {
                 paymentStatus = 'Pending';
             } else if (isPvc) {
                 if (grand <= 0.009) {
@@ -14059,15 +14906,17 @@ setTimeout(function() {
             } else {
                 paymentStatus = 'Paid';
             }
-            const balanceDue = method === 'Credit Account' ? grand
-                : (paymentStatus === 'Paid' ? 0 : Math.max(0, grand - amountPaid));
+            const balanceDue = isPartial ? grand
+                : (method === 'Credit Account' ? grand
+                : (paymentStatus === 'Paid' ? 0 : Math.max(0, grand - amountPaid)));
 
             const isCard          = method === 'Card' || method === 'Credit Card' || method === 'Debit Card';
             const isEwallet       = method === 'E-Wallet' || method === 'GCash' || method === 'Maya';
             const isCredit        = method === 'Credit Account';
 
             // Canonical top-level payment method
-            const canonicalPaymentMethod = isCard ? 'Card'
+            const canonicalPaymentMethod = isPartial ? 'Partial Payment'
+                                         : isCard ? 'Card'
                                          : isEwallet ? 'E-Wallet'
                                          : isPvc ? 'Petron Value Card (PVC Points)'
                                          : method;
@@ -14107,11 +14956,11 @@ setTimeout(function() {
                 customer_contact:        contactNumber || null,
                 customer_name:           fullName,
                 payment_method:          canonicalPaymentMethod,
-                amount_paid:             isPvc ? (amountPaid > 0 ? amountPaid : (grand <= 0.009 ? 0 : null)) : (amountPaid > 0 ? amountPaid : (method === 'Cash' ? grand : null)),
-                amount_tendered:         method === 'Cash' ? (amountPaid > 0 ? amountPaid : grand) : null,
+                amount_paid:             isPartial ? 0.00 : (isPvc ? (amountPaid > 0 ? amountPaid : (grand <= 0.009 ? 0 : null)) : (amountPaid > 0 ? amountPaid : (method === 'Cash' ? grand : null))),
+                amount_tendered:         isPartial ? 0.00 : (method === 'Cash' ? (amountPaid > 0 ? amountPaid : grand) : null),
                 change_amount:           method === 'Cash' && amountPaid >= grand ? parseFloat((amountPaid - grand).toFixed(2)) : null,
-                balance_due:             balanceDue > 0 ? parseFloat(balanceDue.toFixed(2)) : null,
-                payment_status:          paymentStatus,
+                balance_due:             isPartial ? parseFloat(grand.toFixed(2)) : (balanceDue > 0 ? parseFloat(balanceDue.toFixed(2)) : null),
+                payment_status:          isPartial ? 'Partially Paid' : paymentStatus,
 
                 card_type:           cardNetworkVal || cardSubTypeVal,
                 card_sub_type:       cardSubTypeVal,
@@ -14124,7 +14973,7 @@ setTimeout(function() {
                 credit_customer_id:    isCredit ? (parseInt(document.getElementById('creditCustomer')?.value) || null) : null,
                 credit_company_name:   isCredit ? (document.getElementById('creditCompanyName')?.value || null) : null,
                 credit_account_number: isCredit ? (document.getElementById('creditAccountNumber')?.value || null) : null,
-                credit_po_number:      isCredit ? (document.getElementById('creditPoNumber')?.value || null) : null,
+                credit_po_number:      isCredit ? ((document.getElementById('creditPoNumber')?.value || '').trim() || (typeof window.generateAutoPoNumber === 'function' ? window.generateAutoPoNumber(document.getElementById('creditCustomer')?.value) : 'PO-' + Date.now())) : null,
                 credit_due_date:       isCredit ? (document.getElementById('creditDueDate')?.value || null) : null,
                 
                 loyalty_type:            (isPvc || loyaltyProgram !== 'No Loyalty') ? 'Petron Value Card (PVC)' : null,
@@ -14249,6 +15098,15 @@ setTimeout(function() {
                     const pmSel = document.getElementById('paymentMethod');
                     if (pmSel) pmSel.selectedIndex = 0;
                     if (typeof onPaymentChange === 'function') onPaymentChange();
+
+                    // Trigger instant live UI update so newly created transaction appears immediately
+                    if (window.PetronRealtime) {
+                        PetronRealtime.trigger(['notifications', 'badges', 'dashboard', 'transactions']);
+                        PetronRealtime.refreshActiveView({ force: true });
+                    }
+                    if (typeof autoRefreshJobOrderTracker === 'function') {
+                        autoRefreshJobOrderTracker(true);
+                    }
 
                     // If job order (has service), show clean banner alert without redundant buttons
                     if (hasService) {
@@ -14488,8 +15346,8 @@ setTimeout(function() {
                 <div style="font-size:20px;font-weight:800;color:#002F70;" id="jo_kpi_total_sales">₱<?= number_format($kpi_total_encoded, 2) ?></div>
             </div>
             <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;text-align:center;">
-                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Completed JO</div>
-                <div style="font-size:24px;font-weight:800;color:#16a34a;" id="jo_kpi_completed_jo"><?= (int)array_reduce($job_orders, fn($c,$j) => $c + (($j['status']??'')==='Completed'?1:0), 0) ?></div>
+                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Released JO</div>
+                <div style="font-size:24px;font-weight:800;color:#16a34a;" id="jo_kpi_released_jo" data-kpi="released_jo"><?= (int)($released_jo_count ?? 0) ?></div>
             </div>
             <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;text-align:center;">
                 <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Merchandise Sold</div>
@@ -14525,10 +15383,6 @@ setTimeout(function() {
                 <div style="display:flex; align-items:center; gap:8px;">
                     <i class="fas fa-clipboard-list" style="color:#003d7a; font-size:16px;"></i>
                     <h3 style="color:#003d7a; margin:0; font-size:15px; font-weight:800;">All Job Orders</h3>
-                    <span id="joLiveBadge" style="display:inline-flex; align-items:center; gap:5px; background:#dcfce7; color:#15803d; border:1px solid #86efac; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; letter-spacing:0.3px;">
-                        <span class="jo-live-pulse-dot"></span>
-                        <span>LIVE UPDATES</span>
-                    </span>
                 </div>
                 <div style="display:flex; align-items:center; gap:10px;">
                     <span id="joLastUpdatedText" style="font-size:11.5px; color:#64748b; font-weight:600;">
@@ -14568,670 +15422,7 @@ setTimeout(function() {
                         </tr>
                     </thead>
                     <tbody id="joUnifiedTableBody">
-                    <?php if (!empty($job_orders)): ?>
-                    <?php foreach ($job_orders as $job):
-                        $val_status  = $job['validation_status'] ?? 'Pending Validation';
-                        $wf_status   = $job['status'] ?? 'Pending';
-                        $pay_status  = $job['payment_status'] ?? 'Pending';
-                        $remarks     = $job['rejection_remarks'] ?? $job['notes'] ?? $job['additional_notes'] ?? '';
-
-                        $inv_key     = ($job['_source'] ?? 'job_orders') . ':' . $job['id'];
-                        $pending_req = $pending_requests[$inv_key] ?? null;
-
-                        // Canonical workflow status (strict state machine: Pending -> In Progress -> Completed -> Released)
-                        $raw_wf_lower = strtolower(trim($wf_status ?? ''));
-                        if ($raw_wf_lower === 'released') {
-                            $canonical_status = 'Released';
-                        } elseif (in_array($raw_wf_lower, ['completed', 'finished', 'done'])) {
-                            $canonical_status = 'Completed';
-                        } elseif (in_array($raw_wf_lower, ['in progress', 'inprogress', 'active', 'ongoing'])) {
-                            $canonical_status = 'In Progress';
-                        } elseif (in_array($raw_wf_lower, ['waiting for parts', 'waiting_for_parts'])) {
-                            $canonical_status = 'Waiting for Parts';
-                        } elseif (in_array($raw_wf_lower, ['voided', 'cancelled', 'canceled', 'rejected']) || strtolower($val_status) === 'voided') {
-                            $canonical_status = 'Voided';
-                        } else {
-                            $canonical_status = 'Pending';
-                        }
-
-                        // Determine combined workflow label + badge style
-                        if ($pending_req) {
-                            if (($pending_req['request_type'] ?? '') === 'Adjustment') {
-                                $wf_color='#d97706'; $wf_bg='#fef3c7'; $wf_label='Adjustment Requested'; $row_filter='adj_requested';
-                            } elseif (($pending_req['request_type'] ?? '') === 'Void') {
-                                $wf_color='#dc2626'; $wf_bg='#fee2e2'; $wf_label='Void Requested'; $row_filter='void_requested';
-                            }
-                        } elseif (in_array(strtolower($val_status), ['adjusted']) || in_array(strtolower($wf_status), ['adjusted'])) {
-                            $wf_color='#4338ca'; $wf_bg='#e0e7ff'; $wf_label='Adjusted'; $row_filter='adjusted';
-                        } elseif ($canonical_status === 'Voided') {
-                            $wf_color='#991b1b'; $wf_bg='#fee2e2'; $wf_label='Voided'; $row_filter='voided';
-                        } elseif ($canonical_status === 'Released') {
-                            $wf_color='#475569'; $wf_bg='#f1f5f9'; $wf_label='Released'; $row_filter='released';
-                        } elseif ($canonical_status === 'Completed') {
-                            $wf_color='#16a34a'; $wf_bg='#dcfce7'; $wf_label='Completed'; $row_filter='completed';
-                        } elseif ($canonical_status === 'In Progress') {
-                            $wf_color='#8b5cf6'; $wf_bg='#ede9fe'; $wf_label='In Progress'; $row_filter='inprogress';
-                        } elseif ($canonical_status === 'Waiting for Parts') {
-                            $wf_color='#2563eb'; $wf_bg='#dbeafe'; $wf_label='Waiting for Parts'; $row_filter='waiting_for_parts';
-                        } else {
-                            $wf_color='#d97706'; $wf_bg='#fef3c7'; $wf_label='Pending'; $row_filter='pending';
-                        }
-
-                        // Payment badge — supports both new and legacy status values
-                        $pay_status_lower = strtolower(trim($pay_status));
-                        if (in_array($pay_status_lower, ['paid', 'completed'])) {
-                            $pay_bg = '#dcfce7'; $pay_color = '#166534'; $pay_border = '#86efac'; $pay_icon = 'fa-check-circle'; $pay_label = 'PAID';
-                        } elseif (in_array($pay_status_lower, ['partially paid', 'partial payment', 'partial'])) {
-                            $pay_bg = '#fef9c3'; $pay_color = '#854d0e'; $pay_border = '#fde047'; $pay_icon = 'fa-adjust'; $pay_label = 'PARTIAL';
-                        } elseif (in_array($pay_status_lower, ['credit account', 'credit transaction', 'credit', 'receivables/credit', 'a/r', 'ar'])) {
-                            $pay_bg = '#ede9fe'; $pay_color = '#5b21b6'; $pay_border = '#c4b5fd'; $pay_icon = 'fa-file-invoice-dollar'; $pay_label = 'A/R CREDIT';
-                        } else {
-                            $pay_bg = '#fee2e2'; $pay_color = '#b91c1c'; $pay_border = '#fca5a5'; $pay_icon = 'fa-clock'; $pay_label = 'UNPAID';
-                        }
-
-                        // Parts/items
-                        $parts_raw = $job['required_parts'] ?? '';
-                        $parts_display = '—';
-                        if (!empty($parts_raw)) {
-                            $decoded = json_decode($parts_raw, true);
-                            if (is_array($decoded)) {
-                                $parts_display = implode(', ', array_map(fn($p) => is_array($p) ? ($p['name'] ?? $p['part_name'] ?? '') : $p, $decoded));
-                            } else {
-                                $parts_display = $parts_raw;
-                            }
-                            if (strlen($parts_display) > 60) $parts_display = substr($parts_display, 0, 57) . '…';
-                        }
-
-                        // ── Inventory Impact for this row ─────────────────────────────────────
-                        $inv_items    = $inv_impact[$inv_key] ?? [];
-
-                        // ── Receivables: due date + overdue ──────────────────────────────────
-                        $jo_due_date  = $job['due_date'] ?? null;
-                        $jo_is_overdue = false;
-                        if ($jo_due_date && !in_array($pay_status, ['Paid','Completed'])) {
-                            $jo_is_overdue = (strtotime(date('Y-m-d')) >= strtotime($jo_due_date));
-                        }
-                        $jo_total_for_bal   = (float)($job['total_cost'] ?? $job['estimated_cost'] ?? 0);
-                        $jo_paid_for_bal    = (float)($job['amount_paid'] ?? 0);
-                        $jo_balance_display = (float)($job['balance_due'] ?? 0);
-                        if ($pay_label === 'PAID') {
-                            $jo_balance_display = 0.00;
-                            if ($jo_paid_for_bal <= 0) $jo_paid_for_bal = $jo_total_for_bal;
-                        } elseif ($jo_balance_display <= 0.009 && $jo_total_for_bal > 0) {
-                            $jo_balance_display = max(0, $jo_total_for_bal - $jo_paid_for_bal);
-                        }
-
-                        // ── Separated remarks ────────────────────────────────────────────────
-                        $staff_remark   = trim($job['staff_remarks'] ?? $job['notes'] ?? $job['job_order_description'] ?? '');
-                        $manager_remark = trim($job['manager_notes'] ?? $job['admin_remarks'] ?? '');
-                        $remarks        = !empty($staff_remark) ? $staff_remark : (!empty($manager_remark) ? $manager_remark : '');
-
-                        // ── Shift Indicator ──────────────────────────────────────────────────
-                        $shift_name_raw = trim($job['shift_name'] ?? $job['shift_period'] ?? '');
-                        if (!empty($shift_name_raw)) {
-                            $shift_label    = $shift_name_raw;
-                            $shift_key_data = (stripos($shift_name_raw,'2') !== false || stripos($shift_name_raw,'pm') !== false || stripos($shift_name_raw,'night') !== false) ? 'shift2' : 'shift1';
-                        } else {
-                            $created_hour = (int)date('H', strtotime($job['created_at']));
-                            if ($created_hour >= 6 && $created_hour < 18) {
-                                $shift_label = 'Shift 1'; $shift_key_data = 'shift1';
-                            } else {
-                                $shift_label = 'Shift 2'; $shift_key_data = 'shift2';
-                            }
-                        }
-                        $shift_icon  = ($shift_key_data === 'shift1') ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
-                        $shift_color = ($shift_key_data === 'shift1') ? '#d97706' : '#4f46e5';
-                        $shift_bg    = ($shift_key_data === 'shift1') ? '#fef9c3' : '#ede9fe';
-
-                        $pay_method = trim($job['payment_method'] ?? 'Cash');
-                        if (empty($pay_method)) $pay_method = 'Cash';
-                        $pml = strtolower($pay_method);
-                        $pay_method_icon = 'fa-money-bill-wave';
-                        $pay_method_color = '#16a34a';
-                        if (str_contains($pml, 'gcash') || str_contains($pml, 'maya') || str_contains($pml, 'wallet')) {
-                            $pay_method_icon = 'fa-mobile-alt';
-                            $pay_method_color = '#0284c7';
-                        } elseif (str_contains($pml, 'card')) {
-                            $pay_method_icon = 'fa-credit-card';
-                            $pay_method_color = '#4f46e5';
-                        } elseif (str_contains($pml, 'credit') || str_contains($pml, 'receivable') || str_contains($pml, 'utang')) {
-                            $pay_method_icon = 'fa-file-invoice-dollar';
-                            $pay_method_color = '#9333ea';
-                        } elseif (str_contains($pml, 'fleet')) {
-                            $pay_method_icon = 'fa-id-card';
-                            $pay_method_color = '#0d9488';
-                        }
-
-                        $est_comp = $job['due_date'] ?? null;
-                        $created_time = !empty($job['created_at']) ? strtotime($job['created_at']) : time();
-                        $est_disp = '';
-                        $est_sub = '';
-
-                        if ($est_comp && $est_comp !== '0000-00-00' && $est_comp !== '0000-00-00 00:00:00') {
-                            $ts = strtotime($est_comp);
-                            if ($ts && $ts > 0) {
-                                $est_disp = date('M j, Y', $ts);
-                                $est_sub = date('h:i A', $ts);
-                            }
-                        }
-
-                        if (empty($est_disp)) {
-                            $duration_mins = (int)($job['estimated_duration'] ?? 0);
-                            if ($duration_mins > 0) {
-                                $completion_ts = $created_time + ($duration_mins * 60);
-                                $est_disp = date('M j, Y', $completion_ts);
-                                $est_sub = date('h:i A', $completion_ts) . ' (' . $duration_mins . 'm)';
-                            } else {
-                                $est_disp = '—';
-                                $est_sub = '';
-                            }
-                        }
-
-                        $comp_ts = strtotime($est_disp);
-                        $today_ts = strtotime(date('Y-m-d'));
-                        $color = ($comp_ts < $today_ts && !in_array($wf_status ?? '', ['Completed'])) ? '#dc2626' : '#1e293b';
-                        $mech = trim($job['mechanic_name'] ?? '');
-                    ?>
-                    <tr
-                        class="jo-data-row"
-                        id="joRow_<?= htmlspecialchars(($job['_source'] ?? 'job_orders') . '_' . $job['id']) ?>"
-                        data-jo-id="<?= (int)$job['id'] ?>"
-                        data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                        data-jo-raw-status="<?= htmlspecialchars($canonical_status) ?>"
-                        data-jo-filter="<?= $row_filter ?>"
-                        data-jo-shift="<?= $shift_key_data ?>"
-                        data-jo-type="<?= htmlspecialchars($job['transaction_type'] ?? 'job_order') ?>"
-                        data-jo-mechanic="<?= htmlspecialchars($job['mechanic_name'] ?? '') ?>"
-                        data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
-                        data-jo-date="<?= date('Y-m-d', strtotime($job['created_at'])) ?>"
-                        data-jo-total="<?= (float)($job['total_cost'] ?? $job['estimated_cost'] ?? 0) ?>"
-                        data-jo-paid="<?= (float)$jo_paid_for_bal ?>"
-                        data-jo-balance="<?= (float)$jo_balance_display ?>"
-                        data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                        data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
-                        data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '') ?>"
-                        data-jo-search="<?= htmlspecialchars(strtolower(implode(' ', [
-                            $job['job_order_id'] ?? ('#'.$job['id']),
-                            $job['customer_name'] ?? '',
-                            $job['vehicle_plate'] ?? '',
-                            $job['service_type'] ?? '',
-                        ]))) ?>"
-                        style="<?= $canonical_status === 'Voided' ? 'background:#fff8f8;' : ($jo_is_overdue ? 'background:#fff5f5;border-left:3px solid #dc2626;' : '') ?>">
-
-                        <!-- 1. JO # / OR NO. -->
-                        <td style="padding:11px 8px;vertical-align:middle;box-sizing:border-box;">
-                            <?php
-                            $jo_raw_id = trim($job['job_order_id'] ?? '');
-                            if (empty($jo_raw_id) || is_numeric($jo_raw_id) || $jo_raw_id === '#'.$job['id']) {
-                                $jo_num_disp = 'JO-' . str_pad($job['id'], 6, '0', STR_PAD_LEFT);
-                            } else {
-                                $jo_num_disp = $jo_raw_id;
-                            }
-                            ?>
-                            <div style="font-weight:800;font-size:13.5px;color:<?= $wf_status==='Rejected' ? '#dc2626' : '#002F70' ?>;line-height:1.2;white-space:nowrap;">
-                                <?= htmlspecialchars($jo_num_disp) ?>
-                            </div>
-                            <div style="font-family:monospace;font-size:11.5px;font-weight:700;color:#475569;margin-top:3px;white-space:nowrap;">
-                                <?php
-                                $jo_or = '';
-                                if (!empty($job['created_at'])) {
-                                    $jo_or = 'OR-' . date('Y', strtotime($job['created_at'])) . '-' . str_pad($job['id'], 6, '0', STR_PAD_LEFT);
-                                }
-                                echo $jo_or ? htmlspecialchars($jo_or) : '<span style="color:#cbd5e1;">—</span>';
-                                ?>
-                            </div>
-                            <div style="margin-top:4px;">
-                                <?php if (($job['transaction_type'] ?? '') === 'combined'): ?>
-                                    <span style="display:inline-flex;align-items:center;gap:3px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:800;white-space:nowrap;">
-                                        <i class="fas fa-tools" style="font-size:9px;"></i> JO + Merch
-                                    </span>
-                                <?php else: ?>
-                                    <span style="display:inline-flex;align-items:center;gap:3px;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:800;white-space:nowrap;">
-                                        <i class="fas fa-wrench" style="font-size:9px;"></i> Job Order
-                                    </span>
-                                <?php endif; ?>
-                            </div>
-                        </td>
-
-                        <!-- 2. CUSTOMER & VEHICLE -->
-                        <td style="padding:11px 8px;vertical-align:middle;box-sizing:border-box;">
-                            <div style="font-weight:700;font-size:13.5px;color:#0f172a;line-height:1.25;word-break:break-word;">
-                                <?= htmlspecialchars($job['customer_name'] ?? '—') ?>
-                            </div>
-                            <?php if (!empty($job['vehicle_plate']) || !empty($job['vehicle_type'])): ?>
-                            <div style="display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px 6px;background:#f1f5f9;border:1px solid #cbd5e1;color:#1e293b;padding:3px 7px;border-radius:4px;font-size:11.5px;font-weight:700;margin-top:4px;max-width:100%;box-sizing:border-box;line-height:1.35;">
-                                <span style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap;">
-                                    <i class="fas fa-car" style="color:#2563eb;font-size:10px;flex-shrink:0;"></i>
-                                    <span><?= htmlspecialchars($job['vehicle_plate'] ?? '—') ?></span>
-                                </span>
-                                <?php if (!empty($job['vehicle_type'])): ?>
-                                    <span style="color:#64748b;font-weight:600;word-break:break-word;">• <?= htmlspecialchars($job['vehicle_type']) ?></span>
-                                <?php endif; ?>
-                            </div>
-                            <?php endif; ?>
-                        </td>
-
-                        <!-- 3. SERVICE & MECHANIC -->
-                        <td style="padding:11px 8px;vertical-align:middle;box-sizing:border-box;">
-                            <div style="font-weight:700;font-size:13px;color:#0369a1;line-height:1.25;word-break:break-word;">
-                                <?= htmlspecialchars($job['service_type'] ?? '—') ?>
-                            </div>
-                            <div style="font-size:11.5px;color:#334155;font-weight:600;margin-top:3px;display:flex;align-items:center;gap:4px;white-space:nowrap;">
-                                <i class="fas fa-user-cog" style="color:#64748b;font-size:11px;flex-shrink:0;"></i>
-                                <span><?= htmlspecialchars($mech && $mech !== 'Unassigned' ? $mech : 'Unassigned') ?></span>
-                            </div>
-                        </td>
-
-                        <!-- 4. PRODUCTS / MERCHANDISE -->
-                        <td style="padding:8px 5px;vertical-align:middle;box-sizing:border-box;">
-                            <?php if (!empty($parts_display) && $parts_display !== '—'): ?>
-                                <div style="font-weight:700;font-size:11.5px;color:#0f172a;line-height:1.25;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;text-overflow:ellipsis;" title="<?= htmlspecialchars($parts_display) ?>">
-                                    <i class="fas fa-box" style="color:#0284c7;font-size:10px;margin-right:3px;flex-shrink:0;"></i>
-                                    <span><?= htmlspecialchars($parts_display) ?></span>
-                                </div>
-                            <?php else: ?>
-                                <span style="color:#94a3b8;font-size:11px;">—</span>
-                            <?php endif; ?>
-                        </td>
-
-                        <!-- 4. FEES BREAKDOWN -->
-                        <td style="padding:11px 8px;vertical-align:middle;box-sizing:border-box;">
-                            <div style="color:#334155;font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;">Svc: <strong style="color:#002F70;font-weight:800;font-size:13px;">₱<?= number_format((float)($job['service_fee'] ?? $job['estimated_cost'] ?? $job['total_cost'] ?? 0), 2) ?></strong></div>
-                            <?php
-                            $labor_val = (float)($job['actual_labor_cost'] ?? $job['estimated_labor_cost'] ?? 0);
-                            ?>
-                            <div style="color:#334155;font-size:11.5px;margin-top:3px;white-space:nowrap;font-variant-numeric:tabular-nums;">Labor: <strong style="color:<?= $labor_val > 0 ? '#16a34a' : '#94a3b8' ?>;font-weight:800;font-size:12px;"><?= $labor_val > 0 ? '₱' . number_format($labor_val, 2) : '—' ?></strong></div>
-                        </td>
-
-                        <!-- 5. PAYMENT -->
-                        <td style="padding:11px 10px;vertical-align:middle;box-sizing:border-box;">
-                            <div style="display:flex;align-items:center;gap:5px;font-weight:700;font-size:12.5px;color:#1e293b;white-space:nowrap;" title="<?= htmlspecialchars($pay_method) ?>">
-                                <i class="fas <?= $pay_method_icon ?>" style="color:<?= $pay_method_color ?>;font-size:11.5px;flex-shrink:0;"></i>
-                                <span style="overflow:hidden;text-overflow:ellipsis;"><?= htmlspecialchars($pay_method) ?></span>
-                            </div>
-                            <div style="margin-top:4px;">
-                                <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:5px;font-size:10.5px;font-weight:800;background:<?= $pay_bg ?>;color:<?= $pay_color ?>;border:1px solid <?= $pay_border ?>;letter-spacing:0.3px;white-space:nowrap;">
-                                    <i class="fas <?= $pay_icon ?>" style="font-size:9.5px;"></i>
-                                    <?= htmlspecialchars($pay_label) ?>
-                                </span>
-                            </div>
-                            <?php if ($pay_label === 'PARTIAL' || $pay_label === 'PARTIALLY PAID'): ?>
-                                <div style="font-size:11px;color:#166534;font-weight:600;margin-top:4px;line-height:1.2;white-space:nowrap;">
-                                    Paid: <strong style="font-weight:800;">₱<?= number_format($jo_paid_for_bal, 2) ?></strong>
-                                </div>
-                                <div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:2px;line-height:1.2;white-space:nowrap;">
-                                    Bal: <strong style="font-weight:800;">₱<?= number_format($jo_balance_display, 2) ?></strong>
-                                </div>
-                            <?php elseif ($pay_label === 'PAID'): ?>
-                                <div style="font-size:11px;color:#166534;font-weight:600;margin-top:3px;line-height:1.2;white-space:nowrap;">
-                                    ₱<?= number_format($jo_total_for_bal > 0 ? $jo_total_for_bal : $jo_paid_for_bal, 2) ?>
-                                </div>
-                            <?php elseif ($pay_label === 'A/R' || $pay_label === 'A/R CREDIT'): ?>
-                                <div style="font-size:11px;color:#5b21b6;font-weight:700;margin-top:3px;line-height:1.2;white-space:nowrap;">
-                                    Bal: ₱<?= number_format($jo_balance_display, 2) ?>
-                                </div>
-                            <?php else: ?>
-                                <div style="font-size:11px;color:#b91c1c;font-weight:700;margin-top:3px;line-height:1.2;white-space:nowrap;">
-                                    Bal: ₱<?= number_format($jo_balance_display > 0 ? $jo_balance_display : $jo_total_for_bal, 2) ?>
-                                </div>
-                            <?php endif; ?>
-                        </td>
-
-                        <!-- 6. SCHEDULE & DATE -->
-                        <td style="padding:11px 8px;vertical-align:middle;box-sizing:border-box;">
-                            <div style="font-weight:700;font-size:12.5px;color:#0f172a;line-height:1.2;white-space:nowrap;">
-                                <?= date('M j, Y', strtotime($job['created_at'])) ?> <span style="font-weight:500;color:#64748b;font-size:11.5px;">• <?= date('h:i A', strtotime($job['created_at'])) ?></span>
-                            </div>
-                            <div style="font-size:11.5px;color:<?= $color ?>;margin-top:3px;font-weight:600;white-space:nowrap;">
-                                <i class="fas fa-clock" style="font-size:10.5px;color:#0284c7;flex-shrink:0;"></i> Est: <?= htmlspecialchars($est_sub ?: $est_disp) ?>
-                            </div>
-                        </td>
-
-                        <!-- 7. STATUS -->
-                        <td style="padding:11px 4px;vertical-align:middle;text-align:center;white-space:nowrap;overflow:visible;box-sizing:border-box;">
-                            <span style="display:inline-flex;align-items:center;justify-content:center;gap:3px;padding:3px 5px;border-radius:10px;font-size:10px;font-weight:700;white-space:nowrap;background:<?= $wf_bg ?>;color:<?= $wf_color ?>;border:1px solid <?= $wf_color ?>40;"
-                                  title="<?= htmlspecialchars($wf_label) ?>">
-                                <i class="fas <?= $wf_status === 'Completed' || $val_status === 'Completed' ? 'fa-check-circle' : ($wf_status === 'In Progress' ? 'fa-spinner fa-spin' : ($wf_status === 'Rejected' || str_contains($wf_label, 'Void') ? 'fa-ban' : 'fa-clock')) ?>"></i>
-                                <?= htmlspecialchars($wf_label) ?>
-                            </span>
-                        </td>
-
-                        <!-- 8. ACTIONS -->
-                        <td style="padding:8px 6px;text-align:center;vertical-align:middle;white-space:nowrap;overflow:visible;box-sizing:border-box;">
-                            <?php
-                                $jo_total   = (float)($job['total_cost'] ?? $job['estimated_cost'] ?? 0);
-                                $jo_paid    = (float)($job['amount_paid'] ?? 0);
-                                $jo_balance = (float)($job['balance_due'] ?? 0);
-                                if ($jo_balance <= 0.009 && $jo_total > 0) $jo_balance = max(0, $jo_total - $jo_paid);
-                                $labor_fee_val = (float)($job['actual_labor_cost'] ?? $job['estimated_labor_cost'] ?? 0);
-                                
-                                // Prepare JO data for modals (JSON-encoded)
-                                $jo_or_number = '';
-                                if (!empty($job['or_number'])) {
-                                    $jo_or_number = $job['or_number'];
-                                } elseif (!empty($job['created_at'])) {
-                                    $jo_or_number = 'OR-' . date('Y', strtotime($job['created_at'])) . '-' . str_pad($job['id'], 6, '0', STR_PAD_LEFT);
-                                }
-                                $jo_data = json_encode([
-                                    'id' => (int)$job['id'],
-                                    'jo_ref' => $job['job_order_id'] ?? ('#'.$job['id']),
-                                    'or_number' => $jo_or_number,
-                                    'customer' => $job['customer_name'] ?? '',
-                                    'contact_number' => $job['contact_number'] ?? $job['customer_contact'] ?? '',
-                                    'vehicle_plate' => $job['vehicle_plate'] ?? '',
-                                    'vehicle_type' => $job['vehicle_type'] ?? '',
-                                    'vehicle_brand' => $job['vehicle_brand'] ?? $job['brand'] ?? '',
-                                    'vehicle_model' => $job['vehicle_model'] ?? $job['model'] ?? '',
-                                    'year_model' => $job['year_model'] ?? $job['vehicle_year'] ?? '',
-                                    'engine_number' => $job['engine_number'] ?? '',
-                                    'chassis_number' => $job['chassis_number'] ?? $job['vin'] ?? '',
-                                    'odometer' => $job['odometer'] ?? '',
-                                    'service_type' => $job['service_type'] ?? '',
-                                    'service_description' => $job['service_description'] ?? $job['additional_notes'] ?? '',
-                                    'parts' => $parts_display,
-                                    'mechanic' => $job['mechanic_name'] ?? 'Unassigned',
-                                    'workflow_status' => $wf_label,
-                                    'payment_status' => $pay_label,
-                                    'payment_method' => $pay_method,
-                                    'total' => $jo_total,
-                                    'labor_fee' => $labor_fee_val,
-                                    'paid' => $jo_paid,
-                                    'balance' => $jo_balance,
-                                    'remarks' => !empty($remarks) ? $remarks : ($job['service_description'] ?? $job['additional_notes'] ?? ''),
-                                    'staff_remarks' => $job['staff_remarks'] ?? $job['notes'] ?? $job['job_order_description'] ?? '',
-                                    'customer_complaint' => $job['customer_complaint'] ?? '',
-                                    'repair_recommendation' => $job['repair_recommendation'] ?? '',
-                                    'created_at' => $job['created_at'],
-                                    'source' => $job['_source'] ?? 'job_orders',
-                                    'estimated_duration' => (!empty($job['estimated_duration']) && (int)$job['estimated_duration'] > 0) ? (int)$job['estimated_duration'] : null
-                                ]);
-                            ?>
-                            <div style="display:flex;flex-direction:column;gap:3px;width:100%;">
-                                <!-- Always show View button -->
-                                <button type="button"
-                                        onclick='viewJobOrderDetails(<?= htmlspecialchars($jo_data, ENT_QUOTES) ?>)'
-                                        class="txn-btn secondary" 
-                                        style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#f1f5f9 !important;color:#002F70 !important;border:1.5px solid #94a3b8 !important;white-space:nowrap !important;"
-                                        onmouseover="this.style.background='#dbeafe';this.style.borderColor='#3b82f6';"
-                                        onmouseout="this.style.background='#f1f5f9';this.style.borderColor='#94a3b8';">
-                                    <i class="fas fa-eye" style="font-size:12px !important;"></i> <span style="font-size:13px !important;font-weight:800 !important;white-space:nowrap !important;display:inline !important;">View</span>
-                                </button>
-
-                                <?php if ($wf_label === 'Voided' || $canonical_status === 'Voided'): ?>
-                                    <span style="font-size:12px;color:#991b1b;font-weight:800;text-align:center;padding:2px 0;">
-                                        <i class="fas fa-ban"></i> Voided
-                                    </span>
-
-                                <?php elseif ($wf_label === 'Void Requested' || ($pending_req && ($pending_req['request_type'] ?? '') === 'Void')): ?>
-                                    <button type="button"
-                                            onclick="printJobOrderReceipt(<?= (int)$job['id'] ?>,'<?= addslashes($job['job_order_id'] ?? ('#'.$job['id'])) ?>')"
-                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                        <i class="fas fa-print"></i> Reprint
-                                    </button>
-                                    <span style="font-size:10px;color:#dc2626;font-weight:800;text-align:center;padding:2px 0;white-space:nowrap;display:block;">
-                                        <i class="fas fa-clock"></i> Void Requested
-                                    </span>
-
-                                <?php elseif ($wf_label === 'Adjustment Requested' || ($pending_req && ($pending_req['request_type'] ?? '') === 'Adjustment')): ?>
-                                    <button type="button"
-                                            onclick="printJobOrderReceipt(<?= (int)$job['id'] ?>,'<?= addslashes($job['job_order_id'] ?? ('#'.$job['id'])) ?>')"
-                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                        <i class="fas fa-print"></i> Reprint
-                                    </button>
-                                    <span style="font-size:10px;color:#d97706;font-weight:800;text-align:center;padding:2px 0;white-space:nowrap;display:block;">
-                                        <i class="fas fa-clock"></i> Adj. Requested
-                                    </span>
-
-                                <?php elseif ($wf_label === 'Adjusted'): ?>
-                                    <button type="button"
-                                            onclick="printJobOrderReceipt(<?= (int)$job['id'] ?>,'<?= addslashes($job['job_order_id'] ?? ('#'.$job['id'])) ?>')"
-                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                        <i class="fas fa-print"></i> Reprint
-                                    </button>
-
-                                    <?php
-                                    $is_credit_approved = ($pay_method === 'Credit Account' || in_array($pay_status, ['Credit Account', 'Credit Transaction', 'Credit', 'Receivables/Credit', 'A/R']));
-                                    $is_fully_paid = ($pay_status === 'Paid' || $jo_balance <= 0.009);
-                                    $can_release = ($is_fully_paid || $is_credit_approved);
-                                    ?>
-
-                                    <?php if (!$can_release): ?>
-                                        <button type="button"
-                                                onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Completed')"
-                                                class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                            <i class="fas fa-money-bill-wave"></i>
-                                            <?= in_array($pay_status, ['Partially Paid','Partial Payment','Partial']) ? 'Settle Balance' : 'Mark Paid' ?>
-                                        </button>
-
-                                        <button type="button"
-                                                class="txn-btn primary jo-btn-disabled"
-                                                title="Settle the outstanding balance or obtain the required authorized credit approval before releasing this Job Order."
-                                                onclick="showTxnAlert('Settle the outstanding balance or obtain the required authorized credit approval before releasing this Job Order.', 'warning');"
-                                                style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#94a3b8 !important;color:#fff !important;cursor:not-allowed;opacity:0.65;border:none;">
-                                            <i class="fas fa-car-side"></i> Release Vehicle
-                                        </button>
-                                    <?php else: ?>
-                                        <button type="button"
-                                                onclick="performJobOrderAction('release_job_order', <?= (int)$job['id'] ?>, '<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>', this)"
-                                                class="txn-btn primary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#002F70;color:#fff;border:none;">
-                                            <i class="fas fa-car-side"></i> Release Vehicle
-                                        </button>
-                                    <?php endif; ?>
-
-                                    <button type="button"
-                                            data-jo-id="<?= (int)$job['id'] ?>"
-                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
-                                            data-jo-total="<?= (float)$jo_total ?>"
-                                            data-jo-labor="<?= (float)$labor_fee_val ?>"
-                                            data-jo-paid="<?= (float)$jo_paid ?>"
-                                            data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
-                                            data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
-                                            data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
-                                            data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
-                                            onclick="return openRequestAdjustModal(event, this);"
-                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
-                                        <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
-                                    </button>
-                                    <?php if ($enable_void_transaction): ?>
-                                    <button type="button"
-                                            data-jo-id="<?= (int)$job['id'] ?>"
-                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                            onclick="return openRequestVoidModal(event, this);"
-                                            class="void-btn">
-                                        <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
-                                    </button>
-                                    <?php endif; ?>
-
-                                <?php elseif ($canonical_status === 'Released'): ?>
-                                    <!-- 4. RELEASED: Normal workflow actions removed. View & Reprint available. -->
-                                    <button type="button"
-                                            onclick="printJobOrderReceipt(<?= (int)$job['id'] ?>,'<?= addslashes($job['job_order_id'] ?? ('#'.$job['id'])) ?>')"
-                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                        <i class="fas fa-print"></i> Reprint
-                                    </button>
-
-
-                                    <?php if ($enable_void_transaction): ?>
-                                    <button type="button"
-                                            data-jo-id="<?= (int)$job['id'] ?>"
-                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                            onclick="return openRequestVoidModal(event, this);"
-                                            class="void-btn">
-                                        <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
-                                    </button>
-                                    <?php endif; ?>
-
-                                <?php elseif ($canonical_status === 'Completed'): ?>
-                                    <!-- 3. COMPLETED: Start In Progress and Mark Complete disabled/removed -->
-                                    <button type="button"
-                                            onclick="printJobOrderReceipt(<?= (int)$job['id'] ?>,'<?= addslashes($job['job_order_id'] ?? ('#'.$job['id'])) ?>')"
-                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                        <i class="fas fa-print"></i> Reprint
-                                    </button>
-
-                                    <?php
-                                    $is_credit_approved = ($pay_method === 'Credit Account' || in_array($pay_status, ['Credit Account', 'Credit Transaction', 'Credit', 'Receivables/Credit', 'A/R']));
-                                    $is_fully_paid = ($pay_status === 'Paid' || $jo_balance <= 0.009);
-                                    $can_release = ($is_fully_paid || $is_credit_approved);
-                                    ?>
-
-                                    <?php if (!$can_release): ?>
-                                        <button type="button"
-                                                onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Completed')"
-                                                class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                            <i class="fas fa-money-bill-wave"></i>
-                                            <?= in_array($pay_status, ['Partially Paid','Partial Payment','Partial']) ? 'Settle Balance' : 'Mark Paid' ?>
-                                        </button>
-
-                                        <button type="button"
-                                                class="txn-btn primary jo-btn-disabled"
-                                                title="Settle the outstanding balance or obtain the required authorized credit approval before releasing this Job Order."
-                                                onclick="showTxnAlert('Settle the outstanding balance or obtain the required authorized credit approval before releasing this Job Order.', 'warning');"
-                                                style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#94a3b8 !important;color:#fff !important;cursor:not-allowed;opacity:0.65;border:none;">
-                                            <i class="fas fa-car-side"></i> Release Vehicle
-                                        </button>
-                                    <?php else: ?>
-                                        <button type="button"
-                                                onclick="performJobOrderAction('release_job_order', <?= (int)$job['id'] ?>, '<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>', this)"
-                                                class="txn-btn primary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#002F70;color:#fff;border:none;">
-                                            <i class="fas fa-car-side"></i> Release Vehicle
-                                        </button>
-                                    <?php endif; ?>
-
-
-                                    <?php if ($enable_void_transaction): ?>
-                                    <button type="button"
-                                            data-jo-id="<?= (int)$job['id'] ?>"
-                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                            onclick="return openRequestVoidModal(event, this);"
-                                            class="void-btn">
-                                        <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
-                                    </button>
-                                    <?php endif; ?>
-
-                                <?php elseif ($canonical_status === 'In Progress'): ?>
-                                    <!-- 2. IN PROGRESS: Start In Progress disabled to prevent restarting -->
-                                    <?php
-                                    $is_credit_approved = ($pay_method === 'Credit Account' || in_array($pay_status, ['Credit Account', 'Credit Transaction', 'Credit', 'Receivables/Credit', 'A/R']));
-                                    $is_fully_paid = ($pay_status === 'Paid' || $jo_balance <= 0.009);
-                                    ?>
-                                    <?php if ($is_fully_paid || $is_credit_approved): ?>
-                                        <button type="button" 
-                                                onclick="performJobOrderAction('set_completed', <?= (int)$job['id'] ?>, '<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>', this)"
-                                                class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                            <i class="fas fa-check"></i> Mark Complete
-                                        </button>
-                                    <?php else: ?>
-                                        <button type="button"
-                                                onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',true,'tracker','In Progress')"
-                                                class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                            <i class="fas fa-check"></i> Complete & Settle
-                                        </button>
-                                    <?php endif; ?>
-
-                                    <button type="button"
-                                            data-jo-id="<?= (int)$job['id'] ?>"
-                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
-                                            data-jo-total="<?= (float)$jo_total ?>"
-                                            data-jo-labor="<?= (float)$labor_fee_val ?>"
-                                            data-jo-paid="<?= (float)$jo_paid ?>"
-                                            data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
-                                            data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
-                                            data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
-                                            data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
-                                            onclick="return openRequestAdjustModal(event, this);"
-                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
-                                        <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
-                                    </button>
-                                    <?php if ($enable_void_transaction): ?>
-                                    <button type="button"
-                                            data-jo-id="<?= (int)$job['id'] ?>"
-                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                            onclick="return openRequestVoidModal(event, this);"
-                                            class="void-btn">
-                                        <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
-                                    </button>
-                                    <?php endif; ?>
-
-                                <?php else: ?>
-                                    <!-- 1. PENDING (or Waiting for Parts): Start In Progress enabled only. Mark Complete and Complete & Settle are NOT displayed. -->
-                                    <button type="button" 
-                                            onclick="performJobOrderAction('set_in_progress', <?= (int)$job['id'] ?>, '<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>', this)"
-                                            class="txn-btn primary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#002F70;color:#fff;border:none;">
-                                        <i class="fas fa-play"></i> Start In Progress
-                                    </button>
-
-                                    <button type="button"
-                                            data-jo-id="<?= (int)$job['id'] ?>"
-                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
-                                            data-jo-total="<?= (float)$jo_total ?>"
-                                            data-jo-labor="<?= (float)$labor_fee_val ?>"
-                                            data-jo-paid="<?= (float)$jo_paid ?>"
-                                            data-jo-service="<?= htmlspecialchars($job['service_type'] ?? '') ?>"
-                                            data-jo-plate="<?= htmlspecialchars($job['vehicle_plate'] ?? '') ?>"
-                                            data-jo-vtype="<?= htmlspecialchars($job['vehicle_type'] ?? '') ?>"
-                                            data-jo-mech="<?= htmlspecialchars($job['mechanic_name'] ?? 'Unassigned') ?>"
-                                            onclick="return openRequestAdjustModal(event, this);"
-                                            class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
-                                        <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
-                                    </button>
-                                    <?php if ($enable_void_transaction): ?>
-                                    <button type="button"
-                                            data-jo-id="<?= (int)$job['id'] ?>"
-                                            data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
-                                            data-jo-ref="<?= htmlspecialchars($job['job_order_id'] ?? ('#'.$job['id'])) ?>"
-                                            data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
-                                            data-jo-status="<?= htmlspecialchars($wf_label) ?>"
-                                            data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
-                                            onclick="return openRequestVoidModal(event, this);"
-                                            class="void-btn">
-                                        <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
-                                    </button>
-                                    <?php endif; ?>
-                                <?php endif; ?>
-                            </div>
-                        </td>
-                    </tr>
-                    <?php endforeach; ?>
-                    <?php else: ?>
-                    <tr id="joEmptyRow">
-                        <td colspan="9" style="text-align:center;padding:40px;color:#94a3b8;background:#fff;">
-                            <i class="fas fa-clipboard" style="font-size:28px;display:block;margin-bottom:8px;"></i>
-                            No job orders found.
-                        </td>
-                    </tr>
-                    <?php endif; ?>
+                    <?= render_job_order_tracker_rows($job_orders, $pending_requests ?? [], $inv_impact ?? [], $role ?? 'staff', $enable_void_transaction ?? true) ?>
                     </tbody>
                 </table>
                 </div>
@@ -15244,6 +15435,8 @@ setTimeout(function() {
                         <div style="display:flex; align-items:center; gap:8px;">
                             <label style="margin:0; font-weight:600; color:#64748b; font-size:13px;">Rows per page:</label>
                             <select id="joPerPage" onchange="joChangePerPage()" style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:600; background:transparent !important; color:#334155; outline:none; cursor:pointer;">
+                                <option value="2">2</option>
+                                <option value="5">5</option>
                                 <option value="10" selected>10</option>
                                 <option value="20">20</option>
                                 <option value="50">50</option>
@@ -15253,13 +15446,13 @@ setTimeout(function() {
                         <div style="display:flex; align-items:center; gap:6px;">
                             <button id="joPrevBtn" onclick="joGoPage(joState.page - 1)" 
                                     style="width:32px; height:32px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; cursor:not-allowed; color:#cbd5e1; display:flex; align-items:center; justify-content:center; transition: all 0.2s;"
-                                    onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';">
+                                    onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';" disabled>
                                 <i class="fas fa-chevron-left"></i>
                             </button>
                             <span id="joPageLabel" style="color:#334155; font-size:13px; font-weight:600; padding:0 4px;">Page 1 of <?= max(1, ceil(count($job_orders) / 10)) ?></span>
                             <button id="joNextBtn" onclick="joGoPage(joState.page + 1)" 
                                     style="width:32px; height:32px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; cursor:<?= count($job_orders) > 10 ? 'pointer' : 'not-allowed' ?>; color:<?= count($job_orders) > 10 ? '#475569' : '#cbd5e1' ?>; display:flex; align-items:center; justify-content:center; transition: all 0.2s;"
-                                    onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';">
+                                    onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';" <?= count($job_orders) > 10 ? '' : 'disabled' ?>>
                                 <i class="fas fa-chevron-right"></i>
                             </button>
                         </div>
@@ -15278,7 +15471,8 @@ setTimeout(function() {
             serviceType: '',
             search:      '',
             page:        1,
-            per_page:    10
+            per_page:    10,
+            totalVisible: 0
         };
 
         function joApplyFilters() {
@@ -15369,7 +15563,10 @@ setTimeout(function() {
 
             // Pagination
             var total      = visibleRows.length;
-            var perPage    = joState.per_page || 10;
+            joState.totalVisible = total;
+            var perPageEl  = document.getElementById('joPerPage');
+            var perPage    = (perPageEl ? parseInt(perPageEl.value, 10) : joState.per_page) || 10;
+            joState.per_page = perPage;
             var totalPages = Math.max(1, Math.ceil(total / perPage));
             if (joState.page > totalPages) { joState.page = totalPages; }
             if (joState.page < 1) { joState.page = 1; }
@@ -15407,10 +15604,9 @@ setTimeout(function() {
         }
 
         function joGoPage(p) {
-            var rows = document.querySelectorAll('#joUnifiedTable tbody tr');
-            var visibleCount = 0;
-            rows.forEach(function(r){ if(r.style.display !== 'none' || r.getAttribute('data-jo-filter')) visibleCount++; });
-            var totalPages = Math.max(1, Math.ceil(visibleCount / (joState.per_page || 10)));
+            var total = (typeof joState.totalVisible === 'number' && joState.totalVisible >= 0) ? joState.totalVisible : document.querySelectorAll('#joUnifiedTable tbody tr').length;
+            var perPage = joState.per_page || 10;
+            var totalPages = Math.max(1, Math.ceil(total / perPage));
             if (p < 1 || p > totalPages) return;
             joState.page = p;
             joRenderTable();
@@ -15418,8 +15614,23 @@ setTimeout(function() {
 
         function joChangePerPage() {
             var sel = document.getElementById('joPerPage');
-            if (sel) { joState.per_page = parseInt(sel.value, 10); joState.page = 1; joRenderTable(); }
+            if (sel) {
+                joState.per_page = parseInt(sel.value, 10) || 10;
+                joState.page = 1;
+                joRenderTable();
+            }
         }
+
+        window.joRenderTable = joRenderTable;
+        window.joGoPage = joGoPage;
+        window.joChangePerPage = joChangePerPage;
+        window.joState = joState;
+
+        var joPerPageInput = document.getElementById('joPerPage');
+        if (joPerPageInput) {
+            joPerPageInput.addEventListener('change', joChangePerPage);
+        }
+        joRenderTable();
 
                 function performJobOrderAction(action, joId, joSource, btnElement) {
             if (!action || !joId) return;
@@ -15587,10 +15798,11 @@ setTimeout(function() {
                     '<i class="fas ' + pIcon + '" style="font-size:9.5px;"></i> ' + pLabel + '</span></div>' + amtDetailsHtml;
             }
 
-            // Update KPI Card if completed_jo provided
-            if (data.completed_jo !== undefined) {
-                var kpiEl = document.getElementById('jo_kpi_completed_jo');
-                if (kpiEl) kpiEl.textContent = data.completed_jo;
+            // Update KPI Card if released_jo or completed_jo provided
+            if (data.released_jo !== undefined || data.completed_jo !== undefined) {
+                var rVal = data.released_jo !== undefined ? data.released_jo : data.completed_jo;
+                var kpiEl = document.getElementById('jo_kpi_released_jo') || document.getElementById('jo_kpi_completed_jo');
+                if (kpiEl) kpiEl.textContent = rVal;
             }
 
             // Update Actions Cell (cell index 8)
@@ -15609,30 +15821,39 @@ setTimeout(function() {
                     actionsHtml += viewBtnHtml;
                 }
 
+                var orNumber = row.cells[0]?.querySelectorAll('div')[1]?.textContent?.trim() || ('OR-' + joId);
+                var joNumDisp = joRef;
+                var joTotal = parseFloat(row.getAttribute('data-jo-total')) || balDue;
+                var joPaid = parseFloat(row.getAttribute('data-jo-paid')) || 0;
+                var custName = row.getAttribute('data-jo-customer') || '';
+                var hasCreditBal = (isCredit && balDue > 0.009);
+
                 if (newStatus === 'Released') {
                     actionsHtml += '<button type="button" onclick="printJobOrderReceipt(' + joId + ',\'' + joRef.replace(/'/g, "\\'") + '\')" class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-print"></i> Reprint</button>';
+                    if (hasCreditBal) {
+                        actionsHtml += '<button type="button" onclick="openPaymentModal(' + joId + ',\'' + joSource + '\',' + joTotal + ',' + joPaid + ',' + balDue + ',\'' + custName.replace(/'/g, "\\'") + '\',false,\'tracker\',\'Released\',\'' + orNumber.replace(/'/g, "\\'") + '\',\'' + joNumDisp.replace(/'/g, "\\'") + '\',true)" class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-credit-card"></i> Process Payment</button>';
+                    }
                     if (voidBtnHtml) actionsHtml += voidBtnHtml;
                 } else if (newStatus === 'Completed') {
                     actionsHtml += '<button type="button" onclick="printJobOrderReceipt(' + joId + ',\'' + joRef.replace(/'/g, "\\'") + '\')" class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-print"></i> Reprint</button>';
-                    if (!canRelease) {
-                        var joTotal = parseFloat(row.getAttribute('data-jo-total')) || balDue;
-                        var joPaid = parseFloat(row.getAttribute('data-jo-paid')) || 0;
-                        var custName = row.getAttribute('data-jo-customer') || '';
-                        var settleLabel = (payStatus === 'Partially Paid') ? 'Settle Balance' : 'Mark Paid';
-                        actionsHtml += '<button type="button" onclick="openPaymentModal(' + joId + ',\'' + joSource + '\',' + joTotal + ',' + joPaid + ',' + balDue + ',\'' + custName.replace(/'/g, "\\'") + '\',false,\'tracker\',\'Completed\')" class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-money-bill-wave"></i> ' + settleLabel + '</button>';
+                    if (hasCreditBal) {
+                        actionsHtml += '<button type="button" onclick="openPaymentModal(' + joId + ',\'' + joSource + '\',' + joTotal + ',' + joPaid + ',' + balDue + ',\'' + custName.replace(/'/g, "\\'") + '\',false,\'tracker\',\'Completed\',\'' + orNumber.replace(/'/g, "\\'") + '\',\'' + joNumDisp.replace(/'/g, "\\'") + '\',true)" class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-credit-card"></i> Process Payment</button>';
+                        actionsHtml += '<button type="button" onclick="performJobOrderAction(\'release_job_order\', ' + joId + ', \'' + joSource + '\', this)" class="txn-btn primary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#002F70;color:#fff;border:none;"><i class="fas fa-car-side"></i> Release Vehicle</button>';
+                    } else if (!canRelease) {
+                        actionsHtml += '<button type="button" onclick="openPaymentModal(' + joId + ',\'' + joSource + '\',' + joTotal + ',' + joPaid + ',' + balDue + ',\'' + custName.replace(/'/g, "\\'") + '\',false,\'tracker\',\'Completed\',\'' + orNumber.replace(/'/g, "\\'") + '\',\'' + joNumDisp.replace(/'/g, "\\'") + '\',false)" class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-money-bill-wave"></i> Process Payment</button>';
                         actionsHtml += '<button type="button" class="txn-btn primary jo-btn-disabled" title="Settle the outstanding balance or obtain the required authorized credit approval before releasing this Job Order." onclick="showTxnAlert(\'Settle the outstanding balance or obtain the required authorized credit approval before releasing this Job Order.\', \'warning\');" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#94a3b8 !important;color:#fff !important;cursor:not-allowed;opacity:0.65;border:none;"><i class="fas fa-car-side"></i> Release Vehicle</button>';
                     } else {
                         actionsHtml += '<button type="button" onclick="performJobOrderAction(\'release_job_order\', ' + joId + ', \'' + joSource + '\', this)" class="txn-btn primary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#002F70;color:#fff;border:none;"><i class="fas fa-car-side"></i> Release Vehicle</button>';
                     }
                     if (voidBtnHtml) actionsHtml += voidBtnHtml;
                 } else if (newStatus === 'In Progress') {
-                    if (canRelease) {
+                    if (hasCreditBal) {
+                        actionsHtml += '<button type="button" onclick="performJobOrderAction(\'set_completed\', ' + joId + ', \'' + joSource + '\', this)" class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-check"></i> Mark Complete</button>';
+                        actionsHtml += '<button type="button" onclick="openPaymentModal(' + joId + ',\'' + joSource + '\',' + joTotal + ',' + joPaid + ',' + balDue + ',\'' + custName.replace(/'/g, "\\'") + '\',false,\'tracker\',\'In Progress\',\'' + orNumber.replace(/'/g, "\\'") + '\',\'' + joNumDisp.replace(/'/g, "\\'") + '\',true)" class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-credit-card"></i> Process Payment</button>';
+                    } else if (canRelease) {
                         actionsHtml += '<button type="button" onclick="performJobOrderAction(\'set_completed\', ' + joId + ', \'' + joSource + '\', this)" class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-check"></i> Mark Complete</button>';
                     } else {
-                        var joTotal = parseFloat(row.getAttribute('data-jo-total')) || balDue;
-                        var joPaid = parseFloat(row.getAttribute('data-jo-paid')) || 0;
-                        var custName = row.getAttribute('data-jo-customer') || '';
-                        actionsHtml += '<button type="button" onclick="openPaymentModal(' + joId + ',\'' + joSource + '\',' + joTotal + ',' + joPaid + ',' + balDue + ',\'' + custName.replace(/'/g, "\\'") + '\',true,\'tracker\',\'In Progress\')" class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-check"></i> Complete & Settle</button>';
+                        actionsHtml += '<button type="button" onclick="openPaymentModal(' + joId + ',\'' + joSource + '\',' + joTotal + ',' + joPaid + ',' + balDue + ',\'' + custName.replace(/'/g, "\\'") + '\',true,\'tracker\',\'In Progress\',\'' + orNumber.replace(/'/g, "\\'") + '\',\'' + joNumDisp.replace(/'/g, "\\'") + '\',false)" class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;"><i class="fas fa-check"></i> Complete & Process Payment</button>';
                     }
                     if (adjustBtnHtml) actionsHtml += adjustBtnHtml;
                     if (voidBtnHtml) actionsHtml += voidBtnHtml;
@@ -15703,7 +15924,9 @@ setTimeout(function() {
                         };
                         updateKpi('jo_kpi_total_txns', data.kpis.total_txns);
                         updateKpi('jo_kpi_total_sales', data.kpis.total_sales);
-                        updateKpi('jo_kpi_completed_jo', data.kpis.completed_jo);
+                        const relJo = data.kpis.released_jo !== undefined ? data.kpis.released_jo : data.kpis.completed_jo;
+                        updateKpi('jo_kpi_released_jo', relJo);
+                        updateKpi('jo_kpi_completed_jo', relJo);
                         updateKpi('jo_kpi_merch_sold', data.kpis.merch_sold);
                     }
 
@@ -15912,6 +16135,13 @@ setTimeout(function() {
                 '#mhStatusSelect',
                 '#jomStatusSelect'
             ]);
+            var joPerPageInput = document.getElementById('joPerPage');
+            if (joPerPageInput) {
+                joPerPageInput.addEventListener('change', joChangePerPage);
+            }
+            if (typeof joRenderTable === 'function') {
+                joRenderTable();
+            }
         });
         </script>
 
@@ -16029,7 +16259,7 @@ setTimeout(function() {
         <div id="paymentSettleModal" style="display:none;position:fixed;inset:0;z-index:10000000;
              background:rgba(0,0,0,.5);align-items:center;justify-content:center;">
           <div style="background:#fff;border-radius:16px;box-shadow:0 24px 64px rgba(0,0,0,.3);
-                      width:100%;max-width:450px;margin:16px;overflow:hidden;animation:pmSlideIn .18s ease;">
+                      width:100%;max-width:450px;margin:16px;overflow-x:hidden;overflow-y:auto;animation:pmSlideIn .18s ease;">
 
             <!-- Header -->
             <div style="background:linear-gradient(135deg,#003d7a,#0369a1);padding:15px 20px;
@@ -16046,19 +16276,35 @@ setTimeout(function() {
               </div>
             </div>
 
+            <!-- Read-only transaction info -->
+            <div id="pmInfoBlock" style="background:#fff;border-bottom:1px solid #e2e8f0;padding:10px 20px;display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;">
+              <div>
+                <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">JO Number</div>
+                <div id="pmInfoJo" style="font-size:12.5px;font-weight:800;color:#002F70;font-family:monospace;">—</div>
+              </div>
+              <div>
+                <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">OR / Transaction No.</div>
+                <div id="pmInfoOr" style="font-size:12.5px;font-weight:700;color:#334155;font-family:monospace;word-break:break-all;">—</div>
+              </div>
+              <div style="grid-column:1 / -1;">
+                <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;">Customer Name</div>
+                <div id="pmInfoCustomer" style="font-size:13px;font-weight:800;color:#0f172a;">—</div>
+              </div>
+            </div>
+
             <!-- Balance Strip -->
             <div style="background:#f0f7ff;border-bottom:1px solid #dbeafe;padding:11px 20px;
                         display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;text-align:center;">
               <div>
-                <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Grand Total</div>
+                <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Original Total</div>
                 <div style="font-size:15px;font-weight:800;color:#003d7a;">₱<span id="pmTotal">0.00</span></div>
               </div>
               <div>
-                <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Already Paid</div>
+                <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Previously Paid</div>
                 <div style="font-size:15px;font-weight:800;color:#166534;">₱<span id="pmAlreadyPaid">0.00</span></div>
               </div>
               <div id="pmBalanceCell" style="border-radius:8px;padding:3px 6px;">
-                <div id="pmBalanceLbl" style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Balance Due</div>
+                <div id="pmBalanceLbl" style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px;">Outstanding Balance</div>
                 <div style="font-size:15px;font-weight:800;" id="pmBalanceDueWrap">₱<span id="pmBalanceDue">0.00</span></div>
               </div>
             </div>
@@ -16080,6 +16326,14 @@ setTimeout(function() {
               <input type="hidden" name="redirect_tab"            id="pmRedirectTab"  value="tracker">
               <input type="hidden" name="mark_complete_on_settle" id="pmMarkComplete" value="">
               <input type="hidden" name="settle_method"           id="pmMethodHidden" value="Cash">
+              <input type="hidden" name="settle_idem"             id="pmIdem"         value="">
+              <input type="hidden" name="settle_credit_collection" id="pmCreditCollection" value="">
+
+              <!-- Credit Collection Banner -->
+              <div id="pmCreditCollectionBanner" style="display:none;padding:10px 13px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:12px;color:#1e40af;margin-bottom:12px;line-height:1.4;">
+                <i class="fas fa-hand-holding-usd" style="margin-right:6px;font-size:13px;"></i>
+                <strong>Collecting Outstanding Credit Account Balance</strong> — This will record payment received, update Accounts Receivable records, and reduce the customer's balance.
+              </div>
 
               <!-- Amount -->
               <div class="pm-row">
@@ -16104,9 +16358,9 @@ setTimeout(function() {
                 </div>
               </div>
 
-              <!-- Payment Method dropdown -->
+              <!-- Payment Method dropdown (Credit Account removed as money must be received) -->
               <div class="pm-row">
-                <label class="pm-label">Payment Method</label>
+                <label class="pm-label">Payment Method <span style="color:#dc2626;">*</span></label>
                 <select id="pmMethodSelect"
                         name="settle_method_ui"
                         onchange="pmSelectMethod(this.value)"
@@ -16119,16 +16373,15 @@ setTimeout(function() {
                   <option value="GCash">GCash</option>
                   <option value="Maya">Maya</option>
                   <option value="Petron Value Card (PVC Points)">Petron Value Card (PVC Points)</option>
-                  <option value="Credit Account">Credit Account</option>
                 </select>
               </div>
 
               <!-- Cash: tendered + change -->
               <div id="pmCashFields" class="pm-row">
-                <label class="pm-label">Amount Tendered <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#94a3b8;">(optional)</span></label>
+                <label class="pm-label">Amount Tendered / Cash Received <span style="color:#dc2626;">*</span></label>
                 <div style="display:flex;align-items:center;border:1.5px solid #d1d5db;border-radius:8px;overflow:hidden;width:100%;">
                   <span style="background:#f3f4f6;padding:9px 11px;font-weight:700;color:#374151;border-right:1px solid #d1d5db;font-size:13px;">₱</span>
-                  <input type="number" id="pmTendered" step="0.01" min="0" placeholder="e.g. 500.00"
+                  <input type="number" id="pmTendered" name="settle_tendered" step="0.01" min="0" placeholder="e.g. 500.00"
                          oninput="pmCalcChange()"
                          style="flex:1;border:none;padding:9px 10px;font-size:14px;color:#1e293b;outline:none;background:#fff;">
                 </div>
@@ -16139,27 +16392,26 @@ setTimeout(function() {
                 </div>
               </div>
 
-              <!-- Card / E-Wallet / E-Fuel: reference -->
+              <!-- Card / E-Wallet / PVC: reference -->
               <div id="pmRefFields" style="display:none;" class="pm-row">
-                <label class="pm-label" id="pmRefLabel">Reference Number</label>
+                <label class="pm-label" id="pmRefLabel">Reference Number <span style="color:#dc2626;">*</span></label>
                 <input type="text" id="pmRefInput" name="settle_reference" class="pm-input"
                        placeholder="e.g. ref #12345…">
               </div>
 
-              <!-- Credit: note -->
-              <div id="pmCreditFields" style="display:none;" class="pm-row">
-                <div style="padding:10px 13px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
-                            font-size:12px;color:#92400e;">
-                  <i class="fas fa-exclamation-triangle" style="margin-right:6px;"></i>
-                  <strong>Credit (Utang)</strong> — balance will remain as receivable.
-                </div>
+              <!-- Verification Checkbox (Card / E-Wallet / PVC) -->
+              <div id="pmVerificationRow" style="display:none;" class="pm-row">
+                <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:12px;color:#1e293b;background:#f8fafc;padding:9px 12px;border:1.5px solid #cbd5e1;border-radius:8px;">
+                  <input type="checkbox" id="pmVerifiedCheckbox" name="settle_verified" value="1" style="margin-top:2px;cursor:pointer;">
+                  <span id="pmVerifiedText" style="line-height:1.4;">I confirm this transaction has been verified in the authorized terminal/receiving account.</span>
+                </label>
               </div>
 
-              <!-- Remarks -->
+              <!-- Payment Notes -->
               <div class="pm-row">
-                <label class="pm-label">Remarks <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#94a3b8;">(optional)</span></label>
+                <label class="pm-label">Payment Notes <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#94a3b8;">(optional)</span></label>
                 <input type="text" id="pmRemarks" name="settle_remarks" class="pm-input"
-                       placeholder="e.g. Final payment, GCash ref #12345…">
+                       placeholder="e.g. Partial collection, receipt details…">
               </div>
 
               <!-- Live preview -->
@@ -16182,7 +16434,7 @@ setTimeout(function() {
                         style="flex:1;padding:12px 16px;background:#003d7a;color:#fff;border:none;border-radius:8px;
                                font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;
                                justify-content:center;gap:7px;min-height:44px;white-space:nowrap;">
-                  <i class="fas fa-check-circle"></i><span id="pmSubmitLabel">Record Payment</span>
+                  <i class="fas fa-check-circle"></i><span id="pmSubmitLabel">Process Payment</span>
                 </button>
                 <button type="button" onclick="closePaymentModal()" class="pm-cancel-btn">Cancel</button>
               </div>
@@ -16221,7 +16473,7 @@ setTimeout(function() {
         var _pmMethod  = 'Cash';
         window._parentModalBeforePayment = null;
 
-        function openPaymentModal(joId, joSource, total, alreadyPaid, balanceDue, customerName, markComplete, redirectTab, currentStatus) {
+        function openPaymentModal(joId, joSource, total, alreadyPaid, balanceDue, customerName, markComplete, redirectTab, currentStatus, orNumber, joNumDisp, isCreditCollection) {
             if (markComplete) {
                 var curStatNorm = currentStatus;
                 if (!curStatNorm) {
@@ -16250,13 +16502,36 @@ setTimeout(function() {
                 window._parentModalBeforePayment = null;
             }
 
+            // Populate Read-Only Header and Transaction Details
+            var rowEl = document.getElementById('joRow_' + joSource + '_' + joId);
+            var joNum = joNumDisp || (rowEl ? rowEl.cells[0]?.querySelector('div:first-child')?.textContent?.trim() : '') || ('#' + joId);
+            var orNum = orNumber || (rowEl ? rowEl.cells[0]?.querySelectorAll('div')[1]?.textContent?.trim() : '') || '—';
+            var cust  = customerName || (rowEl ? rowEl.getAttribute('data-jo-customer') : '') || 'Walk-in Customer';
+            var isCredit = (isCreditCollection !== undefined && isCreditCollection !== null)
+                ? !!isCreditCollection
+                : (rowEl ? ((rowEl.getAttribute('data-jo-paymethod')||'').toLowerCase().indexOf('credit') !== -1 || (rowEl.getAttribute('data-jo-paystatus')||'') === 'A/R CREDIT') : false);
+
+            var elJo = document.getElementById('pmInfoJo');
+            var elOr = document.getElementById('pmInfoOr');
+            var elCust = document.getElementById('pmInfoCustomer');
+            if (elJo) elJo.textContent = joNum;
+            if (elOr) elOr.textContent = orNum;
+            if (elCust) elCust.textContent = cust;
+
             document.getElementById('pmJoId').value         = joId;
             document.getElementById('pmJoSource').value     = joSource;
             document.getElementById('pmRedirectTab').value  = redirectTab || 'tracker';
             document.getElementById('pmMarkComplete').value = markComplete ? '1' : '';
+            document.getElementById('pmCreditCollection').value = isCredit ? '1' : '';
             document.getElementById('pmTotal').textContent       = fmt(total);
             document.getElementById('pmAlreadyPaid').textContent = fmt(alreadyPaid);
             document.getElementById('pmBalanceDue').textContent  = fmt(balanceDue);
+
+            // Fresh idempotency key for every modal open to prevent double submissions
+            var idemEl = document.getElementById('pmIdem');
+            if (idemEl) {
+                idemEl.value = 'pm_' + Date.now() + '_' + Math.random().toString(36).substring(2, 11);
+            }
 
             // Colour balance cell
             var cell = document.getElementById('pmBalanceCell');
@@ -16266,6 +16541,12 @@ setTimeout(function() {
                 cell.style.background = '#fff3cd'; lbl.style.color = '#92400e'; val.style.color = '#9a3412';
             } else {
                 cell.style.background = '#dcfce7'; lbl.style.color = '#166534'; val.style.color = '#166534';
+            }
+
+            // Show/hide Credit Collection banner
+            var creditBanner = document.getElementById('pmCreditCollectionBanner');
+            if (creditBanner) {
+                creditBanner.style.display = isCredit ? 'block' : 'none';
             }
 
             // Already-paid + markComplete → skip payment form, show confirm-complete panel
@@ -16283,9 +16564,11 @@ setTimeout(function() {
             } else {
                 // Normal payment form — pre-fill amount only, NOT tendered (manual input)
                 document.getElementById('pmAmountInput').value = _pmBalance > 0.009 ? _pmBalance.toFixed(2) : '';
-                document.getElementById('pmTendered').value    = ''; // staff types this manually
+                document.getElementById('pmTendered').value    = '';
                 document.getElementById('pmRefInput').value    = '';
                 document.getElementById('pmRemarks').value     = '';
+                var verChkBx = document.getElementById('pmVerifiedCheckbox');
+                if (verChkBx) verChkBx.checked = false;
                 document.getElementById('pmChangeRow').style.display = 'none';
                 document.getElementById('pmPreview').style.display   = 'none';
 
@@ -16305,14 +16588,17 @@ setTimeout(function() {
                 title = 'Mark Job Order Complete';
                 submitLabel = 'Mark as Completed';
             } else if (markComplete) {
-                title = 'Complete & Settle Payment';
-                submitLabel = 'Complete & Confirm';
+                title = 'Complete & Process Payment';
+                submitLabel = 'Complete & Process Payment';
+            } else if (isCredit) {
+                title = 'Process Payment – Credit Account';
+                submitLabel = 'Process Payment';
             } else {
-                title = _pmBalance > 0.009 ? 'Settle Balance' : 'Record Payment';
-                submitLabel = 'Record Payment';
+                title = 'Process Payment';
+                submitLabel = 'Process Payment';
             }
             document.getElementById('pmModalTitle').textContent    = title;
-            document.getElementById('pmModalCustomer').textContent = customerName ? 'Customer: ' + customerName : '';
+            document.getElementById('pmModalCustomer').textContent = cust ? 'Customer: ' + cust : '';
             document.getElementById('pmHeaderIcon').className      = markComplete ? 'fas fa-check-circle' : 'fas fa-receipt';
             if (document.getElementById('pmSubmitLabel'))
                 document.getElementById('pmSubmitLabel').textContent = submitLabel;
@@ -16349,22 +16635,41 @@ setTimeout(function() {
         function pmSelectMethod(method) {
             _pmMethod = method;
             document.getElementById('pmMethodHidden').value = method;
-            // Sync dropdown if it exists
             var sel = document.getElementById('pmMethodSelect');
             if (sel && sel.value !== method) sel.value = method;
-            // Show/hide contextual fields
-            document.getElementById('pmCashFields').style.display   = (method === 'Cash') ? 'block' : 'none';
-            document.getElementById('pmRefFields').style.display    = ['Credit Card','Debit Card','GCash','Maya','Petron Value Card (PVC Points)'].includes(method) ? 'block' : 'none';
-            document.getElementById('pmCreditFields').style.display = (method === 'Credit Account') ? 'block' : 'none';
-            var labels = {
-                'Credit Card':                   'Card Reference No.',
-                'Debit Card':                    'Card Reference No.',
-                'GCash':                         'GCash Reference No.',
-                'Maya':                          'Maya Reference No.',
-                'Petron Value Card (PVC Points)':'PVC Card / Auth No.'
-            };
-            var lbl = document.getElementById('pmRefLabel');
-            if (lbl) lbl.textContent = labels[method] || 'Reference No.';
+
+            var cashFields = document.getElementById('pmCashFields');
+            var refFields  = document.getElementById('pmRefFields');
+            var verRow     = document.getElementById('pmVerificationRow');
+            var verTxt     = document.getElementById('pmVerifiedText');
+
+            if (method === 'Cash') {
+                if (cashFields) cashFields.style.display = 'block';
+                if (refFields)  refFields.style.display  = 'none';
+                if (verRow)     verRow.style.display     = 'none';
+            } else {
+                if (cashFields) cashFields.style.display = 'none';
+                if (refFields)  refFields.style.display  = 'block';
+                if (verRow)     verRow.style.display     = 'block';
+
+                var lbl = document.getElementById('pmRefLabel');
+                var inp = document.getElementById('pmRefInput');
+
+                if (method === 'Credit Card' || method === 'Debit Card') {
+                    if (lbl) lbl.textContent = 'Card Terminal Reference / Approval Code *';
+                    if (inp) inp.placeholder = 'e.g. POS Auth / Trace #123456';
+                    if (verTxt) verTxt.textContent = 'I confirm that this card payment is approved and authorized on the POS/payment terminal.';
+                } else if (method === 'Petron Value Card (PVC Points)') {
+                    if (lbl) lbl.textContent = 'Petron Value Card (PVC) Auth / Card No. *';
+                    if (inp) inp.placeholder = 'e.g. PVC Card # or Terminal Auth Code';
+                    if (verTxt) verTxt.textContent = 'I confirm this PVC point redemption was approved and validated through the authorized Petron terminal/process.';
+                } else {
+                    // GCash / Maya / E-Wallet
+                    if (lbl) lbl.textContent = method + ' Reference / Transaction Number *';
+                    if (inp) inp.placeholder = 'e.g. Reference #123456789';
+                    if (verTxt) verTxt.textContent = 'I confirm payment was received and verified directly in the authorized station wallet/app (not screenshot alone).';
+                }
+            }
             pmRecalc();
         }
 
@@ -16382,9 +16687,9 @@ setTimeout(function() {
             var amount   = parseFloat(document.getElementById('pmAmountInput').value) || _pmBalance;
             var change   = tendered - amount;
             var row      = document.getElementById('pmChangeRow');
-            if (tendered > 0 && change >= 0) {
+            if (tendered > 0 && change >= -0.001) {
                 document.getElementById('pmChangeAmt').textContent =
-                    change.toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+                    Math.max(0, change).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
                 row.style.display = 'block';
             } else {
                 row.style.display = 'none';
@@ -16418,19 +16723,81 @@ setTimeout(function() {
             e.preventDefault();
             var form = this;
             var amount = parseFloat(document.getElementById('pmAmountInput').value) || 0;
-            if (amount <= 0) {
+            if (amount <= 0 || isNaN(amount)) {
                 var wrap = document.getElementById('pmAmountWrap');
                 wrap.style.borderColor = '#dc2626';
+                if (typeof showTxnAlert === 'function') {
+                    showTxnAlert('Payment amount must be greater than zero.', 'warning');
+                } else {
+                    alert('Payment amount must be greater than zero.');
+                }
                 document.getElementById('pmAmountInput').focus();
                 setTimeout(function(){ wrap.style.borderColor = '#d1d5db'; }, 5000);
                 return;
+            }
+
+            if (amount > _pmBalance + 0.009) {
+                var wrap = document.getElementById('pmAmountWrap');
+                wrap.style.borderColor = '#dc2626';
+                var overMsg = 'Payment amount (₱' + amount.toFixed(2) + ') cannot exceed current outstanding balance (₱' + _pmBalance.toFixed(2) + ').';
+                if (typeof showTxnAlert === 'function') {
+                    showTxnAlert(overMsg, 'warning');
+                } else {
+                    alert(overMsg);
+                }
+                document.getElementById('pmAmountInput').focus();
+                return;
+            }
+
+            if (_pmMethod === 'Cash') {
+                var tendered = parseFloat(document.getElementById('pmTendered').value) || 0;
+                if (tendered <= 0 || isNaN(tendered)) {
+                    if (typeof showTxnAlert === 'function') {
+                        showTxnAlert('Please enter the cash amount received.', 'warning');
+                    } else {
+                        alert('Please enter the cash amount received.');
+                    }
+                    document.getElementById('pmTendered').focus();
+                    return;
+                }
+                if (tendered < amount - 0.009) {
+                    var insMsg = 'Cash received (₱' + tendered.toFixed(2) + ') is less than payment amount due (₱' + amount.toFixed(2) + ').';
+                    if (typeof showTxnAlert === 'function') {
+                        showTxnAlert(insMsg, 'warning');
+                    } else {
+                        alert(insMsg);
+                    }
+                    document.getElementById('pmTendered').focus();
+                    return;
+                }
+            } else {
+                var ref = document.getElementById('pmRefInput').value.trim();
+                if (!ref) {
+                    if (typeof showTxnAlert === 'function') {
+                        showTxnAlert('Please enter the required payment reference number / authorization code.', 'warning');
+                    } else {
+                        alert('Please enter the required payment reference number / authorization code.');
+                    }
+                    document.getElementById('pmRefInput').focus();
+                    return;
+                }
+                var chk = document.getElementById('pmVerifiedCheckbox');
+                if (chk && !chk.checked) {
+                    if (typeof showTxnAlert === 'function') {
+                        showTxnAlert('Please verify the payment in the authorized terminal/account and check the confirmation box.', 'warning');
+                    } else {
+                        alert('Please verify the payment in the authorized terminal/account and check the confirmation box.');
+                    }
+                    chk.focus();
+                    return;
+                }
             }
 
             var submitBtn = document.getElementById('pmSubmitBtn');
             var origBtnHtml = submitBtn ? submitBtn.innerHTML : '';
             if (submitBtn) {
                 submitBtn.disabled = true;
-                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing Payment...';
             }
 
             var fd = new FormData(form);
@@ -16455,17 +16822,28 @@ setTimeout(function() {
                 }
                 if (result.ok && result.data && result.data.success) {
                     closePaymentModal();
+                    var successMsg = result.data.message || 'Payment processed successfully.';
                     if (typeof showTxnAlert === 'function') {
-                        showTxnAlert(result.data.message || 'Payment recorded successfully.', 'success');
+                        showTxnAlert(successMsg, 'success');
+                    }
+                    // Open newly generated receipt if available
+                    if (result.data.receipt_url) {
+                        try {
+                            window.open(result.data.receipt_url, '_blank');
+                        } catch (e_open) {}
                     }
                     if (typeof updateJobOrderRowDOM === 'function') {
                         updateJobOrderRowDOM(result.data.jo_id, result.data.jo_source, result.data);
+                    }
+                    if (window.PetronRealtime) {
+                        PetronRealtime.trigger(['notifications', 'badges', 'dashboard', 'transactions']);
+                        PetronRealtime.refreshActiveView({ force: true });
                     }
                     setTimeout(function() {
                         if (typeof autoRefreshJobOrderTracker === 'function') {
                             autoRefreshJobOrderTracker(true);
                         }
-                    }, 350);
+                    }, 200);
                 } else {
                     var msg = (result.data && result.data.message) ? result.data.message : 'Payment recording failed.';
                     if (typeof showTxnAlert === 'function') {
@@ -16563,6 +16941,10 @@ setTimeout(function() {
             setText('viewJOPayment', val(joData.payment_status));
             setText('viewJOPayMethod', val(joData.payment_method, 'Cash'));
 
+            var tipAmt = parseFloat(joData.tip || joData.tip_amount || joData.labor_fee || 0);
+            var svcAmt = parseFloat(joData.service_fee !== undefined ? joData.service_fee : (joData.total || 0));
+            setText('viewJOServiceFee', fmt(svcAmt));
+            setText('viewJOTip', tipAmt > 0 ? fmt(tipAmt) : '—');
             setText('viewJOTotal', fmt(joData.total || 0));
             setText('viewJOPaid', fmt(joData.paid || 0));
             setText('viewJOBalance', fmt(joData.balance || 0));
@@ -16596,6 +16978,70 @@ setTimeout(function() {
                 else if (ps === 'unpaid') { pColor = '#b91c1c'; pBg = '#fee2e2'; }
                 payEl.style.color = pColor;
                 payEl.style.backgroundColor = pBg;
+            }
+
+            // Fetch and render payment history for this Job Order
+            var histContent = document.getElementById('viewJOPayHistoryContent');
+            var histCount = document.getElementById('viewJOPayHistoryCount');
+            if (histContent) {
+                histContent.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:12px;"><i class="fas fa-spinner fa-spin"></i> Loading payment records...</div>';
+                var joNumId = joData.id || joData.jo_id;
+                var joSrc = joData.source || 'job_orders';
+                fetch('../backend/get_payment_history.php?source=' + encodeURIComponent(joSrc) + '&id=' + encodeURIComponent(joNumId))
+                    .then(function(res){ return res.json(); })
+                    .then(function(histRes){
+                        var payments = [];
+                        if (histRes && histRes.success) {
+                            if (Array.isArray(histRes.history)) {
+                                payments = histRes.history;
+                            } else if (Array.isArray(histRes.payments)) {
+                                payments = histRes.payments;
+                            } else if (histRes.history && Array.isArray(histRes.history.payments)) {
+                                payments = histRes.history.payments;
+                            } else if (histRes.details && Array.isArray(histRes.details.payments)) {
+                                payments = histRes.details.payments;
+                            }
+                        }
+                        if (!payments || payments.length === 0) {
+                            if (histCount) histCount.textContent = '0 records';
+                            histContent.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:12px;"><i class="fas fa-info-circle"></i> No payment history records found yet.</div>';
+                            return;
+                        }
+                        if (histCount) histCount.textContent = payments.length + (payments.length === 1 ? ' record' : ' records');
+                        var hHtml = '<table style="width:100%;border-collapse:collapse;font-size:11.5px;">';
+                        hHtml += '<thead><tr style="background:#f1f5f9;border-bottom:1.5px solid #cbd5e1;color:#475569;font-size:10px;text-transform:uppercase;">';
+                        hHtml += '<th style="padding:5px 6px;text-align:left;">Receipt / Date</th>';
+                        hHtml += '<th style="padding:5px 6px;text-align:left;">Method / Ref</th>';
+                        hHtml += '<th style="padding:5px 6px;text-align:right;">Amount</th>';
+                        hHtml += '<th style="padding:5px 6px;text-align:right;">Balance</th>';
+                        hHtml += '<th style="padding:5px 6px;text-align:center;">Receipt</th>';
+                        hHtml += '</tr></thead><tbody>';
+                        payments.forEach(function(pay, i){
+                            var pBg = (i % 2 === 1) ? '#f8fafc' : '#ffffff';
+                            var rNo = pay.receipt_no || (pay.id ? ('PR-' + pay.id) : (joData.or_number || ('OR-' + joNumId)));
+                            var rUrl = pay.receipt_url || (pay.id ? ('payment_receipt.php?id=' + pay.id) : ('receipt.php?id=' + encodeURIComponent(joData.jo_ref || joNumId) + '&type=' + (joSrc === 'merchandise_transactions' ? 'merchandise' : 'job_order')));
+                            var pDate = pay.logged_at ? new Date(pay.logged_at).toLocaleString('en-PH', {dateStyle:'short', timeStyle:'short'}) : '—';
+                            var pAmt = parseFloat(pay.amount_paid || 0).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
+                            var pBal = parseFloat(pay.balance_due || 0).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
+                            var pBalColor = parseFloat(pay.balance_due || 0) <= 0.009 ? '#166534' : '#dc2626';
+                            var pRef = pay.reference_no ? '<div style="font-size:9.5px;color:#64748b;">Ref: ' + pay.reference_no + '</div>' : '';
+                            var pRemarks = (pay.remarks && pay.remarks !== 'Initial Payment (At Order Creation)') ? '<div style="font-size:9px;color:#64748b;font-style:italic;">' + pay.remarks + '</div>' : '';
+                            var pStaff = pay.staff_name ? '<div style="font-size:9px;color:#94a3b8;"><i class="fas fa-user" style="font-size:8px;"></i> ' + pay.staff_name + '</div>' : '';
+                            hHtml += '<tr style="background:' + pBg + ';border-bottom:1px solid #f1f5f9;">';
+                            hHtml += '<td style="padding:5px 6px;vertical-align:middle;"><div style="font-weight:700;color:#002F70;font-family:monospace;">' + rNo + '</div><div style="font-size:9.5px;color:#64748b;">' + pDate + '</div></td>';
+                            hHtml += '<td style="padding:5px 6px;vertical-align:middle;"><strong>' + (pay.payment_method || 'Cash') + '</strong>' + pRef + pRemarks + pStaff + '</td>';
+                            hHtml += '<td style="padding:5px 6px;text-align:right;font-weight:700;color:#166534;vertical-align:middle;">₱' + pAmt + '</td>';
+                            hHtml += '<td style="padding:5px 6px;text-align:right;font-weight:700;color:' + pBalColor + ';vertical-align:middle;">₱' + pBal + '</td>';
+                            hHtml += '<td style="padding:5px 6px;text-align:center;vertical-align:middle;"><a href="' + rUrl + '" target="_blank" class="txn-btn secondary" style="padding:2px 6px;font-size:10px;text-decoration:none;" title="Print Receipt"><i class="fas fa-print"></i></a></td>';
+                            hHtml += '</tr>';
+                        });
+                        hHtml += '</tbody></table>';
+                        histContent.innerHTML = hHtml;
+                    })
+                    .catch(function(err){
+                        console.error('Failed to load payment history:', err);
+                        if (histContent) histContent.innerHTML = '<div style="text-align:center;color:#94a3b8;padding:12px;">Failed to load payment history.</div>';
+                    });
             }
 
             var modal = document.getElementById('viewJobOrderModal');
@@ -16955,9 +17401,17 @@ setTimeout(function() {
                             // Normal Active Transaction
                             var wfStatusLower = (txn.status || txn.workflow_status || '').toLowerCase();
                             var isFinished = (valStatus === 'released' || valStatus === 'completed' || wfStatusLower === 'released' || wfStatusLower === 'completed');
+                            var payMethodLower = (txn.payment_method || '').toLowerCase();
+                            var payStatusLower = (txn.payment_status || '').toLowerCase();
+                            var isPaid = (payStatusLower === 'paid' || balanceDue <= 0.009);
+                            var isCredit = (payMethodLower.indexOf('credit') !== -1 || payMethodLower.indexOf('receivable') !== -1 || !!txn.credit_customer_id || payStatusLower.indexOf('credit') !== -1 || payStatusLower.indexOf('ar') !== -1);
+
+                            var canAdjust = isCredit ? !isPaid : (!isPaid && !isFinished);
+                            var canVoid = !(isCredit && isPaid);
+
                             if (settleBtn) settleBtn.style.display = (balanceDue > 0.009) ? 'inline-flex' : 'none';
-                            if (adjustBtn) adjustBtn.style.display = isFinished ? 'none' : 'inline-flex';
-                            if (voidBtn) voidBtn.style.display = 'inline-flex';
+                            if (adjustBtn) adjustBtn.style.display = canAdjust ? 'inline-flex' : 'none';
+                            if (voidBtn) voidBtn.style.display = canVoid ? 'inline-flex' : 'none';
                             if (reprintBtn) reprintBtn.style.display = 'inline-flex';
                         }
                     } else {
@@ -16982,6 +17436,11 @@ setTimeout(function() {
             var totalAmt = parseFloat(currentMTData.total_amount || 0);
             var paidAmt = parseFloat(currentMTData.amount_paid || 0);
             var balanceAmt = parseFloat(currentMTData.balance_due || Math.max(0, totalAmt - paidAmt));
+            var pmLower = (currentMTData.payment_method || '').toLowerCase();
+            var psLower = (currentMTData.payment_status || '').toLowerCase();
+            var isCredit = (pmLower.indexOf('credit') !== -1 || pmLower.indexOf('receivable') !== -1 || !!currentMTData.credit_customer_id || psLower.indexOf('credit') !== -1 || psLower.indexOf('ar') !== -1);
+            var orNum = currentMTData.transaction_id || ('OR-' + currentMTData.id);
+            var joNum = currentMTData.job_order_id || ('#' + currentMTData.id);
             openPaymentModal(
                 currentMTData.id,
                 'merchandise_transactions',
@@ -16990,7 +17449,11 @@ setTimeout(function() {
                 balanceAmt,
                 currentMTData.customer_name || 'Walk-in Customer',
                 false,
-                'merchandise'
+                'merchandise',
+                currentMTData.status || 'Completed',
+                orNum,
+                joNum,
+                isCredit
             );
         };
 
@@ -17039,7 +17502,8 @@ setTimeout(function() {
                     joRef: currentMTData.transaction_id || ('#' + currentMTData.id),
                     joCustomer: currentMTData.customer_name || 'Walk-in Customer',
                     joStatus: currentMTData.validation_status || 'Pending',
-                    joPaystatus: currentMTData.payment_status || 'Paid'
+                    joPaystatus: currentMTData.payment_status || 'Paid',
+                    joPaymethod: currentMTData.payment_method || 'Cash'
                 },
                 getAttribute: function(name) {
                     var map = {
@@ -17048,7 +17512,8 @@ setTimeout(function() {
                         'data-jo-ref': currentMTData.transaction_id || ('#' + currentMTData.id),
                         'data-jo-customer': currentMTData.customer_name || 'Walk-in Customer',
                         'data-jo-status': currentMTData.validation_status || 'Pending',
-                        'data-jo-paystatus': currentMTData.payment_status || 'Paid'
+                        'data-jo-paystatus': currentMTData.payment_status || 'Paid',
+                        'data-jo-paymethod': currentMTData.payment_method || 'Cash'
                     };
                     return map[name] || '';
                 }
@@ -17177,10 +17642,12 @@ setTimeout(function() {
             if (!_activeJoDataForReq) return;
             var field = document.getElementById('reqAdjCorrectionField').value;
             var curVal = '—';
-            if (field === 'Tip (Mechanic)' || field === 'Tip' || field === 'Labor Fee') {
-                curVal = _activeJoDataForReq.labor_fee ? ('₱' + parseFloat(_activeJoDataForReq.labor_fee).toFixed(2)) : '₱0.00';
+            if (field === 'Tip (Mechanic)' || field === 'Tip' || field === 'Job Order: Tip' || field === 'Labor Fee' || field === 'Job Order: Labor Fee') {
+                var tipNum = parseFloat(_activeJoDataForReq.tip || _activeJoDataForReq.tip_amount || _activeJoDataForReq.labor_fee || 0);
+                curVal = tipNum > 0 ? ('₱' + tipNum.toFixed(2)) : '₱0.00';
             } else if (field === 'Service Fee') {
-                curVal = _activeJoDataForReq.total ? ('₱' + parseFloat(_activeJoDataForReq.total).toFixed(2)) : '₱0.00';
+                var svcNum = parseFloat(_activeJoDataForReq.service_fee !== undefined ? _activeJoDataForReq.service_fee : (_activeJoDataForReq.total || 0));
+                curVal = svcNum > 0 ? ('₱' + svcNum.toFixed(2)) : '₱0.00';
             } else if (field === 'Service Type') {
                 curVal = _activeJoDataForReq.service_type || '—';
             } else if (field === 'Customer Information') {
@@ -17249,7 +17716,16 @@ setTimeout(function() {
                         ? '<i class="fas fa-check"></i> Transaction adjusted successfully.'
                         : '<i class="fas fa-check"></i> ' + (data.message || 'Adjustment request submitted! Status: ADJUSTMENT REQUESTED.');
                     showTxnAlert(msg, 'success');
-                    setTimeout(function() { location.reload(); }, 1200);
+                    if (window.PetronRealtime) {
+                        PetronRealtime.trigger(['notifications', 'badges', 'dashboard', 'transactions']);
+                        PetronRealtime.refreshActiveView({ force: true });
+                    }
+                    if (typeof autoRefreshJobOrderTracker === 'function') {
+                        autoRefreshJobOrderTracker(true);
+                    }
+                    if (typeof autoRefreshMerchandiseHistory === 'function') {
+                        autoRefreshMerchandiseHistory(true);
+                    }
                 } else {
                     showTxnAlert('<i class="fas fa-times-circle"></i> ' + (data.error || 'Failed to apply adjustment'), 'error');
                 }
@@ -17311,7 +17787,16 @@ setTimeout(function() {
                         ? '<i class="fas fa-check"></i> Transaction voided successfully.'
                         : '<i class="fas fa-check"></i> ' + (data.message || 'Void request submitted! Status: VOID REQUESTED.');
                     showTxnAlert(msg, 'success');
-                    setTimeout(function() { location.reload(); }, 1200);
+                    if (window.PetronRealtime) {
+                        PetronRealtime.trigger(['notifications', 'badges', 'dashboard', 'transactions']);
+                        PetronRealtime.refreshActiveView({ force: true });
+                    }
+                    if (typeof autoRefreshJobOrderTracker === 'function') {
+                        autoRefreshJobOrderTracker(true);
+                    }
+                    if (typeof autoRefreshMerchandiseHistory === 'function') {
+                        autoRefreshMerchandiseHistory(true);
+                    }
                 } else {
                     showTxnAlert('<i class="fas fa-times-circle"></i> ' + (data.error || 'Failed to void transaction'), 'error');
                 }
@@ -17512,6 +17997,7 @@ setTimeout(function() {
                 if (prev) { prev.disabled = (page <= 1); prev.style.opacity = (page <= 1) ? '0.4' : '1'; }
                 if (next) { next.disabled = (page >= totalPages); next.style.opacity = (page >= totalPages) ? '0.4' : '1'; }
             }
+            window.fhRender = fhRender;
             window.fhState = fhState;
             window.fhGoPage = function(p) {
                 var rows = document.querySelectorAll('#fhTableBody .fh-row');
@@ -17684,6 +18170,14 @@ setTimeout(function() {
                   <!-- Financial Totals Box -->
                   <div style="background:#f8fafc;border:1.5px solid #cbd5e1;border-radius:8px;padding:10px 14px;display:flex;flex-direction:column;gap:6px;margin-top:10px;">
                     <div style="display:flex;justify-content:space-between;align-items:center;">
+                      <span style="font-size:12px;color:#475569;font-weight:700;text-transform:uppercase;">Service Fee:</span>
+                      <span id="viewJOServiceFee" style="font-size:14px;font-weight:800;color:#002F70;">₱0.00</span>
+                    </div>
+                    <div id="viewJOTipRow" style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px dashed #cbd5e1;padding-bottom:5px;margin-bottom:2px;">
+                      <span style="font-size:12px;color:#475569;font-weight:700;text-transform:uppercase;">Tip:</span>
+                      <span id="viewJOTip" style="font-size:14px;font-weight:800;color:#16a34a;">—</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
                       <span style="font-size:13px;color:#002F70;font-weight:800;text-transform:uppercase;">Total Cost:</span>
                       <span id="viewJOTotal" style="font-size:20px;font-weight:900;color:#002F70;">₱0.00</span>
                     </div>
@@ -17695,6 +18189,17 @@ setTimeout(function() {
                       <span style="font-size:12.5px;color:#dc2626;font-weight:700;text-transform:uppercase;">Balance Due:</span>
                       <span id="viewJOBalance" style="font-size:15px;font-weight:800;color:#dc2626;">₱0.00</span>
                     </div>
+                  </div>
+                </div>
+
+                <!-- 5. Payment & Collection Audit History -->
+                <div id="viewJOPaymentHistoryBox" style="background:#ffffff;border:1.5px solid #e2e8f0;border-radius:10px;padding:12px 16px;box-shadow:0 1px 3px rgba(0,0,0,0.02);">
+                  <div style="font-size:12.5px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:#002F70;background:#eff6ff;border:1px solid #bfdbfe;padding:6px 12px;border-radius:6px;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;">
+                    <span><i class="fas fa-history" style="margin-right:6px;"></i> Payment &amp; Collection History</span>
+                    <span id="viewJOPayHistoryCount" style="font-size:11px;font-weight:700;color:#1e40af;"></span>
+                  </div>
+                  <div id="viewJOPayHistoryContent" style="max-height:220px;overflow-y:auto;font-size:12px;">
+                    <div style="text-align:center;color:#94a3b8;padding:12px;"><i class="fas fa-spinner fa-spin"></i> Loading payment records...</div>
                   </div>
                 </div>
 
@@ -18173,7 +18678,7 @@ setTimeout(function() {
                  <!-- Reason -->
                  <div style="margin-bottom:14px;">
                    <label style="display:block;font-size:12px;font-weight:700;color:#374151;margin-bottom:6px;">Reason <span style="color:#ef4444;">*</span></label>
-                   <input type="text" id="reqAdjReason" name="request_reason" required placeholder="e.g. Incorrect labor fee" style="width:100%;padding:9px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;color:#1e293b;background:#fff;outline:none;box-sizing:border-box;">
+                   <input type="text" id="reqAdjReason" name="request_reason" required placeholder="e.g. Incorrect tip or service fee" style="width:100%;padding:9px 12px;border:1.5px solid #d1d5db;border-radius:8px;font-size:13px;color:#1e293b;background:#fff;outline:none;box-sizing:border-box;">
                  </div>
 
                  <!-- Remarks -->
@@ -18510,9 +19015,16 @@ window.viewMerchandiseDetails = function(txnId, btn) {
             } else {
                 var wfStatusLower = (txn.status || txn.workflow_status || '').toLowerCase();
                 var isFinished = (valStatus === 'released' || valStatus === 'completed' || wfStatusLower === 'released' || wfStatusLower === 'completed');
+                var payMethodLower = (txn.payment_method || '').toLowerCase();
+                var payStatusLower = (txn.payment_status || '').toLowerCase();
+                var isPaid = (payStatusLower === 'paid' || balDue <= 0.009);
+                var isCredit = (payMethodLower.indexOf('credit') !== -1 || payMethodLower.indexOf('receivable') !== -1 || !!txn.credit_customer_id || payStatusLower.indexOf('credit') !== -1 || payStatusLower.indexOf('ar') !== -1);
+                var canAdjust = isCredit ? !isPaid : (!isPaid && !isFinished);
+                var canVoid = !(isCredit && isPaid);
+
                 if (settleBtn) settleBtn.style.display = (balDue > 0.009) ? 'inline-flex' : 'none';
-                if (adjustBtn) adjustBtn.style.display = isFinished ? 'none' : 'inline-flex';
-                if (voidBtn) voidBtn.style.display = 'inline-flex';
+                if (adjustBtn) adjustBtn.style.display = canAdjust ? 'inline-flex' : 'none';
+                if (voidBtn) voidBtn.style.display = canVoid ? 'inline-flex' : 'none';
                 if (reprintBtn) reprintBtn.style.display = 'inline-flex';
             }
         })
@@ -18885,3 +19397,5 @@ document.addEventListener('DOMContentLoaded', function() {
     window.addEventListener('load', initAllPetronDropdowns);
 })();
 </script>
+<?php include __DIR__ . '/../partials/footer.php'; ?>
+

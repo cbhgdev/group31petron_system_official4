@@ -1,0 +1,157 @@
+Array
+(
+    [0] => Array
+        (
+            [id] => 6
+            [station_id] => 1253
+            [fuel_type_id] => 35
+            [current_stock] => 1000.00
+            [fuel_type] => Diesel 1
+            [current_level] => 1000.00
+            [capacity] => 14000.00
+            [num_pumps] => 4
+            [reorder_level] => 5000.00
+            [critical_level] => 2500.00
+            [price_per_liter] => 90.00
+            [latest_calibration] => 0.00
+            [calibration_date] => 
+            [calibration_staff] => 
+            [status] => Normal
+            [last_updated] => 2026-10-08 17:10:04
+            [updated_by] => 4
+            [ugt_no] => UGT-01
+        )
+
+    [1] => Array
+        (
+            [id] => 7
+            [station_id] => 1253
+            [fuel_type_id] => 11
+            [current_stock] => 3730.00
+            [fuel_type] => Turbo Diesel
+            [current_level] => 3730.00
+            [capacity] => 7000.00
+            [num_pumps] => 2
+            [reorder_level] => 2000.00
+            [critical_level] => 1000.00
+            [price_per_liter] => 90.00
+            [latest_calibration] => 0.00
+            [calibration_date] => 
+            [calibration_staff] => 
+            [status] => active
+            [last_updated] => 2026-10-12 09:40:14
+            [updated_by] => 9
+            [ugt_no] => UGT-03
+        )
+
+    [2] => Array
+        (
+            [id] => 10
+            [station_id] => 1253
+            [fuel_type_id] => 14
+            [current_stock] => 13982.00
+            [fuel_type] => Kerosene
+            [current_level] => 13982.00
+            [capacity] => 14000.00
+            [num_pumps] => 1
+            [reorder_level] => 5000.00
+            [critical_level] => 2500.00
+            [price_per_liter] => 90.00
+            [latest_calibration] => 0.00
+            [calibration_date] => 
+            [calibration_staff] => 
+            [status] => Normal
+            [last_updated] => 2026-10-12 09:40:47
+            [updated_by] => 9
+            [ugt_no] => UGT-07
+        )
+
+    [3] => Array
+        (
+            [id] => 31
+            [station_id] => 1253
+            [fuel_type_id] => 28
+            [current_stock] => 10060.00
+            [fuel_type] => Diesel 2
+            [current_level] => 10060.00
+            [capacity] => 14000.00
+            [num_pumps] => 2
+            [reorder_level] => 5000.00
+            [critical_level] => 2500.00
+            [price_per_liter] => 90.00
+            [latest_calibration] => 0.00
+            [calibration_date] => 
+            [calibration_staff] => 
+            [status] => Normal
+            [last_updated] => 2026-10-08 13:27:40
+            [updated_by] => 4
+            [ugt_no] => UGT-02
+        )
+
+    [4] => Array
+        (
+            [id] => 32
+            [station_id] => 1253
+            [fuel_type_id] => 29
+            [current_stock] => 3004.00
+            [fuel_type] => XCS Plus
+            [current_level] => 3004.00
+            [capacity] => 14000.00
+            [num_pumps] => 4
+            [reorder_level] => 5000.00
+            [critical_level] => 2500.00
+            [price_per_liter] => 79.50
+            [latest_calibration] => 0.00
+            [calibration_date] => 
+            [calibration_staff] => 
+            [status] => active
+            [last_updated] => 2026-10-12 09:40:28
+            [updated_by] => 9
+            [ugt_no] => UGT-04
+        )
+
+    [5] => Array
+        (
+            [id] => 33
+            [station_id] => 1253
+            [fuel_type_id] => 30
+            [current_stock] => 1149.00
+            [fuel_type] => Xtra UNL 1
+            [current_level] => 1149.00
+            [capacity] => 7000.00
+            [num_pumps] => 2
+            [reorder_level] => 2000.00
+            [critical_level] => 1000.00
+            [price_per_liter] => 74.80
+            [latest_calibration] => 0.00
+            [calibration_date] => 
+            [calibration_staff] => 
+            [status] => active
+            [last_updated] => 2026-10-12 09:40:46
+            [updated_by] => 9
+            [ugt_no] => UGT-05
+        )
+
+    [6] => Array
+        (
+            [id] => 34
+            [station_id] => 1253
+            [fuel_type_id] => 31
+            [current_stock] => 14000.00
+            [fuel_type] => Xtra UNL 2
+            [current_level] => 14000.00
+            [capacity] => 14000.00
+            [num_pumps] => 2
+            [reorder_level] => 5000.00
+            [critical_level] => 2500.00
+            [price_per_liter] => 80.00
+            [latest_calibration] => 0.00
+            [calibration_date] => 
+            [calibration_staff] => 
+            [status] => Normal
+            [last_updated] => 2026-10-08 10:04:34
+            [updated_by] => 3
+            [ugt_no] => UGT-06
+        )
+
+)

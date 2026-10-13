@@ -17,6 +17,9 @@ if (session_status() !== PHP_SESSION_ACTIVE) {
 
 require_once __DIR__ . '/../backend/lib.php';
 require_once __DIR__ . '/db_connect.php';
+if (function_exists('petron_init_dynamic_timezone')) {
+    petron_init_dynamic_timezone();
+}
 
 // ── Fuel display name helper function ────────────────────────
 function clean_fuel_display_name($fuel_type) {
@@ -280,6 +283,24 @@ try {
                 $price = (float)($pr_inv->fetchColumn() ?: 0);
             } catch (Exception $e) {}
 
+            // Fallback: match by fuel_type without station_id restriction if 0
+            if ($price <= 0) {
+                try {
+                    $pr_inv2 = $pdo->prepare("
+                        SELECT COALESCE(price_per_liter, 0)
+                        FROM fuel_inventory
+                        WHERE LOWER(TRIM(fuel_type)) = LOWER(TRIM(?)) AND price_per_liter > 0
+                        ORDER BY id DESC LIMIT 1
+                    ");
+                    $pr_inv2->execute([$fuel_type]);
+                    $price = (float)($pr_inv2->fetchColumn() ?: 0);
+                } catch (Exception $e) {}
+            }
+
+            // Fallback: use posted price_per_liter if inventory lookup yielded 0
+            if ($price <= 0 && isset($_POST['price_per_liter']) && (float)str_replace(',', '', $_POST['price_per_liter']) > 0) {
+                $price = (float)str_replace(',', '', $_POST['price_per_liter']);
+            }
 
             // ── Price = 0: allow submission, record reading with ₱0 amount ──
             // Staff can still record meter readings even if price isn't configured yet.
@@ -329,8 +350,8 @@ try {
 
             // ── Formula: Net Volume = Gross Volume − Calibration ──
             // Even if calibration exceeds gross volume or gross is 0, net volume floors safely at 0.00 (walay halin)
-            $liters_sold  = round($gross_volume - $calibration, 4);
-            if ($liters_sold < 0) $liters_sold = 0.0;   // safety floor
+            $gross_volume = max(0.0, (float)($present - $previous));
+            $liters_sold  = round(max(0.0, $gross_volume - $calibration), 4);
 
             // ── Formula: Total Amount = Net Volume × Price per Liter ──
             $total_amount = round($liters_sold * $price, 2);
@@ -436,11 +457,13 @@ try {
             try {
                 $pdo->beginTransaction();
 
-                // Check for existing reading for same station, date, shift, and pump/fuel_type
+                // Check for existing UNCLOSED reading for same station, date, shift, and pump/fuel_type
+                // (Do NOT overwrite rows that have already been finalized via Fuel Sales Closing)
                 $existing_tx_id = null;
+                $old_liters = 0.0;
                 try {
                     $chk_tx = $pdo->prepare("
-                        SELECT id FROM fuel_transactions
+                        SELECT id, liters_sold, inventory_deducted FROM fuel_transactions
                         WHERE station_id = ?
                           AND DATE(transaction_date) = ?
                           AND shift_period = ?
@@ -448,31 +471,25 @@ try {
                             (pump_id IS NOT NULL AND pump_id = ?)
                             OR LOWER(TRIM(fuel_type)) = LOWER(TRIM(?))
                           )
-                          AND LOWER(COALESCE(status, '')) NOT IN ('rejected','voided','cancelled','canceled')
+                          AND LOWER(TRIM(COALESCE(status, ''))) NOT IN (
+                            'rejected','voided','cancelled','canceled',
+                            'closing_completed','verified','approved','validated','saved','reported'
+                          )
                         ORDER BY id DESC LIMIT 1
                     ");
                     $chk_tx->execute([$station_id, $reading_date, $shift_period_safe, $resolved_pump_id, $fuel_type_to_save]);
-                    $existing_tx_id = $chk_tx->fetchColumn();
+                    $existing_row = $chk_tx->fetch(PDO::FETCH_ASSOC);
+                    if ($existing_row) {
+                        $existing_tx_id = $existing_row['id'];
+                        if (!empty($existing_row['inventory_deducted'])) {
+                            $old_liters = (float)($existing_row['liters_sold'] ?? 0);
+                        }
+                    }
                 } catch (Exception $e) {}
 
                 $is_admin_user = in_array($role, ['admin', 'superadmin', 'developer']);
                 // Meter readings are Step 1. Both admin and staff readings start as READINGS_SUBMITTED so they do not leak into the Fuel Sales Report before Fuel Sales Closing is completed.
-                // If closing was already previously verified for this shift/date, keep/set as Verified for admin.
                 $reading_status = 'READINGS_SUBMITTED';
-                if ($is_admin_user) {
-                    try {
-                        $chk_cls_status = $pdo->prepare("
-                            SELECT status FROM fuel_sales_closing 
-                            WHERE station_id = ? AND report_date = ? AND (shift = ? OR shift_period = ?)
-                            LIMIT 1
-                        ");
-                        $chk_cls_status->execute([$station_id, $reading_date, $shift_name_safe, $shift_period_safe]);
-                        $cls_stat = strtoupper(trim($chk_cls_status->fetchColumn() ?: ''));
-                        if (in_array($cls_stat, ['VERIFIED', 'APPROVED', 'VALIDATED'])) {
-                            $reading_status = 'Verified';
-                        }
-                    } catch (Exception $e) {}
-                }
 
                 if ($existing_tx_id) {
                     $pdo->prepare("
@@ -529,20 +546,18 @@ try {
                 try {
                     $chk_cls = $pdo->prepare("
                         SELECT id, status FROM fuel_sales_closing
-                        WHERE station_id = ? AND report_date = ? AND (shift = ? OR shift_period = ?)
-                        LIMIT 1
+                        WHERE station_id = ? AND (report_date = ? OR DATE(encoded_at) = ?) AND (shift = ? OR shift_period = ?)
+                        ORDER BY id DESC LIMIT 1
                     ");
-                    $chk_cls->execute([$station_id, $reading_date, $shift_name_safe, $shift_period_safe]);
+                    $chk_cls->execute([$station_id, $reading_date, $reading_date, $shift_name_safe, $shift_period_safe]);
                     $cls_row = $chk_cls->fetch(PDO::FETCH_ASSOC);
 
                     if ($cls_row) {
-                        if (($cls_row['status'] ?? '') !== 'CLOSING_COMPLETED' && ($cls_row['status'] ?? '') !== 'REPORTED') {
-                            $pdo->prepare("
-                                UPDATE fuel_sales_closing
-                                SET status = ?, shift = ?, shift_period = ?
-                                WHERE id = ?
-                            ")->execute([$closing_stub_status, $shift_name_safe, $shift_period_safe, $cls_row['id']]);
-                        }
+                        $pdo->prepare("
+                            UPDATE fuel_sales_closing
+                            SET status = ?, report_date = ?, shift = ?, shift_period = ?, encoded_at = NOW()
+                            WHERE id = ?
+                        ")->execute([$closing_stub_status, $reading_date, $shift_name_safe, $shift_period_safe, $cls_row['id']]);
                     } else {
                         $pdo->prepare("
                             INSERT INTO fuel_sales_closing
@@ -555,16 +570,6 @@ try {
                 // ── Deduct liters_sold from fuel_inventory automatically ───────────
                 try {
                     if ($liters_sold > 0) {
-                        // If updating an existing reading, only deduct the difference
-                        $old_liters = 0.0;
-                        if ($existing_tx_id) {
-                            $old_stmt = $pdo->prepare("SELECT liters_sold, inventory_deducted FROM fuel_transactions WHERE id = ?");
-                            $old_stmt->execute([$existing_tx_id]);
-                            $old_row = $old_stmt->fetch(PDO::FETCH_ASSOC);
-                            if ($old_row && !empty($old_row['inventory_deducted'])) {
-                                $old_liters = (float)($old_row['liters_sold'] ?? 0);
-                            }
-                        }
                         $deduct_amount = $liters_sold - $old_liters; // net change
 
                         if (abs($deduct_amount) > 0.0001) {
@@ -755,7 +760,7 @@ try {
 
         case 'my_entries':
             $date = $_GET['date'] ?? date('Y-m-d');
-            $rows = $pdo->prepare("SELECT transaction_id,fuel_type,present_reading,previous_reading,calibration,liters_sold,price_per_liter,total_amount,shift_period,shift_name,status,transaction_date,notes FROM fuel_transactions WHERE station_id=? AND staff_id=? AND DATE(transaction_date)=? ORDER BY transaction_date DESC");
+            $rows = $pdo->prepare("SELECT transaction_id,fuel_type,present_reading,previous_reading,COALESCE(NULLIF(calibration, 0), NULLIF(staff_calibration, 0), calibration, staff_calibration, 0) AS calibration,liters_sold,price_per_liter,total_amount,shift_period,shift_name,status,transaction_date,notes FROM fuel_transactions WHERE station_id=? AND staff_id=? AND DATE(transaction_date)=? ORDER BY transaction_date DESC");
             $rows->execute([$station_id, $me['id'], $date]);
             respond(true, '', ['entries' => $rows->fetchAll(PDO::FETCH_ASSOC)]);
 
@@ -800,19 +805,68 @@ try {
                 $base_params[] = $status;
             }
 
+            // ── Auto-Repair Historical Fuel Readings ───────────────────────
+            try {
+                // 1. Repair missing prices from fuel_inventory
+                $pdo->exec("
+                    UPDATE fuel_transactions ft
+                    JOIN fuel_inventory fi 
+                      ON (fi.station_id = ft.station_id OR fi.station_id IS NULL OR ft.station_id IS NULL)
+                     AND LOWER(TRIM(fi.fuel_type)) = LOWER(TRIM(ft.fuel_type))
+                    SET ft.price_per_liter = fi.price_per_liter
+                    WHERE (ft.price_per_liter IS NULL OR ft.price_per_liter = 0)
+                      AND fi.price_per_liter > 0
+                ");
+
+                // 2. Synchronize calibration and staff_calibration
+                $pdo->exec("
+                    UPDATE fuel_transactions
+                    SET calibration = staff_calibration
+                    WHERE (calibration IS NULL OR calibration = 0)
+                      AND staff_calibration > 0
+                ");
+                $pdo->exec("
+                    UPDATE fuel_transactions
+                    SET staff_calibration = calibration
+                    WHERE (staff_calibration IS NULL OR staff_calibration = 0)
+                      AND calibration > 0
+                ");
+
+                // 3. Repair liters_sold if zero/null but present_reading > previous_reading
+                $pdo->exec("
+                    UPDATE fuel_transactions
+                    SET liters_sold = ROUND(GREATEST(0, (present_reading - previous_reading) - COALESCE(calibration, staff_calibration, 0)), 4)
+                    WHERE (liters_sold IS NULL OR liters_sold = 0)
+                      AND present_reading > previous_reading
+                ");
+
+                // 4. Repair total_amount if zero/null but liters_sold > 0 and price_per_liter > 0
+                $pdo->exec("
+                    UPDATE fuel_transactions
+                    SET total_amount = ROUND(liters_sold * price_per_liter, 2)
+                    WHERE (total_amount IS NULL OR total_amount = 0)
+                      AND liters_sold > 0
+                      AND price_per_liter > 0
+                ");
+            } catch (Exception $e_repair) {}
+
             // ── TABLE 1: Meter Reading Table (raw per-transaction rows) ──────
             $mr_sql = "
                 SELECT
+                    ft.id,
                     ft.transaction_id,
                     ft.pump_id,
                     fp.pump_number,
                     ft.fuel_type,
-                    ft.previous_reading   AS beginning,
-                    ft.present_reading    AS ending,
-                    ft.calibration        AS cal,
-                    ft.liters_sold        AS volume_liters,
-                    ft.price_per_liter,
-                    ft.total_amount       AS amount,
+                    COALESCE(ft.previous_reading, 0)   AS beginning,
+                    COALESCE(ft.present_reading, 0)    AS ending,
+                    COALESCE(NULLIF(ft.calibration, 0), NULLIF(ft.staff_calibration, 0), ft.calibration, ft.staff_calibration, 0) AS cal,
+                    COALESCE(NULLIF(ft.calibration, 0), NULLIF(ft.staff_calibration, 0), ft.calibration, ft.staff_calibration, 0) AS calibration,
+                    COALESCE(ft.liters_sold, 0)        AS volume_liters,
+                    COALESCE(ft.liters_sold, 0)        AS liters_sold,
+                    COALESCE(ft.price_per_liter, 0)    AS price_per_liter,
+                    COALESCE(ft.total_amount, 0)       AS amount,
+                    COALESCE(ft.total_amount, 0)       AS total_amount,
                     ft.shift_period,
                     ft.shift_name,
                     DATE(ft.transaction_date) AS reading_date,
@@ -851,9 +905,54 @@ try {
             $mr_stmt = $pdo->prepare($mr_sql);
             $mr_stmt->execute($base_params);
             $meter_readings = $mr_stmt->fetchAll(PDO::FETCH_ASSOC);
-            // Clean fuel names
+
+            // Price lookup cache for fallback calculations
+            $fuel_prices = [];
+            try {
+                $pr_stmt = $pdo->prepare("SELECT LOWER(TRIM(fuel_type)) AS ft, price_per_liter FROM fuel_inventory WHERE (station_id = ? OR station_id IS NULL) AND price_per_liter > 0");
+                $pr_stmt->execute([$station_id]);
+                while ($pr_r = $pr_stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $fuel_prices[$pr_r['ft']] = (float)$pr_r['price_per_liter'];
+                }
+            } catch (Exception $e) {}
+
+            // Clean fuel names & ensure robust non-zero fallback computations
             foreach ($meter_readings as &$row) {
                 $row['fuel_type'] = clean_fuel_display_name($row['fuel_type'] ?? '');
+
+                $beg   = (float)($row['beginning'] ?? 0);
+                $end   = (float)($row['ending'] ?? 0);
+                $cal   = (float)($row['cal'] ?? $row['calibration'] ?? 0);
+                $vol   = (float)($row['volume_liters'] ?? 0);
+                $price = (float)($row['price_per_liter'] ?? 0);
+                $amt   = (float)($row['amount'] ?? 0);
+
+                if ($price <= 0) {
+                    $ft_key = strtolower(trim($row['fuel_type']));
+                    $price = $fuel_prices[$ft_key] ?? 0.0;
+                    if ($price <= 0) {
+                        foreach ($fuel_prices as $k => $v) {
+                            if (str_contains($ft_key, $k) || str_contains($k, $ft_key)) {
+                                $price = $v;
+                                break;
+                            }
+                        }
+                    }
+                    $row['price_per_liter'] = $price;
+                }
+
+                if ($vol <= 0 && $end > $beg) {
+                    $gross = max(0.0, $end - $beg);
+                    $vol   = round(max(0.0, $gross - $cal), 4);
+                    $row['volume_liters'] = $vol;
+                    $row['liters_sold']   = $vol;
+                }
+
+                if ($amt <= 0 && $vol > 0 && $price > 0) {
+                    $amt = round($vol * $price, 2);
+                    $row['amount']       = $amt;
+                    $row['total_amount'] = $amt;
+                }
             }
             unset($row);
 

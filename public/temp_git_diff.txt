@@ -1,0 +1,1255 @@
+diff --git a/public/staff_transactions_hub.php b/public/staff_transactions_hub.php
+index 2696894..2884b19 100644
+--- a/public/staff_transactions_hub.php
++++ b/public/staff_transactions_hub.php
+@@ -674,19 +674,6 @@ $jom_filter_status       = $_GET['jom_status'] ?? '';
+ $jom_search              = trim($_GET['jom_search'] ?? '');
+ 
+ // Pre-fetch pending transaction_requests for Merchandise History rows
+-        // ── AJAX JSON POLLING ENDPOINT FOR MERCHANDISE HISTORY ─────────────────
+-        if (isset($_GET['ajax_mh']) && $_GET['ajax_mh'] == '1') {
+-            header('Content-Type: application/json');
+-            echo json_encode([
+-                'success' => true,
+-                'kpis' => [
+-                    'txn_count'     => count($mh_recent),
+-                    'total_encoded' => '₱' . number_format($mh_kpi_total_encoded, 2)
+-                ],
+-                'mh_count' => count($mh_recent)
+-            ]);
+-            exit;
+-        }
+ 
+         $mh_pending_requests = [];
+ try {
+@@ -812,6 +799,7 @@ if ($section === 'merchandise') {
+                    $mh_txnid_col AS transaction_id,
+                    CONCAT('OR-', YEAR($mh_date_col), '-', LPAD(mt.id, 6, '0')) AS or_number,
+                    mt.customer_name,
++                   COALESCE(mt.credit_customer_id, 0) AS credit_customer_id,
+                    mt.payment_method,
+                    mt.ewallet_provider,
+                    mt.ewallet_reference,
+@@ -845,25 +833,54 @@ if ($section === 'merchandise') {
+         $mh_kpi_items_released = 0;
+         $mh_kpi_total_encoded  = 0.00;
+         try {
+-            $mhkpi = $pdo->prepare("
+-                SELECT COUNT(DISTINCT mt.id)   AS txn_count,
+-                       COALESCE(SUM(mti.quantity), 0) AS items_released,
++            // Count distinct pure merchandise transactions today and calculate exact total_amount (no duplicate joins)
++            $mhkpi_tx = $pdo->prepare("
++                SELECT COUNT(*) AS txn_count,
+                        COALESCE(SUM(mt.total_amount), 0) AS total_encoded
+                 FROM merchandise_transactions mt
+-                LEFT JOIN merchandise_transaction_items mti ON mti.transaction_id = mt.id
+                 WHERE mt.station_id = ?
+                   AND mt.staff_id   = ?
+-                  AND DATE(mt.created_at) = CURDATE()
+-                  AND COALESCE(mt.transaction_type,'merchandise') = 'merchandise'
++                  AND DATE(COALESCE($mh_date_col, mt.created_at)) = CURDATE()
++                  AND COALESCE(mt.transaction_type, 'merchandise') = 'merchandise'
++                  AND LOWER(COALESCE(mt.validation_status, '')) NOT IN ('voided', 'cancelled', 'canceled')
+             ");
+-            $mhkpi->execute([$station_id, $me['id']]);
+-            $mhkpi_row = $mhkpi->fetch(PDO::FETCH_ASSOC);
++            $mhkpi_tx->execute([$station_id, $me['id']]);
++            $mhkpi_row = $mhkpi_tx->fetch(PDO::FETCH_ASSOC);
+             if ($mhkpi_row) {
+-                $mh_kpi_txn_count      = (int)$mhkpi_row['txn_count'];
+-                $mh_kpi_items_released = (int)$mhkpi_row['items_released'];
+-                $mh_kpi_total_encoded  = (float)$mhkpi_row['total_encoded'];
++                $mh_kpi_txn_count     = (int)$mhkpi_row['txn_count'];
++                $mh_kpi_total_encoded = (float)$mhkpi_row['total_encoded'];
+             }
+-        } catch (Exception $_mhkpie) {}
++
++            // Sum quantity of items released in pure merchandise transactions today
++            $mhkpi_itms = $pdo->prepare("
++                SELECT COALESCE(SUM(mti.quantity), 0) AS items_released
++                FROM merchandise_transaction_items mti
++                INNER JOIN merchandise_transactions mt ON mt.id = mti.transaction_id
++                WHERE mt.station_id = ?
++                  AND mt.staff_id   = ?
++                  AND DATE(COALESCE($mh_date_col, mt.created_at)) = CURDATE()
++                  AND COALESCE(mt.transaction_type, 'merchandise') = 'merchandise'
++                  AND LOWER(COALESCE(mt.validation_status, '')) NOT IN ('voided', 'cancelled', 'canceled')
++            ");
++            $mhkpi_itms->execute([$station_id, $me['id']]);
++            $mh_kpi_items_released = (int)$mhkpi_itms->fetchColumn();
++        } catch (Exception $_mhkpie) {
++            error_log('staff_transactions_hub merch KPI error: ' . $_mhkpie->getMessage());
++        }
++        // ── AJAX JSON POLLING ENDPOINT FOR MERCHANDISE HISTORY ─────────────────
++        if (isset($_GET['ajax_mh']) && $_GET['ajax_mh'] == '1') {
++            header('Content-Type: application/json');
++            echo json_encode([
++                'success' => true,
++                'kpis' => [
++                    'txn_count'      => $mh_kpi_txn_count,
++                    'items_released' => $mh_kpi_items_released,
++                    'total_encoded'  => '₱' . number_format($mh_kpi_total_encoded, 2)
++                ],
++                'mh_count' => count($mh_recent)
++            ]);
++            exit;
++        }
+ 
+         $stmt_sh = $pdo->query("SELECT shift_key, shift_name FROM shift_periods WHERE is_active = 1 ORDER BY sort_order ASC");
+         $mh_available_shifts = $stmt_sh ? $stmt_sh->fetchAll(PDO::FETCH_ASSOC) : [];
+@@ -898,6 +915,7 @@ if ($section === 'merchandise') {
+                 SELECT mt.id AS mt_id,
+                        $mh_txnid_col AS transaction_id,
+                        mt.customer_name,
++                       COALESCE(mt.credit_customer_id, 0) AS credit_customer_id,
+                        mt.customer_contact,
+                        COALESCE(mt.job_order_service, '') AS job_order_service,
+                        COALESCE(mt.job_order_vehicle_plate, '') AS job_order_vehicle_plate,
+@@ -2096,15 +2114,16 @@ if ($section === 'merchandise') {
+ 
+             $pdo->commit();
+ 
+-            // Count completed job orders for real-time KPI updates
+-            $completed_jo_count = 0;
++            // Count released job orders for real-time KPI updates
++            $released_jo_count = 0;
+             try {
+                 $kpi_q = $pdo->prepare("SELECT 
+-                    (SELECT COUNT(*) FROM job_orders WHERE station_id = ? AND status = 'Completed') +
+-                    (SELECT COUNT(*) FROM merchandise_transactions WHERE station_id = ? AND transaction_type IN ('job_order','combined') AND workflow_status = 'Completed' AND job_order_db_id IS NULL) AS cnt");
++                    (SELECT COUNT(*) FROM job_orders WHERE station_id = ? AND LOWER(TRIM(status)) = 'released') +
++                    (SELECT COUNT(*) FROM merchandise_transactions WHERE station_id = ? AND transaction_type IN ('job_order','combined') AND LOWER(TRIM(workflow_status)) = 'released' AND job_order_db_id IS NULL) AS cnt");
+                 $kpi_q->execute([$station_id, $station_id]);
+-                $completed_jo_count = (int)$kpi_q->fetchColumn();
++                $released_jo_count = (int)$kpi_q->fetchColumn();
+             } catch (Exception $kpi_err) {}
++            $completed_jo_count = $released_jo_count;
+ 
+             if ($is_ajax) {
+                 header('Content-Type: application/json');
+@@ -2120,7 +2139,8 @@ if ($section === 'merchandise') {
+                     'total_amount'       => ($cur_total_amount ?? 0),
+                     'balance_due'        => $cur_balance,
+                     'is_credit_approved' => $is_credit_approved,
+-                    'completed_jo'       => $completed_jo_count
++                    'released_jo'        => $released_jo_count,
++                    'completed_jo'       => $released_jo_count
+                 ]);
+                 exit;
+             }
+@@ -2477,52 +2497,54 @@ if ($section === 'merchandise') {
+ 
+         // ── Staff KPI Snapshot (today, current station, current user) ─────────────
+         $kpi_jo_count       = 0;
+-        $kpi_merch_released = 0;
+-        $kpi_total_encoded  = 0.00;
+-        try {
+-            // Count JOs encoded today from merchandise_transactions
+-            $kpi_stmt = $pdo->prepare("
+-                SELECT COUNT(DISTINCT mt.id)   AS jo_count,
+-                       COALESCE(SUM(
+-                           CASE WHEN COALESCE(mti.item_type,'merchandise') != 'service'
+-                                THEN mti.quantity ELSE 0 END
+-                       ), 0)                   AS merch_released,
+-                       COALESCE(SUM(mt.total_amount), 0) AS total_encoded
+-                FROM merchandise_transactions mt
+-                LEFT JOIN merchandise_transaction_items mti ON mti.transaction_id = mt.id
+-                WHERE mt.station_id = ?
+-                  AND mt.staff_id   = ?
+-                  AND DATE(mt.created_at) = CURDATE()
+-                  AND mt.transaction_type IN ('job_order','combined')
+-            ");
+-            $kpi_stmt->execute([$station_id, $me['id']]);
+-            $kpi_row = $kpi_stmt->fetch(PDO::FETCH_ASSOC);
+-            if ($kpi_row) {
+-                $kpi_jo_count       += (int)$kpi_row['jo_count'];
+-                $kpi_merch_released += (int)$kpi_row['merch_released'];
+-                $kpi_total_encoded  += (float)$kpi_row['total_encoded'];
+-            }
+-        } catch (Exception $_kpie) {}
+-        try {
+-            // Also count from native job_orders table
+-            $kpi_jo_stmt = $pdo->prepare("
+-                SELECT COUNT(*) AS jo_count,
+-                       COALESCE(SUM(COALESCE(total_cost, estimated_cost, 0)), 0) AS total_encoded
+-                FROM job_orders
+-                WHERE station_id  = ?
+-                  AND created_by  = ?
+-                  AND DATE(created_at) = CURDATE()
+-            ");
+-            $kpi_jo_stmt->execute([$station_id, $me['id']]);
+-            $kpi_jo_row = $kpi_jo_stmt->fetch(PDO::FETCH_ASSOC);
+-            if ($kpi_jo_row) {
+-                $kpi_jo_count      += (int)$kpi_jo_row['jo_count'];
+-                $kpi_total_encoded += (float)$kpi_jo_row['total_encoded'];
++        $today_jo_sales     = 0.00;
++        $today_jo_parts_qty = 0;
++
++        foreach ($job_orders as $_jo) {
++            $created_ts = !empty($_jo['created_at']) ? strtotime($_jo['created_at']) : 0;
++            $is_today   = ($created_ts && date('Y-m-d', $created_ts) === date('Y-m-d'));
++            $val_st     = strtolower(trim($_jo['validation_status'] ?? ''));
++            $st         = strtolower(trim($_jo['status'] ?? ''));
++            $is_voided  = in_array($val_st, ['voided', 'cancelled', 'canceled']) || in_array($st, ['cancelled', 'canceled', 'rejected']);
++
++            if ($is_today && !$is_voided) {
++                $kpi_jo_count++;
++                $today_jo_sales += (float)($_jo['total_cost'] ?? $_jo['estimated_cost'] ?? 0);
++
++                if (($_jo['_source'] ?? '') === 'merchandise_transactions') {
++                    $items = $mt_item_map[$_jo['id']] ?? [];
++                    foreach ($items as $_item) {
++                        $today_jo_parts_qty += (int)($_item['quantity'] ?? 1);
++                    }
++                } else {
++                    $rp_raw = $_jo['required_parts'] ?? '';
++                    $rp_decoded = is_string($rp_raw) ? (json_decode($rp_raw, true) ?? []) : ($rp_raw ?? []);
++                    if (is_array($rp_decoded)) {
++                        foreach ($rp_decoded as $_rp) {
++                            if (!is_array($_rp)) continue;
++                            $today_jo_parts_qty += (int)($_rp['qty'] ?? $_rp['quantity'] ?? 1);
++                        }
++                    }
++                }
+             }
+-        } catch (Exception $_kpije) {}
++        }
++
++        $mh_kpi_total_encoded  = $mh_kpi_total_encoded ?? 0.00;
++        $mh_kpi_items_released = $mh_kpi_items_released ?? 0;
++        $mh_kpi_txn_count      = $mh_kpi_txn_count ?? 0;
++
++        $kpi_total_encoded  = round((float)$mh_kpi_total_encoded + $today_jo_sales, 2);
++        $kpi_merch_released = (int)($mh_kpi_items_released + $today_jo_parts_qty);
++        $released_jo_count  = (int)array_reduce($job_orders, fn($c, $j) => $c + (strtolower(trim($j['status'] ?? '')) === 'released' ? 1 : 0), 0);
++        $completed_jo_count = $released_jo_count;
+ 
+     } catch (Exception $e) {
+-        $job_orders = [];
++        $job_orders         = [];
++        $kpi_jo_count       = 0;
++        $kpi_total_encoded  = 0.00;
++        $kpi_merch_released = 0;
++        $released_jo_count  = 0;
++        $completed_jo_count = 0;
+     }
+ 
+     $jo_pending_count  = count(array_filter($job_orders, fn($j) =>
+@@ -2540,7 +2562,6 @@ if ($section === 'merchandise') {
+     // ── AJAX JSON POLLING ENDPOINT FOR JOB ORDER TRACKER (LIVE DATA) ────────────────────
+     if (isset($_GET['ajax_tracker']) && $_GET['ajax_tracker'] == '1') {
+         header('Content-Type: application/json');
+-        $completed_jo_count = (int)array_reduce($job_orders, fn($c,$j) => $c + (($j['status']??'')==='Completed'?1:0), 0);
+         
+         // Unique mechanics list from active tracker dataset
+         $unique_mechs = [];
+@@ -2576,7 +2597,8 @@ if ($section === 'merchandise') {
+             'kpis' => [
+                 'total_txns'   => (int)($mh_kpi_txn_count + $kpi_jo_count),
+                 'total_sales'  => '₱' . number_format($kpi_total_encoded, 2),
+-                'completed_jo' => $completed_jo_count,
++                'released_jo'  => $released_jo_count,
++                'completed_jo' => $released_jo_count,
+                 'merch_sold'   => (int)$kpi_merch_released
+             ],
+             'jo_count'          => count($job_orders),
+@@ -2801,6 +2823,23 @@ window.openRequestAdjustModal = function(arg1, arg2) {
+         joData = arg1;
+     }
+ 
++    var adjPayMethod = (joData.payment_method || '').toLowerCase();
++    var adjPayStatus = (joData.payment_status || '').toLowerCase();
++    var adjIsPaid = (adjPayStatus === 'paid');
++    var adjIsCredit = adjPayMethod.indexOf('credit') !== -1 || adjPayMethod.indexOf('receivable') !== -1;
++
++    if (adjIsPaid) {
++        var alertMsg = adjIsCredit
++            ? 'Adjustment cannot be requested for an Accounts Receivable transaction that has already been paid.'
++            : 'Adjustment cannot be requested for a paid cash transaction. Please request a Void instead.';
++        if (typeof showTxnAlert === 'function') {
++            showTxnAlert(alertMsg, 'warning');
++        } else {
++            alert(alertMsg);
++        }
++        return false;
++    }
++
+     ['viewJobOrderModal', 'viewMerchandiseModal', 'updateStatusModal', 'adjustJobOrderModal', 'txnRequestModal', 'requestVoidModal'].forEach(function(id) {
+         var m = document.getElementById(id);
+         if (m) m.style.display = 'none';
+@@ -2922,6 +2961,7 @@ window.openRequestVoidModal = function(arg1, arg2) {
+             customer: btn.getAttribute('data-jom-customer') || btn.getAttribute('data-jo-customer') || 'Walk-in Customer',
+             workflow_status: btn.getAttribute('data-jom-status') || btn.getAttribute('data-jo-status') || 'Pending',
+             payment_status: btn.getAttribute('data-jom-paystatus') || btn.getAttribute('data-jo-paystatus') || 'Paid',
++            payment_method: btn.getAttribute('data-jom-paymethod') || btn.getAttribute('data-jo-paymethod') || 'Cash',
+             service: btn.getAttribute('data-jom-service') || btn.getAttribute('data-jo-service') || '',
+             plate: btn.getAttribute('data-jom-plate') || btn.getAttribute('data-jo-plate') || '',
+             mechanic: btn.getAttribute('data-jom-mechanic') || btn.getAttribute('data-jo-mech') || '',
+@@ -2939,6 +2979,21 @@ window.openRequestVoidModal = function(arg1, arg2) {
+         joData = arg1;
+     }
+ 
++    var voidPayMethod = (joData.payment_method || '').toLowerCase();
++    var voidPayStatus = (joData.payment_status || '').toLowerCase();
++    var voidIsPaid = (voidPayStatus === 'paid');
++    var voidIsCredit = voidPayMethod.indexOf('credit') !== -1 || voidPayMethod.indexOf('receivable') !== -1;
++
++    if (voidIsCredit && voidIsPaid) {
++        var alertMsg = 'Void cannot be requested for an Accounts Receivable transaction that has already been paid/settled.';
++        if (typeof showTxnAlert === 'function') {
++            showTxnAlert(alertMsg, 'warning');
++        } else {
++            alert(alertMsg);
++        }
++        return false;
++    }
++
+     ['viewJobOrderModal', 'viewMerchandiseModal', 'updateStatusModal', 'adjustJobOrderModal', 'txnRequestModal', 'requestAdjustModal'].forEach(function(id) {
+         var m = document.getElementById(id);
+         if (m) m.style.display = 'none';
+@@ -5105,9 +5160,9 @@ setTimeout(function() {
+                                 $pump_prev_reading = 0.00;
+                             }
+ 
+-                            // Input fields are ALWAYS empty and ready for encoding after submission or closing:
++                            // Input fields ready for encoding (calibration pre-fills if active calibration exists, otherwise 0.00):
+                             $saved_ending_val = '';
+-                            $saved_calib_val  = '0.00';
++                            $saved_calib_val  = ((float)($p_row['calibration_default'] ?? 0) > 0) ? number_format((float)$p_row['calibration_default'], 2, '.', '') : '0.00';
+                     ?>
+                     <tr id="fuelRow_<?= $ft_id ?>" style="border-bottom:1px solid #e2e8f0;<?= $is_deactivated ? 'background:#fcfcfd;opacity:0.75;' : '' ?>">
+                         <!-- NAME Column (plain text, no icon) -->
+@@ -5754,6 +5809,13 @@ setTimeout(function() {
+             formData.set('calibration', calibrationRaw);
+             const calibrationVal = parseFloat(calibrationRaw) || 0;
+ 
++            const volEl = document.getElementById('volume_value_' + ftId);
++            const amtEl = document.getElementById('amount_value_' + ftId);
++            const prEl  = document.getElementById('price_' + ftId);
++            if (volEl) formData.set('volume_liters', volEl.value || '0.00');
++            if (amtEl) formData.set('total_amount', amtEl.value || '0.00');
++            if (prEl)  formData.set('price_per_liter', prEl.value || '0.00');
++
+             // Validation Rule 2: Calibration ≥ 0
+             if (calibrationVal < 0) {
+                 showRowMsg(msgEl, 'error', 'Calibration value cannot be negative.');
+@@ -6099,6 +6161,13 @@ setTimeout(function() {
+                     formData.set('calibration',        calRaw);
+                     formData.set('notes',              globalRemarks);
+ 
++                    const volEl = document.getElementById('volume_value_' + ftId);
++                    const amtEl = document.getElementById('amount_value_' + ftId);
++                    const prEl  = document.getElementById('price_' + ftId);
++                    if (volEl) formData.set('volume_liters', volEl.value || '0.00');
++                    if (amtEl) formData.set('total_amount', amtEl.value || '0.00');
++                    if (prEl)  formData.set('price_per_liter', prEl.value || '0.00');
++
+                     const targetUrl = window.location.pathname.replace(/[^\\/]+$/, '') + 'api_fuel_readings.php';
+                     const response = await fetch(targetUrl, {
+                         method: 'POST',
+@@ -6550,16 +6619,32 @@ setTimeout(function() {
+                 const fuelStr = r._seq_label || (r.fuel_type || '—').toUpperCase();
+                 const staffStr = r.staff_name || '—';
+ 
++                let rBeg = parseFloat(r.beginning) || 0;
++                let rEnd = parseFloat(r.ending) || 0;
++                let rCal = parseFloat(r.cal !== undefined && r.cal !== null ? r.cal : (r.calibration !== undefined ? r.calibration : (r.staff_calibration || 0))) || 0;
++                let rVol = parseFloat(r.volume_liters !== undefined && r.volume_liters !== null ? r.volume_liters : (r.liters_sold || 0)) || 0;
++                let rPrice = parseFloat(r.price_per_liter) || 0;
++                let rAmt = parseFloat(r.amount !== undefined && r.amount !== null ? r.amount : (r.total_amount || 0)) || 0;
++
++                // Robust frontend fallback calculation: if volume or amount is 0 but readings exist
++                if (rVol <= 0 && rEnd > rBeg) {
++                    let gross = Math.max(0, rEnd - rBeg);
++                    rVol = Math.max(0, gross - rCal);
++                }
++                if (rAmt <= 0 && rVol > 0 && rPrice > 0) {
++                    rAmt = rVol * rPrice;
++                }
++
+                 html += `<tr style="border-bottom:1px solid #e2e8f0; background:#ffffff; transition: background-color 0.15s ease;" onmouseover="this.style.backgroundColor='#f0f5ff';" onmouseout="this.style.backgroundColor='#ffffff';">
+                     <td style="padding:8px 6px; color:#0f172a; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; text-overflow:ellipsis !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${dateStr}">${dateStr}</td>
+                     <td style="padding:8px 6px; color:#334155; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; text-overflow:ellipsis !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${shiftStr}">${shiftStr}</td>
+                     <td style="padding:8px 6px; font-weight:700; color:#002F70; font-size:12px; white-space:nowrap !important; overflow:hidden !important; text-overflow:ellipsis !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fuelStr}">${fuelStr}</td>
+-                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#0f172a; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(r.beginning)}">${fmt(r.beginning)}</td>
+-                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#0f172a; font-weight:700; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(r.ending)}">${fmt(r.ending)}</td>
+-                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#475569; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(r.cal,3)}">${fmt(r.cal,3)}</td>
+-                    <td style="padding:8px 6px; text-align:right; font-weight:700; font-variant-numeric:tabular-nums; color:#0f172a; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(r.volume_liters)} L">${fmt(r.volume_liters)} L</td>
+-                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; color:#334155; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="₱${fmt(r.price_per_liter)}">₱${fmt(r.price_per_liter)}</td>
+-                    <td style="padding:8px 6px; text-align:right; font-weight:800; font-variant-numeric:tabular-nums; color:#002F70; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="₱${fmt(r.amount)}">₱${fmt(r.amount)}</td>
++                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#0f172a; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(rBeg)}">${fmt(rBeg)}</td>
++                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#0f172a; font-weight:700; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(rEnd)}">${fmt(rEnd)}</td>
++                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; font-family:system-ui,-apple-system,sans-serif; color:#475569; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(rCal,3)}">${fmt(rCal,3)}</td>
++                    <td style="padding:8px 6px; text-align:right; font-weight:700; font-variant-numeric:tabular-nums; color:#0f172a; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${fmt(rVol)} L">${fmt(rVol)} L</td>
++                    <td style="padding:8px 6px; text-align:right; font-variant-numeric:tabular-nums; color:#334155; font-size:12px; font-weight:700; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="₱${fmt(rPrice)}">₱${fmt(rPrice)}</td>
++                    <td style="padding:8px 6px; text-align:right; font-weight:800; font-variant-numeric:tabular-nums; color:#002F70; font-size:12px; white-space:nowrap !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="₱${fmt(rAmt)}">₱${fmt(rAmt)}</td>
+                     <td class="cell-encoded-by" style="padding:8px 6px; color:#1e293b; font-weight:700; font-size:11.5px; line-height:1.25 !important; white-space:normal !important; word-break:normal !important; overflow-wrap:break-word !important; overflow:hidden !important; vertical-align:middle; box-sizing:border-box; border:1px solid #e2e8f0;" title="${staffStr}">${staffStr}</td>
+                     <td style="padding:8px 6px; font-size:12px; text-align:center; vertical-align:middle; white-space:nowrap !important; box-sizing:border-box; border:1px solid #e2e8f0;">${badge(r.status)}</td>
+                 </tr>`;
+@@ -7651,7 +7736,7 @@ setTimeout(function() {
+                                         class="txn-btn success">
+                                     <i class="fas fa-chart-bar"></i> My KPI Today
+                                     <?php if ($mh_kpi_txn_count > 0): ?>
+-                                    <span style="background:#dcfce7;padding:1px 7px;border-radius:10px;
++                                    <span id="mh_kpi_badge_count" style="background:#dcfce7;padding:1px 7px;border-radius:10px;
+                                                  font-size:10px;font-weight:800;color:#1d6f42;"><?= (int)$mh_kpi_txn_count ?> txn<?= $mh_kpi_txn_count > 1 ? 's' : '' ?></span>
+                                     <?php endif; ?>
+                                 </button>
+@@ -7672,7 +7757,7 @@ setTimeout(function() {
+                                     <div style="background:#fff;border-radius:8px;padding:12px;
+                                                 border:1px solid #dbeafe;text-align:center;
+                                                 box-shadow:0 1px 4px rgba(0,47,110,.06);">
+-                                        <div style="font-size:26px;font-weight:800;color:#002F6C;line-height:1.1;">
++                                        <div style="font-size:26px;font-weight:800;color:#002F6C;line-height:1.1;" id="mh_kpi_txn_count">
+                                             <?= (int)$mh_kpi_txn_count ?>
+                                         </div>
+                                         <div style="font-size:10px;font-weight:600;color:#64748b;
+@@ -7684,7 +7769,7 @@ setTimeout(function() {
+                                     <div style="background:#fff;border-radius:8px;padding:12px;
+                                                 border:1px solid #dbeafe;text-align:center;
+                                                 box-shadow:0 1px 4px rgba(0,47,110,.06);">
+-                                        <div style="font-size:26px;font-weight:800;color:#002F6C;line-height:1.1;">
++                                        <div style="font-size:26px;font-weight:800;color:#002F6C;line-height:1.1;" id="mh_kpi_items_released">
+                                             <?= (int)$mh_kpi_items_released ?>
+                                         </div>
+                                         <div style="font-size:10px;font-weight:600;color:#64748b;
+@@ -7756,6 +7841,19 @@ setTimeout(function() {
+                                      $mh_is_adjusted = ($mh_val_status === 'adjusted');
+                                      $mh_adj_req     = ($mh_pending_type === 'Adjustment');
+                                      $mh_void_req    = ($mh_pending_type === 'Void');
++
++                                     $mh_pmethod_raw = trim($txn['payment_method'] ?? 'Cash');
++                                     $mh_pmethod_lc  = strtolower($mh_pmethod_raw);
++                                     $mh_is_paid     = ($mh_pay_status === 'paid');
++                                     $mh_is_credit   = (in_array($mh_pmethod_lc, ['credit account', 'credit', 'receivable', 'account receivable'])
++                                                        || !empty($txn['credit_customer_id'])
++                                                        || in_array($mh_pay_status, ['credit account', 'credit', 'account receivable', 'ar']));
++
++                                     // Workflow rule:
++                                     // - Adjust: Allowed for Credit Account / AR while Pending. Paid transactions cannot be adjusted (must be voided if cash).
++                                     // - Void: Allowed for Cash (even if Paid) and Credit Account while Pending. NOT allowed once Credit Account has been Paid.
++                                     $mh_can_adjust  = $mh_is_credit ? (!$mh_is_paid) : (!$mh_is_paid);
++                                     $mh_can_void    = !($mh_is_credit && $mh_is_paid);
+                                  ?>
+                                  <tr class="mh-row">
+                                     <!-- 1. OR NO. / TXN ID -->
+@@ -7878,7 +7976,7 @@ setTimeout(function() {
+                                                 <div style="display:flex;flex-direction:column;gap:3px;width:100%;">
+                                                     <?php if ($mh_adj_req): ?>
+                                                         <span style="width:100%;font-size:10.5px;color:#d97706;background:#fef3c7;border:1px solid #fde68a;padding:3px 2px;border-radius:4px;font-weight:800;text-align:center;white-space:nowrap;" title="Adjustment request pending"><i class="fas fa-clock"></i> Adj. Req</span>
+-                                                    <?php else: ?>
++                                                    <?php elseif ($mh_can_adjust): ?>
+                                                         <button type="button"
+                                                                 data-jo-id="<?= (int)$txn['mt_id'] ?>"
+                                                                 data-jo-source="merchandise_transactions"
+@@ -7898,7 +7996,7 @@ setTimeout(function() {
+                                                         </button>
+                                                     <?php endif; ?>
+ 
+-                                                    <?php if ($enable_void_transaction): ?>
++                                                    <?php if ($enable_void_transaction && $mh_can_void): ?>
+                                                         <?php if ($mh_void_req): ?>
+                                                             <span style="width:100%;font-size:10.5px;color:#dc2626;background:#fee2e2;border:1px solid #fca5a5;padding:3px 2px;border-radius:4px;font-weight:800;text-align:center;white-space:nowrap;" title="Void request pending"><i class="fas fa-clock"></i> Void Req</span>
+                                                         <?php else: ?>
+@@ -7909,6 +8007,7 @@ setTimeout(function() {
+                                                                     data-jo-customer="<?= htmlspecialchars($txn['customer_name'] ?? 'Walk-in Customer') ?>"
+                                                                     data-jo-status="<?= htmlspecialchars($txn['validation_status'] ?? 'Completed') ?>"
+                                                                     data-jo-paystatus="<?= htmlspecialchars($txn['payment_status'] ?? 'Paid') ?>"
++                                                                    data-jo-paymethod="<?= htmlspecialchars($txn['payment_method'] ?? 'Cash') ?>"
+                                                                     data-jo-total="<?= (float)$total_amount ?>"
+                                                                     onclick="return openRequestVoidModal(event, this);"
+                                                                     class="void-btn"
+@@ -7930,12 +8029,14 @@ setTimeout(function() {
+                             <!-- Rows per page + Pagination controls -->
+                             <div id="mhPaginationFooter" style="display:flex; justify-content:space-between; align-items:center; padding:14px 20px; border-top:1px solid #e2e8f0; background:#ffffff; border-radius:0 0 12px 12px; font-size:13px; color:#475569; flex-wrap:wrap; gap:12px;">
+                                 <div style="display:flex; align-items:center;">
+-                                    <span id="mhShowingEntriesText" style="font-size:13px; color:#64748b; font-weight:600;">Showing 1–10 of 10 entries</span>
++                                    <span id="mhShowingEntriesText" style="font-size:13px; color:#64748b; font-weight:600;">Showing <?= empty($mh_recent) ? '0' : '1–'.min(10, count($mh_recent)) ?> of <?= count($mh_recent) ?> entries</span>
+                                 </div>
+                                 <div style="display:flex; align-items:center; gap:16px;">
+                                     <div style="display:flex; align-items:center; gap:8px;">
+                                         <label style="margin:0; font-weight:600; color:#64748b; font-size:13px;">Rows per page:</label>
+                                         <select id="mhPerPage" onchange="mhChangePerPage()" style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:600; background:transparent !important; color:#334155; outline:none; cursor:pointer;">
++                                            <option value="2">2</option>
++                                            <option value="5">5</option>
+                                             <option value="10" selected>10</option>
+                                             <option value="20">20</option>
+                                             <option value="50">50</option>
+@@ -7945,13 +8046,13 @@ setTimeout(function() {
+                                     <div style="display:flex; align-items:center; gap:6px;">
+                                         <button id="mhPrevBtn" onclick="mhGoPage(mhState.page - 1)" 
+                                                 style="width:32px; height:32px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; cursor:not-allowed; color:#cbd5e1; display:flex; align-items:center; justify-content:center; transition: all 0.2s;"
+-                                                onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';">
++                                                onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';" disabled>
+                                             <i class="fas fa-chevron-left"></i>
+                                         </button>
+-                                        <span id="mhPageLabel" style="color:#334155; font-size:13px; font-weight:600; padding:0 4px;">Page 1 of 1</span>
++                                        <span id="mhPageLabel" style="color:#334155; font-size:13px; font-weight:600; padding:0 4px;">Page 1 of <?= max(1, ceil(count($mh_recent) / 10)) ?></span>
+                                         <button id="mhNextBtn" onclick="mhGoPage(mhState.page + 1)" 
+-                                                style="width:32px; height:32px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; cursor:not-allowed; color:#cbd5e1; display:flex; align-items:center; justify-content:center; transition: all 0.2s;"
+-                                                onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';">
++                                                style="width:32px; height:32px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; cursor:<?= count($mh_recent) > 10 ? 'pointer' : 'not-allowed' ?>; color:<?= count($mh_recent) > 10 ? '#475569' : '#cbd5e1' ?>; display:flex; align-items:center; justify-content:center; transition: all 0.2s;"
++                                                onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';" <?= count($mh_recent) > 10 ? '' : 'disabled' ?>>
+                                             <i class="fas fa-chevron-right"></i>
+                                         </button>
+                                     </div>
+@@ -8084,6 +8185,15 @@ setTimeout(function() {
+                                     $jom_is_void = in_array($jom_vstatus,['voided','cancelled','canceled','void']);
+                                     $jom_void_req = ($jom_pr && $jom_pr['request_type'] === 'Void');
+                                     $jom_adj_req  = ($jom_pr && $jom_pr['request_type'] === 'Adjustment');
++
++                                    $jom_pmethod_raw = trim($jom['payment_method'] ?? 'Cash');
++                                    $jom_pmethod_lc  = strtolower($jom_pmethod_raw);
++                                    $jom_is_paid     = ($jps === 'paid');
++                                    $jom_is_credit   = (in_array($jom_pmethod_lc, ['credit account', 'credit', 'receivable', 'account receivable'])
++                                                        || !empty($jom['credit_customer_id'])
++                                                        || in_array($jps, ['credit account', 'credit', 'account receivable', 'ar']));
++                                    $jom_can_adjust  = $jom_is_credit ? (!$jom_is_paid) : (!$jom_is_paid);
++                                    $jom_can_void    = !($jom_is_credit && $jom_is_paid);
+                                 ?>
+                                 <tr class="jom-row" onclick="window.viewMerchandiseDetails('<?= addslashes($jom['transaction_id'] ?? $jom_id) ?>')" title="Click to view details">
+                                     <!-- 1. TXN ID -->
+@@ -8172,7 +8282,7 @@ setTimeout(function() {
+                                                 <div style="display:flex;flex-direction:column;gap:3px;width:100%;">
+                                                     <?php if ($jom_adj_req): ?>
+                                                         <span style="width:100%;font-size:10.5px;color:#d97706;background:#fef3c7;border:1px solid #fde68a;padding:3px 2px;border-radius:4px;font-weight:800;text-align:center;white-space:nowrap;" title="Adjustment request pending"><i class="fas fa-clock"></i> Adj. Req</span>
+-                                                    <?php else: ?>
++                                                    <?php elseif ($jom_can_adjust): ?>
+                                                         <button type="button"
+                                                                 data-jom-id="<?= $jom_id ?>"
+                                                                 data-jom-tid="<?= $jom_tid ?>"
+@@ -8195,7 +8305,7 @@ setTimeout(function() {
+                                                         </button>
+                                                     <?php endif; ?>
+ 
+-                                                    <?php if ($enable_void_transaction): ?>
++                                                    <?php if ($enable_void_transaction && $jom_can_void): ?>
+                                                         <?php if ($jom_void_req): ?>
+                                                             <span style="width:100%;font-size:10.5px;color:#dc2626;background:#fee2e2;border:1px solid #fca5a5;padding:3px 2px;border-radius:4px;font-weight:800;text-align:center;white-space:nowrap;" title="Void request pending"><i class="fas fa-clock"></i> Void Req</span>
+                                                         <?php else: ?>
+@@ -8205,6 +8315,7 @@ setTimeout(function() {
+                                                                     data-jom-customer="<?= $jom_cname ?>"
+                                                                     data-jom-status="<?= htmlspecialchars($jom['validation_status'] ?? 'Completed') ?>"
+                                                                     data-jom-paystatus="<?= htmlspecialchars($jom_pstatus) ?>"
++                                                                    data-jom-paymethod="<?= htmlspecialchars($jom['payment_method'] ?? 'Cash') ?>"
+                                                                     data-jom-total="<?= (float)$jom_total_amt ?>"
+                                                                     data-jom-service="<?= $jom_service ?>"
+                                                                     data-jom-plate="<?= $jom_plate ?>"
+@@ -8230,24 +8341,27 @@ setTimeout(function() {
+ 
+                             <!-- Pagination Footer -->
+                             <div id="jomPaginationFooter" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-top:1px solid #e2e8f0;background:#ffffff;border-radius:0 0 12px 12px;font-size:13.5px;color:#475569;flex-wrap:wrap;gap:12px;">
+-                                <div><span id="jomShowingEntriesText" style="font-size:13.5px;color:#475569;font-weight:700;">Showing 1–<?= min(10,count($jom_recent)) ?> of <?= count($jom_recent) ?> entries</span></div>
++                                <div><span id="jomShowingEntriesText" style="font-size:13.5px;color:#475569;font-weight:700;">Showing <?= empty($jom_recent) ? '0' : '1–'.min(10,count($jom_recent)) ?> of <?= count($jom_recent) ?> entries</span></div>
+                                 <div style="display:flex;align-items:center;gap:16px;">
+                                     <div style="display:flex;align-items:center;gap:8px;">
+                                         <label style="margin:0;font-weight:700;color:#334155;font-size:13.5px;">Rows per page:</label>
+                                         <select id="jomPerPage" onchange="jomChangePerPage()" style="padding:5px 10px;border:1.5px solid #cbd5e1;border-radius:6px;font-size:13.5px;font-weight:700;background:transparent;color:#0f172a;outline:none;cursor:pointer;">
++                                            <option value="2">2</option>
++                                            <option value="5">5</option>
+                                             <option value="10" selected>10</option>
+                                             <option value="20">20</option>
+                                             <option value="50">50</option>
++                                            <option value="100">100</option>
+                                         </select>
+                                     </div>
+                                     <div style="display:flex;align-items:center;gap:6px;">
+                                         <button id="jomPrevBtn" onclick="jomGoPage(jomState.page-1)"
+-                                                style="width:34px;height:34px;background:#fff;border:1.5px solid #cbd5e1;border-radius:6px;cursor:not-allowed;color:#cbd5e1;display:flex;align-items:center;justify-content:center;">
++                                                style="width:34px;height:34px;background:#fff;border:1.5px solid #cbd5e1;border-radius:6px;cursor:not-allowed;color:#cbd5e1;display:flex;align-items:center;justify-content:center;" disabled>
+                                             <i class="fas fa-chevron-left"></i>
+                                         </button>
+                                         <span id="jomPageLabel" style="color:#0f172a;font-size:13.5px;font-weight:700;padding:0 6px;">Page 1 of <?= max(1,ceil(count($jom_recent)/10)) ?></span>
+                                         <button id="jomNextBtn" onclick="jomGoPage(jomState.page+1)"
+-                                                style="width:34px;height:34px;background:#fff;border:1.5px solid #cbd5e1;border-radius:6px;cursor:<?= count($jom_recent)>10?'pointer':'not-allowed' ?>;color:<?= count($jom_recent)>10?'#002F70':'#cbd5e1' ?>;display:flex;align-items:center;justify-content:center;">
++                                                style="width:34px;height:34px;background:#fff;border:1.5px solid #cbd5e1;border-radius:6px;cursor:<?= count($jom_recent)>10?'pointer':'not-allowed' ?>;color:<?= count($jom_recent)>10?'#002F70':'#cbd5e1' ?>;display:flex;align-items:center;justify-content:center;" <?= count($jom_recent)>10?'':'disabled' ?>>
+                                             <i class="fas fa-chevron-right"></i>
+                                         </button>
+                                     </div>
+@@ -8269,8 +8383,10 @@ setTimeout(function() {
+                         function mhRender() {
+                             var rows = document.querySelectorAll('#mhTableBody .mh-row');
+                             var total = rows.length;
+-                            var perPage = mhState.per_page || 10;
+-                            var page = mhState.page;
++                            var perPageEl = document.getElementById('mhPerPage');
++                            var perPage = (perPageEl ? parseInt(perPageEl.value, 10) : mhState.per_page) || 10;
++                            mhState.per_page = perPage;
++                            var page = mhState.page || 1;
+ 
+                             var totalPages = Math.max(1, Math.ceil(total / perPage));
+                             if (page > totalPages) { mhState.page = page = totalPages; }
+@@ -8307,21 +8423,28 @@ setTimeout(function() {
+                             }
+                         }
+ 
++                        window.mhRender = mhRender;
+                         window.mhState = mhState;
+                         window.mhGoPage = function(p) {
+                             var rows = document.querySelectorAll('#mhTableBody .mh-row');
+-                            var totalPages = Math.max(1, Math.ceil(rows.length / (mhState.per_page || 10)));
++                            var perPage = mhState.per_page || 10;
++                            var totalPages = Math.max(1, Math.ceil(rows.length / perPage));
+                             if (p < 1 || p > totalPages) return;
+                             mhState.page = p;
+                             mhRender();
+                         };
+                         window.mhChangePerPage = function() {
+                             var sel = document.getElementById('mhPerPage');
+-                            if (sel) mhState.per_page = parseInt(sel.value, 10);
++                            if (sel) mhState.per_page = parseInt(sel.value, 10) || 10;
+                             mhState.page = 1;
+                             mhRender();
+                         };
+ 
++                        var mhSelEl = document.getElementById('mhPerPage');
++                        if (mhSelEl) {
++                            mhSelEl.addEventListener('change', window.mhChangePerPage);
++                        }
++
+                         // ── Tab switcher ──────────────────────────────────────
+                         window.switchMerchTab = function switchMerchTab(tab) {
+                             var isHistory = (tab === 'history');
+@@ -8363,6 +8486,13 @@ setTimeout(function() {
+                             var headerBtns = document.getElementById('merchHistoryHeaderButtons');
+                             if (headerBtns) headerBtns.style.display = (!isForm) ? 'flex' : 'none';
+ 
++                            if (isHistory && typeof window.mhRender === 'function') {
++                                window.mhRender();
++                            }
++                            if (isCombined && typeof window.jomRender === 'function') {
++                                window.jomRender();
++                            }
++
+                             // Update URL
+                             if (window.history && window.history.replaceState) {
+                                 var url = new URL(window.location.href);
+@@ -8392,8 +8522,10 @@ setTimeout(function() {
+                         function jomRender() {
+                             var rows = document.querySelectorAll('#jomTableBody .jom-row');
+                             var total = rows.length;
+-                            var perPage = jomState.per_page;
+-                            var page = jomState.page;
++                            var perPageEl = document.getElementById('jomPerPage');
++                            var perPage = (perPageEl ? parseInt(perPageEl.value, 10) : jomState.per_page) || 10;
++                            jomState.per_page = perPage;
++                            var page = jomState.page || 1;
+                             var totalPages = Math.max(1, Math.ceil(total / perPage));
+                             if (page > totalPages) jomState.page = page = totalPages;
+                             if (page < 1) jomState.page = page = 1;
+@@ -8409,22 +8541,28 @@ setTimeout(function() {
+                             if (prev) { prev.disabled=(page<=1); prev.style.cursor=prev.disabled?'not-allowed':'pointer'; prev.style.color=prev.disabled?'#cbd5e1':'#475569'; }
+                             if (next) { next.disabled=(page>=totalPages); next.style.cursor=next.disabled?'not-allowed':'pointer'; next.style.color=next.disabled?'#cbd5e1':'#475569'; }
+                         }
++                        window.jomRender = jomRender;
+                         window.jomState = jomState;
+                         window.jomGoPage = function(p) {
+                             var rows = document.querySelectorAll('#jomTableBody .jom-row');
+-                            var totalPages = Math.max(1, Math.ceil(rows.length / (jomState.per_page||10)));
++                            var perPage = jomState.per_page || 10;
++                            var totalPages = Math.max(1, Math.ceil(rows.length / perPage));
+                             if (p < 1 || p > totalPages) return;
+                             jomState.page = p; jomRender();
+                         };
+                         window.jomChangePerPage = function() {
+                             var sel = document.getElementById('jomPerPage');
+-                            if (sel) jomState.per_page = parseInt(sel.value, 10);
++                            if (sel) jomState.per_page = parseInt(sel.value, 10) || 10;
+                             jomState.page = 1; jomRender();
+                         };
++                        var jomSelEl = document.getElementById('jomPerPage');
++                        if (jomSelEl) {
++                            jomSelEl.addEventListener('change', window.jomChangePerPage);
++                        }
+                         jomRender();
+-                        // ── 10-SECOND REAL-TIME AUTO REFRESH FOR MERCHANDISE HISTORY ──
++                        // ── REAL-TIME AUTO REFRESH FOR MERCHANDISE & COMBINED HISTORY ──
+                         var _isRefreshingMH = false;
+-                        async function autoRefreshMerchandiseHistory() {
++                        async function autoRefreshMerchandiseHistory(force) {
+                             if (_isRefreshingMH) return;
+                             if (document.hidden) return; // Skip if tab is in background
+ 
+@@ -8433,43 +8571,50 @@ setTimeout(function() {
+                             var vm = document.getElementById('viewMerchandiseModal');
+                             if (vm && vm.style.display !== 'none' && vm.style.display !== '') return;
+ 
+-                            // Only refresh if Merchandise History tab is currently visible
+-                            var histPanel = document.getElementById('merchTab_history');
+-                            if (!histPanel || histPanel.style.display === 'none') return;
+-
+-                            // Do not refresh if user is currently interacting with an input or dropdown
++                            // Do not refresh if user is currently typing in an input
+                             var activeEl = document.activeElement;
+-                            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT') && histPanel.contains(activeEl)) return;
++                            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') && !activeEl.readOnly && !activeEl.disabled) {
++                                return;
++                            }
+ 
+                             try {
+                                 _isRefreshingMH = true;
+-                                var fetchUrl = new URL(window.location.href);
+-                                fetchUrl.searchParams.set('ajax_mh', '1');
+-
+-                                var resp = await fetch(fetchUrl.toString(), {
+-                                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+-                                });
+-                                if (!resp.ok) return;
+-                                var data = await resp.json();
+-
+-                                if (data && data.kpis) {
+-                                    if (document.getElementById('mhKpiTxnCount') && typeof data.kpis.txn_count !== 'undefined') {
+-                                        document.getElementById('mhKpiTxnCount').textContent = data.kpis.txn_count;
+-                                    }
+-                                    if (document.getElementById('mhKpiTotalEncoded') && typeof data.kpis.total_encoded !== 'undefined') {
+-                                        document.getElementById('mhKpiTotalEncoded').textContent = data.kpis.total_encoded;
+-                                    }
++                                if (window.PetronRealtime) {
++                                    await window.PetronRealtime.refreshActiveView({ force: !!force });
+                                 }
+-                                // Silent KPI refresh only — NEVER reload page in background
++                                // Update Merchandise KPIs smoothly
++                                try {
++                                    const mhResp = await fetch('staff_transactions_hub.php?section=merchandise&ajax_mh=1', {
++                                        headers: { 'X-Requested-With': 'XMLHttpRequest' }
++                                    });
++                                    if (mhResp.ok) {
++                                        const mhData = await mhResp.json();
++                                        if (mhData && mhData.success && mhData.kpis) {
++                                            const tc = document.getElementById('mh_kpi_txn_count');
++                                            if (tc) tc.textContent = mhData.kpis.txn_count;
++                                            const ir = document.getElementById('mh_kpi_items_released');
++                                            if (ir) ir.textContent = mhData.kpis.items_released;
++                                            const te = document.getElementById('mh_kpi_total_encoded');
++                                            if (te) te.textContent = mhData.kpis.total_encoded;
++                                            const bc = document.getElementById('mh_kpi_badge_count');
++                                            if (bc) bc.textContent = mhData.kpis.txn_count + ' txn' + (mhData.kpis.txn_count > 1 ? 's' : '');
++                                        }
++                                    }
++                                } catch (_) {}
++                                if (typeof window.mhRender === 'function') window.mhRender();
++                                if (typeof window.jomRender === 'function') window.jomRender();
+                             } catch (e) {
+-                                // Silent background fail
++                                // Silent background catch
+                             } finally {
+                                 _isRefreshingMH = false;
+                             }
+                         }
++                        window.autoRefreshMerchandiseHistory = autoRefreshMerchandiseHistory;
+ 
+                         // Run silent background refresh every 10 seconds
+-                        setInterval(autoRefreshMerchandiseHistory, 10000);
++                        setInterval(function() {
++                            autoRefreshMerchandiseHistory(false);
++                        }, 10000);
+ 
+                         // Init
+                         mhRender();
+@@ -8694,8 +8839,10 @@ setTimeout(function() {
+                         </div>
+                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                             <div class="txn-field">
+-                                <label style="font-size:10px;font-weight:600;color:#475569;">PO Number (Opt)</label>
+-                                <input type="text" id="creditPoNumber" class="txn-input" style="font-size:12px;padding:7px 10px;" placeholder="PO #">
++                                <label style="font-size:10px;font-weight:600;color:#475569;display:flex;align-items:center;gap:4px;">
++                                    PO Number <span style="background:#e0f2fe;color:#0369a1;font-size:9px;padding:1px 5px;border-radius:4px;font-weight:700;">AUTO</span>
++                                </label>
++                                <input type="text" id="creditPoNumber" class="txn-input" style="font-size:12px;padding:7px 10px;background:#f8fafc;font-weight:600;letter-spacing:0.3px;color:#0f172a;" placeholder="Auto-generated (e.g. PO-20261012-0001)">
+                             </div>
+                             <div class="txn-field">
+                                 <label style="font-size:10px;font-weight:600;color:#475569;">Due Date</label>
+@@ -13768,21 +13915,73 @@ setTimeout(function() {
+                 calcLoyaltyPoints();
+             }
+ 
++            if (method === 'Credit Account') {
++                const poEl = document.getElementById('creditPoNumber');
++                if (poEl && (!poEl.value.trim() || poEl.dataset.autoGenerated === 'true')) {
++                    const custVal = document.getElementById('creditCustomer')?.value || '';
++                    poEl.value = window.generateAutoPoNumber(custVal);
++                    poEl.dataset.autoGenerated = 'true';
++                }
++                const dueEl = document.getElementById('creditDueDate');
++                if (dueEl && !dueEl.value) {
++                    const due = new Date();
++                    due.setDate(due.getDate() + 30);
++                    dueEl.value = due.toISOString().split('T')[0];
++                }
++            }
++
+             computeChange();
+             onPaymentAmountInput();
+             updatePaymentStatusBadge();
+             updateCheckoutBtn();
+         }
+ 
++        window.generateAutoPoNumber = function generateAutoPoNumber(custId) {
++            const today = new Date();
++            const yyyy = today.getFullYear();
++            const mm = String(today.getMonth() + 1).padStart(2, '0');
++            const dd = String(today.getDate()).padStart(2, '0');
++            const dateStr = `${yyyy}${mm}${dd}`;
++            const rand = Math.floor(1000 + Math.random() * 9000);
++            if (custId && !isNaN(parseInt(custId))) {
++                return `PO-${dateStr}-${String(custId).padStart(4, '0')}-${rand.toString().slice(-2)}`;
++            }
++            return `PO-${dateStr}-${rand}`;
++        };
++
++        window.regeneratePoNumber = function regeneratePoNumber() {
++            const custVal = document.getElementById('creditCustomer')?.value || '';
++            const poEl = document.getElementById('creditPoNumber');
++            if (poEl) {
++                poEl.value = window.generateAutoPoNumber(custVal);
++                poEl.dataset.autoGenerated = 'true';
++                if (typeof showTxnAlert === 'function') {
++                    showTxnAlert('Generated PO Number: ' + poEl.value, 'info');
++                }
++            }
++        };
++
+         window.onCreditCustomerChange = function onCreditCustomerChange() {
+             const select = document.getElementById('creditCustomer');
+             const compInput = document.getElementById('creditCompanyName');
+             const accInput  = document.getElementById('creditAccountNumber');
++            const poInput   = document.getElementById('creditPoNumber');
++            const dueInput  = document.getElementById('creditDueDate');
++
+             if (select && select.value) {
+                 const opt  = select.options[select.selectedIndex];
+                 const name = opt.getAttribute('data-name') || '';
+                 if (compInput) compInput.value = name;
+                 if (accInput && !accInput.value) accInput.value = 'ACC-' + String(select.value).padStart(5, '0');
++                if (poInput && (!poInput.value.trim() || poInput.dataset.autoGenerated === 'true' || poInput.value.startsWith('PO-'))) {
++                    poInput.value = window.generateAutoPoNumber(select.value);
++                    poInput.dataset.autoGenerated = 'true';
++                }
++                if (dueInput && !dueInput.value) {
++                    const due = new Date();
++                    due.setDate(due.getDate() + 30);
++                    dueInput.value = due.toISOString().split('T')[0];
++                }
+             } else {
+                 if (compInput) compInput.value = '';
+                 if (accInput)  accInput.value  = '';
+@@ -14124,7 +14323,7 @@ setTimeout(function() {
+                 credit_customer_id:    isCredit ? (parseInt(document.getElementById('creditCustomer')?.value) || null) : null,
+                 credit_company_name:   isCredit ? (document.getElementById('creditCompanyName')?.value || null) : null,
+                 credit_account_number: isCredit ? (document.getElementById('creditAccountNumber')?.value || null) : null,
+-                credit_po_number:      isCredit ? (document.getElementById('creditPoNumber')?.value || null) : null,
++                credit_po_number:      isCredit ? ((document.getElementById('creditPoNumber')?.value || '').trim() || (typeof window.generateAutoPoNumber === 'function' ? window.generateAutoPoNumber(document.getElementById('creditCustomer')?.value) : 'PO-' + Date.now())) : null,
+                 credit_due_date:       isCredit ? (document.getElementById('creditDueDate')?.value || null) : null,
+                 
+                 loyalty_type:            (isPvc || loyaltyProgram !== 'No Loyalty') ? 'Petron Value Card (PVC)' : null,
+@@ -14250,6 +14449,15 @@ setTimeout(function() {
+                     if (pmSel) pmSel.selectedIndex = 0;
+                     if (typeof onPaymentChange === 'function') onPaymentChange();
+ 
++                    // Trigger instant live UI update so newly created transaction appears immediately
++                    if (window.PetronRealtime) {
++                        PetronRealtime.trigger(['notifications', 'badges', 'dashboard', 'transactions']);
++                        PetronRealtime.refreshActiveView({ force: true });
++                    }
++                    if (typeof autoRefreshJobOrderTracker === 'function') {
++                        autoRefreshJobOrderTracker(true);
++                    }
++
+                     // If job order (has service), show clean banner alert without redundant buttons
+                     if (hasService) {
+                         showTxnAlert('Job Order processed successfully! Official Receipt opened for printing.', 'success');
+@@ -14488,8 +14696,8 @@ setTimeout(function() {
+                 <div style="font-size:20px;font-weight:800;color:#002F70;" id="jo_kpi_total_sales">₱<?= number_format($kpi_total_encoded, 2) ?></div>
+             </div>
+             <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;text-align:center;">
+-                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Completed JO</div>
+-                <div style="font-size:24px;font-weight:800;color:#16a34a;" id="jo_kpi_completed_jo"><?= (int)array_reduce($job_orders, fn($c,$j) => $c + (($j['status']??'')==='Completed'?1:0), 0) ?></div>
++                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Released JO</div>
++                <div style="font-size:24px;font-weight:800;color:#16a34a;" id="jo_kpi_released_jo" data-kpi="released_jo"><?= (int)($released_jo_count ?? 0) ?></div>
+             </div>
+             <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 16px;text-align:center;">
+                 <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Merchandise Sold</div>
+@@ -14525,10 +14733,6 @@ setTimeout(function() {
+                 <div style="display:flex; align-items:center; gap:8px;">
+                     <i class="fas fa-clipboard-list" style="color:#003d7a; font-size:16px;"></i>
+                     <h3 style="color:#003d7a; margin:0; font-size:15px; font-weight:800;">All Job Orders</h3>
+-                    <span id="joLiveBadge" style="display:inline-flex; align-items:center; gap:5px; background:#dcfce7; color:#15803d; border:1px solid #86efac; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:700; letter-spacing:0.3px;">
+-                        <span class="jo-live-pulse-dot"></span>
+-                        <span>LIVE UPDATES</span>
+-                    </span>
+                 </div>
+                 <div style="display:flex; align-items:center; gap:10px;">
+                     <span id="joLastUpdatedText" style="font-size:11.5px; color:#64748b; font-weight:600;">
+@@ -14904,6 +15108,13 @@ setTimeout(function() {
+                                 $jo_balance = (float)($job['balance_due'] ?? 0);
+                                 if ($jo_balance <= 0.009 && $jo_total > 0) $jo_balance = max(0, $jo_total - $jo_paid);
+                                 $labor_fee_val = (float)($job['actual_labor_cost'] ?? $job['estimated_labor_cost'] ?? 0);
++
++                                $jo_pmethod_lc = strtolower(trim($pay_method));
++                                $jo_pstat_lc   = strtolower(trim($pay_status));
++                                $jo_is_paid    = ($jo_pstat_lc === 'paid' || $jo_balance <= 0.009);
++                                $jo_is_credit  = ($jo_pmethod_lc === 'credit account' || str_contains($jo_pmethod_lc, 'credit') || str_contains($jo_pmethod_lc, 'receivable') || in_array($pay_status, ['Credit Account', 'Credit Transaction', 'Credit', 'Receivables/Credit', 'A/R']) || !empty($job['credit_customer_id']));
++                                $jo_can_adjust = $jo_is_credit ? (!$jo_is_paid) : (!$jo_is_paid);
++                                $jo_can_void   = !($jo_is_credit && $jo_is_paid);
+                                 
+                                 // Prepare JO data for modals (JSON-encoded)
+                                 $jo_or_number = '';
+@@ -15018,6 +15229,7 @@ setTimeout(function() {
+                                         </button>
+                                     <?php endif; ?>
+ 
++                                    <?php if ($jo_can_adjust): ?>
+                                     <button type="button"
+                                             data-jo-id="<?= (int)$job['id'] ?>"
+                                             data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+@@ -15037,7 +15249,8 @@ setTimeout(function() {
+                                             class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
+                                         <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
+                                     </button>
+-                                    <?php if ($enable_void_transaction): ?>
++                                    <?php endif; ?>
++                                    <?php if ($enable_void_transaction && $jo_can_void): ?>
+                                     <button type="button"
+                                             data-jo-id="<?= (int)$job['id'] ?>"
+                                             data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+@@ -15045,6 +15258,7 @@ setTimeout(function() {
+                                             data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
+                                             data-jo-status="<?= htmlspecialchars($wf_label) ?>"
+                                             data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
++                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
+                                             onclick="return openRequestVoidModal(event, this);"
+                                             class="void-btn">
+                                         <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
+@@ -15060,7 +15274,7 @@ setTimeout(function() {
+                                     </button>
+ 
+ 
+-                                    <?php if ($enable_void_transaction): ?>
++                                    <?php if ($enable_void_transaction && $jo_can_void): ?>
+                                     <button type="button"
+                                             data-jo-id="<?= (int)$job['id'] ?>"
+                                             data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+@@ -15068,6 +15282,7 @@ setTimeout(function() {
+                                             data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
+                                             data-jo-status="<?= htmlspecialchars($wf_label) ?>"
+                                             data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
++                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
+                                             onclick="return openRequestVoidModal(event, this);"
+                                             class="void-btn">
+                                         <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
+@@ -15112,7 +15327,7 @@ setTimeout(function() {
+                                     <?php endif; ?>
+ 
+ 
+-                                    <?php if ($enable_void_transaction): ?>
++                                    <?php if ($enable_void_transaction && $jo_can_void): ?>
+                                     <button type="button"
+                                             data-jo-id="<?= (int)$job['id'] ?>"
+                                             data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+@@ -15120,6 +15335,7 @@ setTimeout(function() {
+                                             data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
+                                             data-jo-status="<?= htmlspecialchars($wf_label) ?>"
+                                             data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
++                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
+                                             onclick="return openRequestVoidModal(event, this);"
+                                             class="void-btn">
+                                         <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
+@@ -15146,6 +15362,7 @@ setTimeout(function() {
+                                         </button>
+                                     <?php endif; ?>
+ 
++                                    <?php if ($jo_can_adjust): ?>
+                                     <button type="button"
+                                             data-jo-id="<?= (int)$job['id'] ?>"
+                                             data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+@@ -15165,7 +15382,8 @@ setTimeout(function() {
+                                             class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
+                                         <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
+                                     </button>
+-                                    <?php if ($enable_void_transaction): ?>
++                                    <?php endif; ?>
++                                    <?php if ($enable_void_transaction && $jo_can_void): ?>
+                                     <button type="button"
+                                             data-jo-id="<?= (int)$job['id'] ?>"
+                                             data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+@@ -15173,6 +15391,7 @@ setTimeout(function() {
+                                             data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
+                                             data-jo-status="<?= htmlspecialchars($wf_label) ?>"
+                                             data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
++                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
+                                             onclick="return openRequestVoidModal(event, this);"
+                                             class="void-btn">
+                                         <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
+@@ -15187,6 +15406,7 @@ setTimeout(function() {
+                                         <i class="fas fa-play"></i> Start In Progress
+                                     </button>
+ 
++                                    <?php if ($jo_can_adjust): ?>
+                                     <button type="button"
+                                             data-jo-id="<?= (int)$job['id'] ?>"
+                                             data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+@@ -15206,7 +15426,8 @@ setTimeout(function() {
+                                             class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
+                                         <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
+                                     </button>
+-                                    <?php if ($enable_void_transaction): ?>
++                                    <?php endif; ?>
++                                    <?php if ($enable_void_transaction && $jo_can_void): ?>
+                                     <button type="button"
+                                             data-jo-id="<?= (int)$job['id'] ?>"
+                                             data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
+@@ -15214,6 +15435,7 @@ setTimeout(function() {
+                                             data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
+                                             data-jo-status="<?= htmlspecialchars($wf_label) ?>"
+                                             data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
++                                            data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
+                                             onclick="return openRequestVoidModal(event, this);"
+                                             class="void-btn">
+                                         <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
+@@ -15244,6 +15466,8 @@ setTimeout(function() {
+                         <div style="display:flex; align-items:center; gap:8px;">
+                             <label style="margin:0; font-weight:600; color:#64748b; font-size:13px;">Rows per page:</label>
+                             <select id="joPerPage" onchange="joChangePerPage()" style="padding:4px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:13px; font-weight:600; background:transparent !important; color:#334155; outline:none; cursor:pointer;">
++                                <option value="2">2</option>
++                                <option value="5">5</option>
+                                 <option value="10" selected>10</option>
+                                 <option value="20">20</option>
+                                 <option value="50">50</option>
+@@ -15253,13 +15477,13 @@ setTimeout(function() {
+                         <div style="display:flex; align-items:center; gap:6px;">
+                             <button id="joPrevBtn" onclick="joGoPage(joState.page - 1)" 
+                                     style="width:32px; height:32px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; cursor:not-allowed; color:#cbd5e1; display:flex; align-items:center; justify-content:center; transition: all 0.2s;"
+-                                    onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';">
++                                    onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';" disabled>
+                                 <i class="fas fa-chevron-left"></i>
+                             </button>
+                             <span id="joPageLabel" style="color:#334155; font-size:13px; font-weight:600; padding:0 4px;">Page 1 of <?= max(1, ceil(count($job_orders) / 10)) ?></span>
+                             <button id="joNextBtn" onclick="joGoPage(joState.page + 1)" 
+                                     style="width:32px; height:32px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; cursor:<?= count($job_orders) > 10 ? 'pointer' : 'not-allowed' ?>; color:<?= count($job_orders) > 10 ? '#475569' : '#cbd5e1' ?>; display:flex; align-items:center; justify-content:center; transition: all 0.2s;"
+-                                    onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';">
++                                    onmouseover="if(!this.disabled) this.style.backgroundColor='#f1f5f9';" onmouseout="this.style.backgroundColor='#fff';" <?= count($job_orders) > 10 ? '' : 'disabled' ?>>
+                                 <i class="fas fa-chevron-right"></i>
+                             </button>
+                         </div>
+@@ -15278,7 +15502,8 @@ setTimeout(function() {
+             serviceType: '',
+             search:      '',
+             page:        1,
+-            per_page:    10
++            per_page:    10,
++            totalVisible: 0
+         };
+ 
+         function joApplyFilters() {
+@@ -15369,7 +15594,10 @@ setTimeout(function() {
+ 
+             // Pagination
+             var total      = visibleRows.length;
+-            var perPage    = joState.per_page || 10;
++            joState.totalVisible = total;
++            var perPageEl  = document.getElementById('joPerPage');
++            var perPage    = (perPageEl ? parseInt(perPageEl.value, 10) : joState.per_page) || 10;
++            joState.per_page = perPage;
+             var totalPages = Math.max(1, Math.ceil(total / perPage));
+             if (joState.page > totalPages) { joState.page = totalPages; }
+             if (joState.page < 1) { joState.page = 1; }
+@@ -15407,10 +15635,9 @@ setTimeout(function() {
+         }
+ 
+         function joGoPage(p) {
+-            var rows = document.querySelectorAll('#joUnifiedTable tbody tr');
+-            var visibleCount = 0;
+-            rows.forEach(function(r){ if(r.style.display !== 'none' || r.getAttribute('data-jo-filter')) visibleCount++; });
+-            var totalPages = Math.max(1, Math.ceil(visibleCount / (joState.per_page || 10)));
++            var total = (typeof joState.totalVisible === 'number' && joState.totalVisible >= 0) ? joState.totalVisible : document.querySelectorAll('#joUnifiedTable tbody tr').length;
++            var perPage = joState.per_page || 10;
++            var totalPages = Math.max(1, Math.ceil(total / perPage));
+             if (p < 1 || p > totalPages) return;
+             joState.page = p;
+             joRenderTable();
+@@ -15418,8 +15645,23 @@ setTimeout(function() {
+ 
+         function joChangePerPage() {
+             var sel = document.getElementById('joPerPage');
+-            if (sel) { joState.per_page = parseInt(sel.value, 10); joState.page = 1; joRenderTable(); }
++            if (sel) {
++                joState.per_page = parseInt(sel.value, 10) || 10;
++                joState.page = 1;
++                joRenderTable();
++            }
++        }
++
++        window.joRenderTable = joRenderTable;
++        window.joGoPage = joGoPage;
++        window.joChangePerPage = joChangePerPage;
++        window.joState = joState;
++
++        var joPerPageInput = document.getElementById('joPerPage');
++        if (joPerPageInput) {
++            joPerPageInput.addEventListener('change', joChangePerPage);
+         }
++        joRenderTable();
+ 
+                 function performJobOrderAction(action, joId, joSource, btnElement) {
+             if (!action || !joId) return;
+@@ -15587,10 +15829,11 @@ setTimeout(function() {
+                     '<i class="fas ' + pIcon + '" style="font-size:9.5px;"></i> ' + pLabel + '</span></div>' + amtDetailsHtml;
+             }
+ 
+-            // Update KPI Card if completed_jo provided
+-            if (data.completed_jo !== undefined) {
+-                var kpiEl = document.getElementById('jo_kpi_completed_jo');
+-                if (kpiEl) kpiEl.textContent = data.completed_jo;
++            // Update KPI Card if released_jo or completed_jo provided
++            if (data.released_jo !== undefined || data.completed_jo !== undefined) {
++                var rVal = data.released_jo !== undefined ? data.released_jo : data.completed_jo;
++                var kpiEl = document.getElementById('jo_kpi_released_jo') || document.getElementById('jo_kpi_completed_jo');
++                if (kpiEl) kpiEl.textContent = rVal;
+             }
+ 
+             // Update Actions Cell (cell index 8)
+@@ -15703,7 +15946,9 @@ setTimeout(function() {
+                         };
+                         updateKpi('jo_kpi_total_txns', data.kpis.total_txns);
+                         updateKpi('jo_kpi_total_sales', data.kpis.total_sales);
+-                        updateKpi('jo_kpi_completed_jo', data.kpis.completed_jo);
++                        const relJo = data.kpis.released_jo !== undefined ? data.kpis.released_jo : data.kpis.completed_jo;
++                        updateKpi('jo_kpi_released_jo', relJo);
++                        updateKpi('jo_kpi_completed_jo', relJo);
+                         updateKpi('jo_kpi_merch_sold', data.kpis.merch_sold);
+                     }
+ 
+@@ -15912,6 +16157,13 @@ setTimeout(function() {
+                 '#mhStatusSelect',
+                 '#jomStatusSelect'
+             ]);
++            var joPerPageInput = document.getElementById('joPerPage');
++            if (joPerPageInput) {
++                joPerPageInput.addEventListener('change', joChangePerPage);
++            }
++            if (typeof joRenderTable === 'function') {
++                joRenderTable();
++            }
+         });
+         </script>
+ 
+@@ -16461,6 +16713,10 @@ setTimeout(function() {
+                     if (typeof updateJobOrderRowDOM === 'function') {
+                         updateJobOrderRowDOM(result.data.jo_id, result.data.jo_source, result.data);
+                     }
++                    if (window.PetronRealtime) {
++                        PetronRealtime.trigger(['notifications', 'badges', 'dashboard', 'transactions']);
++                        PetronRealtime.refreshActiveView({ force: true });
++                    }
+                     setTimeout(function() {
+                         if (typeof autoRefreshJobOrderTracker === 'function') {
+                             autoRefreshJobOrderTracker(true);
+@@ -16955,9 +17211,17 @@ setTimeout(function() {
+                             // Normal Active Transaction
+                             var wfStatusLower = (txn.status || txn.workflow_status || '').toLowerCase();
+                             var isFinished = (valStatus === 'released' || valStatus === 'completed' || wfStatusLower === 'released' || wfStatusLower === 'completed');
++                            var payMethodLower = (txn.payment_method || '').toLowerCase();
++                            var payStatusLower = (txn.payment_status || '').toLowerCase();
++                            var isPaid = (payStatusLower === 'paid' || balanceDue <= 0.009);
++                            var isCredit = (payMethodLower.indexOf('credit') !== -1 || payMethodLower.indexOf('receivable') !== -1 || !!txn.credit_customer_id || payStatusLower.indexOf('credit') !== -1 || payStatusLower.indexOf('ar') !== -1);
++
++                            var canAdjust = isCredit ? !isPaid : (!isPaid && !isFinished);
++                            var canVoid = !(isCredit && isPaid);
++
+                             if (settleBtn) settleBtn.style.display = (balanceDue > 0.009) ? 'inline-flex' : 'none';
+-                            if (adjustBtn) adjustBtn.style.display = isFinished ? 'none' : 'inline-flex';
+-                            if (voidBtn) voidBtn.style.display = 'inline-flex';
++                            if (adjustBtn) adjustBtn.style.display = canAdjust ? 'inline-flex' : 'none';
++                            if (voidBtn) voidBtn.style.display = canVoid ? 'inline-flex' : 'none';
+                             if (reprintBtn) reprintBtn.style.display = 'inline-flex';
+                         }
+                     } else {
+@@ -17039,7 +17303,8 @@ setTimeout(function() {
+                     joRef: currentMTData.transaction_id || ('#' + currentMTData.id),
+                     joCustomer: currentMTData.customer_name || 'Walk-in Customer',
+                     joStatus: currentMTData.validation_status || 'Pending',
+-                    joPaystatus: currentMTData.payment_status || 'Paid'
++                    joPaystatus: currentMTData.payment_status || 'Paid',
++                    joPaymethod: currentMTData.payment_method || 'Cash'
+                 },
+                 getAttribute: function(name) {
+                     var map = {
+@@ -17048,7 +17313,8 @@ setTimeout(function() {
+                         'data-jo-ref': currentMTData.transaction_id || ('#' + currentMTData.id),
+                         'data-jo-customer': currentMTData.customer_name || 'Walk-in Customer',
+                         'data-jo-status': currentMTData.validation_status || 'Pending',
+-                        'data-jo-paystatus': currentMTData.payment_status || 'Paid'
++                        'data-jo-paystatus': currentMTData.payment_status || 'Paid',
++                        'data-jo-paymethod': currentMTData.payment_method || 'Cash'
+                     };
+                     return map[name] || '';
+                 }
+@@ -17249,7 +17515,16 @@ setTimeout(function() {
+                         ? '<i class="fas fa-check"></i> Transaction adjusted successfully.'
+                         : '<i class="fas fa-check"></i> ' + (data.message || 'Adjustment request submitted! Status: ADJUSTMENT REQUESTED.');
+                     showTxnAlert(msg, 'success');
+-                    setTimeout(function() { location.reload(); }, 1200);
++                    if (window.PetronRealtime) {
++                        PetronRealtime.trigger(['notifications', 'badges', 'dashboard', 'transactions']);
++                        PetronRealtime.refreshActiveView({ force: true });
++                    }
++                    if (typeof autoRefreshJobOrderTracker === 'function') {
++                        autoRefreshJobOrderTracker(true);
++                    }
++                    if (typeof autoRefreshMerchandiseHistory === 'function') {
++                        autoRefreshMerchandiseHistory(true);
++                    }
+                 } else {
+                     showTxnAlert('<i class="fas fa-times-circle"></i> ' + (data.error || 'Failed to apply adjustment'), 'error');
+                 }
+@@ -17311,7 +17586,16 @@ setTimeout(function() {
+                         ? '<i class="fas fa-check"></i> Transaction voided successfully.'
+                         : '<i class="fas fa-check"></i> ' + (data.message || 'Void request submitted! Status: VOID REQUESTED.');
+                     showTxnAlert(msg, 'success');
+-                    setTimeout(function() { location.reload(); }, 1200);
++                    if (window.PetronRealtime) {
++                        PetronRealtime.trigger(['notifications', 'badges', 'dashboard', 'transactions']);
++                        PetronRealtime.refreshActiveView({ force: true });
++                    }
++                    if (typeof autoRefreshJobOrderTracker === 'function') {
++                        autoRefreshJobOrderTracker(true);
++                    }
++                    if (typeof autoRefreshMerchandiseHistory === 'function') {
++                        autoRefreshMerchandiseHistory(true);
++                    }
+                 } else {
+                     showTxnAlert('<i class="fas fa-times-circle"></i> ' + (data.error || 'Failed to void transaction'), 'error');
+                 }
+@@ -17512,6 +17796,7 @@ setTimeout(function() {
+                 if (prev) { prev.disabled = (page <= 1); prev.style.opacity = (page <= 1) ? '0.4' : '1'; }
+                 if (next) { next.disabled = (page >= totalPages); next.style.opacity = (page >= totalPages) ? '0.4' : '1'; }
+             }
++            window.fhRender = fhRender;
+             window.fhState = fhState;
+             window.fhGoPage = function(p) {
+                 var rows = document.querySelectorAll('#fhTableBody .fh-row');
+@@ -18510,9 +18795,16 @@ window.viewMerchandiseDetails = function(txnId, btn) {
+             } else {
+                 var wfStatusLower = (txn.status || txn.workflow_status || '').toLowerCase();
+                 var isFinished = (valStatus === 'released' || valStatus === 'completed' || wfStatusLower === 'released' || wfStatusLower === 'completed');
++                var payMethodLower = (txn.payment_method || '').toLowerCase();
++                var payStatusLower = (txn.payment_status || '').toLowerCase();
++                var isPaid = (payStatusLower === 'paid' || balDue <= 0.009);
++                var isCredit = (payMethodLower.indexOf('credit') !== -1 || payMethodLower.indexOf('receivable') !== -1 || !!txn.credit_customer_id || payStatusLower.indexOf('credit') !== -1 || payStatusLower.indexOf('ar') !== -1);
++                var canAdjust = isCredit ? !isPaid : (!isPaid && !isFinished);
++                var canVoid = !(isCredit && isPaid);
++
+                 if (settleBtn) settleBtn.style.display = (balDue > 0.009) ? 'inline-flex' : 'none';
+-                if (adjustBtn) adjustBtn.style.display = isFinished ? 'none' : 'inline-flex';
+-                if (voidBtn) voidBtn.style.display = 'inline-flex';
++                if (adjustBtn) adjustBtn.style.display = canAdjust ? 'inline-flex' : 'none';
++                if (voidBtn) voidBtn.style.display = canVoid ? 'inline-flex' : 'none';
+                 if (reprintBtn) reprintBtn.style.display = 'inline-flex';
+             }
+         })
+@@ -18885,3 +19177,5 @@ document.addEventListener('DOMContentLoaded', function() {
+     window.addEventListener('load', initAllPetronDropdowns);
+ })();
+ </script>
++<?php include __DIR__ . '/../partials/footer.php'; ?>
++

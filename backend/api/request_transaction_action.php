@@ -49,14 +49,14 @@ if (!in_array($record_source, ['merchandise_transactions','job_orders'])) $recor
 
 try {
     if ($record_source === 'job_orders') {
-        $chk = $pdo->prepare("SELECT id, status, customer_name, job_order_number FROM job_orders WHERE id = ? AND station_id = ? LIMIT 1");
+        $chk = $pdo->prepare("SELECT id, status, customer_name, job_order_number, payment_status, payment_method, credit_customer_id FROM job_orders WHERE id = ? AND station_id = ? LIMIT 1");
         $chk->execute([$transaction_id, $station_id]);
         $txn = $chk->fetch(PDO::FETCH_ASSOC);
         $txn_status = $txn['status'] ?? '';
         $is_combined = false;
         $txn_ref_code = $txn['job_order_number'] ?? ('JO-'.$transaction_id);
     } else {
-        $chk = $pdo->prepare("SELECT id, workflow_status, validation_status, customer_name, transaction_type, transaction_id FROM merchandise_transactions WHERE id = ? AND station_id = ? LIMIT 1");
+        $chk = $pdo->prepare("SELECT id, workflow_status, validation_status, customer_name, transaction_type, transaction_id, payment_status, payment_method, credit_customer_id FROM merchandise_transactions WHERE id = ? AND station_id = ? LIMIT 1");
         $chk->execute([$transaction_id, $station_id]);
         $txn = $chk->fetch(PDO::FETCH_ASSOC);
         $txn_status = $txn['validation_status'] ?? ($txn['workflow_status'] ?? '');
@@ -71,8 +71,30 @@ try {
         echo json_encode(['success'=>false,'error'=>"Transaction is already {$txn_status}"]); exit;
     }
 
-    if ($request_type === 'Adjustment' && in_array(strtolower($txn_status), ['released', 'completed'])) {
-        echo json_encode(['success'=>false,'error'=>"Adjustment cannot be requested for a transaction that is already {$txn_status}. Only Void can be requested."]); exit;
+    $pstat_lc = strtolower(trim($txn['payment_status'] ?? ''));
+    $pmeth_lc = strtolower(trim($txn['payment_method'] ?? ''));
+    $is_paid  = ($pstat_lc === 'paid');
+    $is_credit_ar = (str_contains($pmeth_lc, 'credit') || str_contains($pmeth_lc, 'receivable') || !empty($txn['credit_customer_id']) || str_contains($pstat_lc, 'credit') || str_contains($pstat_lc, 'ar'));
+
+    // Rule 1: Adjustment rule
+    // - Paid cash/card/e-wallet cannot be adjusted; must be voided instead.
+    // - Paid credit account (settled receivable) cannot be adjusted.
+    // - Unpaid Account Receivable CAN be adjusted.
+    if ($request_type === 'Adjustment') {
+        if ($is_paid) {
+            echo json_encode(['success'=>false,'error'=>"Adjustment cannot be requested for a transaction that is already Paid. For paid transactions, please request a Void instead."]); exit;
+        }
+        if (!$is_credit_ar && in_array(strtolower($txn_status), ['released', 'completed'])) {
+            echo json_encode(['success'=>false,'error'=>"Adjustment cannot be requested for a transaction that is already {$txn_status}. Only Void can be requested."]); exit;
+        }
+    }
+
+    // Rule 2: Void rule
+    // - Void CANNOT be requested once an Account Receivable has already been paid/settled.
+    if ($request_type === 'Void') {
+        if ($is_credit_ar && $is_paid) {
+            echo json_encode(['success'=>false,'error'=>"Void cannot be requested for an Accounts Receivable transaction that has already been paid/settled."]); exit;
+        }
     }
 
     $dup = $pdo->prepare("SELECT id FROM transaction_requests WHERE transaction_id=? AND record_source=? AND request_type=? AND status='Pending' LIMIT 1");

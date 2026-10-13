@@ -226,6 +226,11 @@
             if (typeof window.refreshLivePageData === 'function') {
                 try { window.refreshLivePageData(); } catch(e) {}
             }
+            if (typeof window.refreshMerchandiseInventoryLive === 'function') {
+                try { await window.refreshMerchandiseInventoryLive(); } catch(e) {}
+                isSyncingData = false;
+                return;
+            }
 
             // 2. Target presentation selectors to dynamically synchronize
             const targetSelectors = [
@@ -239,7 +244,6 @@
                 '#stockRequestsTbody',
                 '#inventoryTable',
                 '#inventoryTbody',
-                '#merchTable',
                 '#jobOrderTracker',
                 '#jobOrderTrackerTbody',
                 '#usersTable',
@@ -326,6 +330,9 @@
 
             // 6. Re-apply active filters so auto-load never wipes out filter selections
             if (anyTableUpdated) {
+                if (typeof window.applyFilters === 'function') {
+                    try { window.applyFilters(); } catch(e) {}
+                }
                 if (typeof window.filterTable === 'function') {
                     try { window.filterTable(); } catch(e) {}
                 }

@@ -399,7 +399,7 @@ require_once __DIR__ . '/../partials/header.php';
                     <div class="rm-form-group" style="grid-column: span 2;">
                         <label>Terms / Notes / Return Policy</label>
                         <textarea name="terms_notes" id="f_terms_notes"
-                                  placeholder="e.g. Items once sold cannot be returned. Fuels non-refundable." <?= !$can_edit_template ? 'readonly' : '' ?>><?= $h($val_terms) ?></textarea>
+                                  placeholder="e.g. Items once sold cannot be returned. Merchandise / Service Transaction non-refundable." <?= !$can_edit_template ? 'readonly' : '' ?>><?= $h($val_terms) ?></textarea>
                     </div>
                 </div>
             </div>

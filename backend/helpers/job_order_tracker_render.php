@@ -277,11 +277,12 @@ if (!function_exists('render_job_order_tracker_rows')) {
 
             <!-- 5. FEES BREAKDOWN -->
             <td style="padding:11px 8px;vertical-align:middle;box-sizing:border-box;">
-                <div style="color:#334155;font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;">Svc: <strong style="color:#002F70;font-weight:800;font-size:13px;">₱<?= number_format((float)($job['service_fee'] ?? $job['estimated_cost'] ?? $job['total_cost'] ?? 0), 2) ?></strong></div>
                 <?php
-                $labor_val = (float)($job['actual_labor_cost'] ?? $job['estimated_labor_cost'] ?? 0);
+                $tip_val = (float)($job['tip_amount'] ?? $job['tip'] ?? $job['actual_labor_cost'] ?? $job['estimated_labor_cost'] ?? 0);
+                $svc_val = (float)($job['service_fee'] ?? $job['estimated_cost'] ?? $job['total_cost'] ?? 0);
                 ?>
-                <div style="color:#334155;font-size:11.5px;margin-top:3px;white-space:nowrap;font-variant-numeric:tabular-nums;">Labor: <strong style="color:<?= $labor_val > 0 ? '#16a34a' : '#94a3b8' ?>;font-weight:800;font-size:12px;"><?= $labor_val > 0 ? '₱' . number_format($labor_val, 2) : '—' ?></strong></div>
+                <div style="color:#334155;font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;">Svc: <strong style="color:#002F70;font-weight:800;font-size:13px;">₱<?= number_format($svc_val, 2) ?></strong></div>
+                <div style="color:#334155;font-size:11.5px;margin-top:3px;white-space:nowrap;font-variant-numeric:tabular-nums;">Tip: <strong style="color:<?= $tip_val > 0 ? '#16a34a' : '#94a3b8' ?>;font-weight:800;font-size:12px;"><?= $tip_val > 0 ? '₱' . number_format($tip_val, 2) : '—' ?></strong></div>
             </td>
 
             <!-- 6. PAYMENT -->
@@ -344,7 +345,15 @@ if (!function_exists('render_job_order_tracker_rows')) {
                     $jo_paid    = (float)($job['amount_paid'] ?? 0);
                     $jo_balance = (float)($job['balance_due'] ?? 0);
                     if ($jo_balance <= 0.009 && $jo_total > 0) $jo_balance = max(0, $jo_total - $jo_paid);
-                    $labor_fee_val = (float)($job['actual_labor_cost'] ?? $job['estimated_labor_cost'] ?? 0);
+                    $labor_fee_val = (float)($job['tip_amount'] ?? $job['tip'] ?? $job['actual_labor_cost'] ?? $job['estimated_labor_cost'] ?? 0);
+
+                    $jo_pmethod_lc = strtolower(trim($pay_method));
+                    $jo_pstat_lc   = strtolower(trim($pay_status));
+                    $jo_is_paid    = ($jo_pstat_lc === 'paid' || $jo_balance <= 0.009);
+                    $jo_is_credit  = ($jo_pmethod_lc === 'credit account' || str_contains($jo_pmethod_lc, 'credit') || str_contains($jo_pmethod_lc, 'receivable') || in_array($pay_status, ['Credit Account', 'Credit Transaction', 'Credit', 'Receivables/Credit', 'A/R', 'AR']) || !empty($job['credit_customer_id']) || !empty($job['is_credit']));
+                    $jo_has_credit_balance = ($jo_is_credit && $jo_balance > 0.009 && $canonical_status !== 'Voided' && $wf_label !== 'Voided');
+                    $jo_can_adjust = $jo_is_credit ? (!$jo_is_paid) : (!$jo_is_paid);
+                    $jo_can_void   = !($jo_is_credit && $jo_is_paid);
                     
                     // Prepare JO data for modals (JSON-encoded)
                     $jo_or_number = '';
@@ -375,7 +384,10 @@ if (!function_exists('render_job_order_tracker_rows')) {
                         'payment_status' => $pay_label,
                         'payment_method' => $pay_method,
                         'total' => $jo_total,
+                        'service_fee' => $svc_val,
                         'labor_fee' => $labor_fee_val,
+                        'tip' => $labor_fee_val,
+                        'tip_amount' => $labor_fee_val,
                         'paid' => $jo_paid,
                         'balance' => $jo_balance,
                         'remarks' => !empty($remarks) ? $remarks : ($job['service_description'] ?? $job['additional_notes'] ?? ''),
@@ -431,17 +443,27 @@ if (!function_exists('render_job_order_tracker_rows')) {
                         </button>
 
                         <?php
-                        $is_credit_approved = ($pay_method === 'Credit Account' || in_array($pay_status, ['Credit Account', 'Credit Transaction', 'Credit', 'Receivables/Credit', 'A/R']));
+                        $is_credit_approved = $jo_is_credit;
                         $is_fully_paid = ($pay_status === 'Paid' || $jo_balance <= 0.009);
                         $can_release = ($is_fully_paid || $is_credit_approved);
                         ?>
 
-                        <?php if (!$can_release): ?>
+                        <?php if ($jo_has_credit_balance): ?>
                             <button type="button"
-                                    onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Completed')"
+                                    onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Adjusted','<?= addslashes($jo_or_number) ?>','<?= addslashes($jo_num_disp) ?>',true)"
                                     class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                <i class="fas fa-money-bill-wave"></i>
-                                <?= in_array($pay_status, ['Partially Paid','Partial Payment','Partial']) ? 'Settle Balance' : 'Mark Paid' ?>
+                                <i class="fas fa-credit-card"></i> Process Payment
+                            </button>
+                            <button type="button"
+                                    onclick="performJobOrderAction('release_job_order', <?= (int)$job['id'] ?>, '<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>', this)"
+                                    class="txn-btn primary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#002F70;color:#fff;border:none;">
+                                <i class="fas fa-car-side"></i> Release Vehicle
+                            </button>
+                        <?php elseif (!$can_release): ?>
+                            <button type="button"
+                                    onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Adjusted','<?= addslashes($jo_or_number) ?>','<?= addslashes($jo_num_disp) ?>',false)"
+                                    class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
+                                <i class="fas fa-money-bill-wave"></i> Process Payment
                             </button>
 
                             <button type="button"
@@ -459,6 +481,7 @@ if (!function_exists('render_job_order_tracker_rows')) {
                             </button>
                         <?php endif; ?>
 
+                        <?php if ($jo_can_adjust): ?>
                         <button type="button"
                                 data-jo-id="<?= (int)$job['id'] ?>"
                                 data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
@@ -478,7 +501,8 @@ if (!function_exists('render_job_order_tracker_rows')) {
                                 class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
                             <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
                         </button>
-                        <?php if ($enable_void_transaction): ?>
+                        <?php endif; ?>
+                        <?php if ($enable_void_transaction && $jo_can_void): ?>
                         <button type="button"
                                 data-jo-id="<?= (int)$job['id'] ?>"
                                 data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
@@ -486,6 +510,7 @@ if (!function_exists('render_job_order_tracker_rows')) {
                                 data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
                                 data-jo-status="<?= htmlspecialchars($wf_label) ?>"
                                 data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
+                                data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
                                 onclick="return openRequestVoidModal(event, this);"
                                 class="void-btn">
                             <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
@@ -493,15 +518,22 @@ if (!function_exists('render_job_order_tracker_rows')) {
                         <?php endif; ?>
 
                     <?php elseif ($canonical_status === 'Released'): ?>
-                        <!-- RELEASED: View & Reprint available, with adjust/void options if permitted -->
+                        <!-- RELEASED: View & Reprint available, with Process Payment for credit balance if outstanding -->
                         <button type="button"
                                 onclick="printJobOrderReceipt(<?= (int)$job['id'] ?>,'<?= addslashes($job['job_order_id'] ?? ('#'.$job['id'])) ?>')"
                                 class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
                             <i class="fas fa-print"></i> Reprint
                         </button>
 
+                        <?php if ($jo_has_credit_balance): ?>
+                        <button type="button"
+                                onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Released','<?= addslashes($jo_or_number) ?>','<?= addslashes($jo_num_disp) ?>',true)"
+                                class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
+                            <i class="fas fa-credit-card"></i> Process Payment
+                        </button>
+                        <?php endif; ?>
 
-                        <?php if ($enable_void_transaction): ?>
+                        <?php if ($enable_void_transaction && $jo_can_void): ?>
                         <button type="button"
                                 data-jo-id="<?= (int)$job['id'] ?>"
                                 data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
@@ -509,6 +541,7 @@ if (!function_exists('render_job_order_tracker_rows')) {
                                 data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
                                 data-jo-status="<?= htmlspecialchars($wf_label) ?>"
                                 data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
+                                data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
                                 onclick="return openRequestVoidModal(event, this);"
                                 class="void-btn">
                             <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
@@ -524,17 +557,27 @@ if (!function_exists('render_job_order_tracker_rows')) {
                         </button>
 
                         <?php
-                        $is_credit_approved = ($pay_method === 'Credit Account' || in_array($pay_status, ['Credit Account', 'Credit Transaction', 'Credit', 'Receivables/Credit', 'A/R']));
+                        $is_credit_approved = $jo_is_credit;
                         $is_fully_paid = ($pay_status === 'Paid' || $jo_balance <= 0.009);
                         $can_release = ($is_fully_paid || $is_credit_approved);
                         ?>
 
-                        <?php if (!$can_release): ?>
+                        <?php if ($jo_has_credit_balance): ?>
                             <button type="button"
-                                    onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Completed')"
+                                    onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Completed','<?= addslashes($jo_or_number) ?>','<?= addslashes($jo_num_disp) ?>',true)"
                                     class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                <i class="fas fa-money-bill-wave"></i>
-                                <?= in_array($pay_status, ['Partially Paid','Partial Payment','Partial']) ? 'Settle Balance' : 'Mark Paid' ?>
+                                <i class="fas fa-credit-card"></i> Process Payment
+                            </button>
+                            <button type="button"
+                                    onclick="performJobOrderAction('release_job_order', <?= (int)$job['id'] ?>, '<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>', this)"
+                                    class="txn-btn primary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;background:#002F70;color:#fff;border:none;">
+                                <i class="fas fa-car-side"></i> Release Vehicle
+                            </button>
+                        <?php elseif (!$can_release): ?>
+                            <button type="button"
+                                    onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','Completed','<?= addslashes($jo_or_number) ?>','<?= addslashes($jo_num_disp) ?>',false)"
+                                    class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
+                                <i class="fas fa-money-bill-wave"></i> Process Payment
                             </button>
 
                             <button type="button"
@@ -553,7 +596,7 @@ if (!function_exists('render_job_order_tracker_rows')) {
                         <?php endif; ?>
 
 
-                        <?php if ($enable_void_transaction): ?>
+                        <?php if ($enable_void_transaction && $jo_can_void): ?>
                         <button type="button"
                                 data-jo-id="<?= (int)$job['id'] ?>"
                                 data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
@@ -561,6 +604,7 @@ if (!function_exists('render_job_order_tracker_rows')) {
                                 data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
                                 data-jo-status="<?= htmlspecialchars($wf_label) ?>"
                                 data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
+                                data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
                                 onclick="return openRequestVoidModal(event, this);"
                                 class="void-btn">
                             <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
@@ -570,10 +614,21 @@ if (!function_exists('render_job_order_tracker_rows')) {
                     <?php elseif ($canonical_status === 'In Progress'): ?>
                         <!-- IN PROGRESS -->
                         <?php
-                        $is_credit_approved = ($pay_method === 'Credit Account' || in_array($pay_status, ['Credit Account', 'Credit Transaction', 'Credit', 'Receivables/Credit', 'A/R']));
+                        $is_credit_approved = $jo_is_credit;
                         $is_fully_paid = ($pay_status === 'Paid' || $jo_balance <= 0.009);
                         ?>
-                        <?php if ($is_fully_paid || $is_credit_approved): ?>
+                        <?php if ($jo_has_credit_balance): ?>
+                            <button type="button" 
+                                    onclick="performJobOrderAction('set_completed', <?= (int)$job['id'] ?>, '<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>', this)"
+                                    class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
+                                <i class="fas fa-check"></i> Mark Complete
+                            </button>
+                            <button type="button"
+                                    onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',false,'tracker','In Progress','<?= addslashes($jo_or_number) ?>','<?= addslashes($jo_num_disp) ?>',true)"
+                                    class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
+                                <i class="fas fa-credit-card"></i> Process Payment
+                            </button>
+                        <?php elseif ($is_fully_paid): ?>
                             <button type="button" 
                                     onclick="performJobOrderAction('set_completed', <?= (int)$job['id'] ?>, '<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>', this)"
                                     class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
@@ -581,12 +636,13 @@ if (!function_exists('render_job_order_tracker_rows')) {
                             </button>
                         <?php else: ?>
                             <button type="button"
-                                    onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',true,'tracker','In Progress')"
+                                    onclick="openPaymentModal(<?= (int)$job['id'] ?>,'<?= addslashes($job['_source'] ?? 'job_orders') ?>',<?= $jo_total ?>,<?= $jo_paid ?>,<?= $jo_balance ?>,'<?= addslashes($job['customer_name'] ?? '') ?>',true,'tracker','In Progress','<?= addslashes($jo_or_number) ?>','<?= addslashes($jo_num_disp) ?>',false)"
                                     class="txn-btn success" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;">
-                                <i class="fas fa-check"></i> Complete & Settle
+                                <i class="fas fa-check"></i> Complete & Process Payment
                             </button>
                         <?php endif; ?>
 
+                        <?php if ($jo_can_adjust): ?>
                         <button type="button"
                                 data-jo-id="<?= (int)$job['id'] ?>"
                                 data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
@@ -606,7 +662,8 @@ if (!function_exists('render_job_order_tracker_rows')) {
                                 class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
                             <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
                         </button>
-                        <?php if ($enable_void_transaction): ?>
+                        <?php endif; ?>
+                        <?php if ($enable_void_transaction && $jo_can_void): ?>
                         <button type="button"
                                 data-jo-id="<?= (int)$job['id'] ?>"
                                 data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
@@ -614,6 +671,7 @@ if (!function_exists('render_job_order_tracker_rows')) {
                                 data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
                                 data-jo-status="<?= htmlspecialchars($wf_label) ?>"
                                 data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
+                                data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
                                 onclick="return openRequestVoidModal(event, this);"
                                 class="void-btn">
                             <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>
@@ -628,6 +686,7 @@ if (!function_exists('render_job_order_tracker_rows')) {
                             <i class="fas fa-play"></i> Start In Progress
                         </button>
 
+                        <?php if ($jo_can_adjust): ?>
                         <button type="button"
                                 data-jo-id="<?= (int)$job['id'] ?>"
                                 data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
@@ -647,7 +706,8 @@ if (!function_exists('render_job_order_tracker_rows')) {
                                 class="txn-btn secondary" style="width:100%;padding:4px 6px;font-size:11px !important;font-weight:700 !important;box-sizing:border-box;text-align:center;justify-content:center;cursor:pointer;">
                             <i class="fas fa-sliders-h"></i> <?= in_array($role, ['admin','superadmin']) ? 'Adjust' : 'Request Adjust' ?>
                         </button>
-                        <?php if ($enable_void_transaction): ?>
+                        <?php endif; ?>
+                        <?php if ($enable_void_transaction && $jo_can_void): ?>
                         <button type="button"
                                 data-jo-id="<?= (int)$job['id'] ?>"
                                 data-jo-source="<?= htmlspecialchars($job['_source'] ?? 'job_orders') ?>"
@@ -655,6 +715,7 @@ if (!function_exists('render_job_order_tracker_rows')) {
                                 data-jo-customer="<?= htmlspecialchars($job['customer_name'] ?? '—') ?>"
                                 data-jo-status="<?= htmlspecialchars($wf_label) ?>"
                                 data-jo-paystatus="<?= htmlspecialchars($pay_label) ?>"
+                                data-jo-paymethod="<?= htmlspecialchars($pay_method) ?>"
                                 onclick="return openRequestVoidModal(event, this);"
                                 class="void-btn">
                             <i class="fas fa-ban"></i> <?= in_array($role, ['admin','superadmin']) ? 'Void' : 'Request Void' ?>

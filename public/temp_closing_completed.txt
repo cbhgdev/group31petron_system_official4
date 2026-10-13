@@ -1,0 +1,6 @@
+staff_fuel_sales_closing_handler.php: $closing_status   = $is_auto_approved ? 'Verified' : 'CLOSING_COMPLETED';
+staff_fuel_sales_closing_handler.php: $txn_status       = $is_auto_approved ? 'Verified' : 'CLOSING_COMPLETED';
+staff_fuel_sales_closing_handler.php: SET status = 'CLOSING_COMPLETED'
+staff_transactions_hub.php: $current_shift_status = 'CLOSING_COMPLETED';
+staff_transactions_hub.php: if ($current_shift_status === 'CLOSING_COMPLETED' || $current_shift_status === 'VERIFIED') {
+staff_transactions_hub.php: if (!$is_closing_completed && ($current_shift_status === 'DRAFT' || empty($current_shift_status))) {

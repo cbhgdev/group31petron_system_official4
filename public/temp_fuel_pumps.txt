@@ -1,0 +1,326 @@
+Array
+(
+    [0] => Array
+        (
+            [id] => 21419
+            [station_id] => 1253
+            [pump_number] => DIESEL 1 - 1-1
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 1
+            [fuel_type_id] => 35
+            [tank_id] => 6
+            [ugt_no] => UGT-01
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [1] => Array
+        (
+            [id] => 21420
+            [station_id] => 1253
+            [pump_number] => DIESEL 1 - 1-2
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 2
+            [fuel_type_id] => 35
+            [tank_id] => 6
+            [ugt_no] => UGT-01
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [2] => Array
+        (
+            [id] => 21421
+            [station_id] => 1253
+            [pump_number] => DIESEL 1 - 2-1
+            [pump_name] => Pump 2
+            [nozzle_number] => Nozzle 1
+            [fuel_type_id] => 35
+            [tank_id] => 6
+            [ugt_no] => UGT-01
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [3] => Array
+        (
+            [id] => 21422
+            [station_id] => 1253
+            [pump_number] => DIESEL 1 - 2-2
+            [pump_name] => Pump 2
+            [nozzle_number] => Nozzle 2
+            [fuel_type_id] => 35
+            [tank_id] => 6
+            [ugt_no] => UGT-01
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [4] => Array
+        (
+            [id] => 21423
+            [station_id] => 1253
+            [pump_number] => DIESEL 2 - 1-1
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 1
+            [fuel_type_id] => 28
+            [tank_id] => 31
+            [ugt_no] => UGT-02
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [5] => Array
+        (
+            [id] => 21424
+            [station_id] => 1253
+            [pump_number] => DIESEL 2 - 1-2
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 2
+            [fuel_type_id] => 28
+            [tank_id] => 31
+            [ugt_no] => UGT-02
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [6] => Array
+        (
+            [id] => 21425
+            [station_id] => 1253
+            [pump_number] => KEROSENE - 1-1
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 1
+            [fuel_type_id] => 14
+            [tank_id] => 10
+            [ugt_no] => UGT-07
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [7] => Array
+        (
+            [id] => 21426
+            [station_id] => 1253
+            [pump_number] => TURBO DIESEL - 1-1
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 1
+            [fuel_type_id] => 11
+            [tank_id] => 7
+            [ugt_no] => UGT-03
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [8] => Array
+        (
+            [id] => 21427
+            [station_id] => 1253
+            [pump_number] => TURBO DIESEL - 1-2
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 2
+            [fuel_type_id] => 11
+            [tank_id] => 7
+            [ugt_no] => UGT-03
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [9] => Array
+        (
+            [id] => 21428
+            [station_id] => 1253
+            [pump_number] => XCS PLUS - 1-1
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 1
+            [fuel_type_id] => 29
+            [tank_id] => 32
+            [ugt_no] => UGT-04
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [10] => Array
+        (
+            [id] => 21429
+            [station_id] => 1253
+            [pump_number] => XCS PLUS - 1-2
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 2
+            [fuel_type_id] => 29
+            [tank_id] => 32
+            [ugt_no] => UGT-04
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [11] => Array
+        (
+            [id] => 21430
+            [station_id] => 1253
+            [pump_number] => XCS PLUS - 2-1
+            [pump_name] => Pump 2
+            [nozzle_number] => Nozzle 1
+            [fuel_type_id] => 29
+            [tank_id] => 32
+            [ugt_no] => UGT-04
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [12] => Array
+        (
+            [id] => 21431
+            [station_id] => 1253
+            [pump_number] => XCS PLUS - 2-2
+            [pump_name] => Pump 2
+            [nozzle_number] => Nozzle 2
+            [fuel_type_id] => 29
+            [tank_id] => 32
+            [ugt_no] => UGT-04
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [13] => Array
+        (
+            [id] => 21432
+            [station_id] => 1253
+            [pump_number] => XTRA UNL 1 - 1-1
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 1
+            [fuel_type_id] => 30
+            [tank_id] => 33
+            [ugt_no] => UGT-05
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [14] => Array
+        (
+            [id] => 21433
+            [station_id] => 1253
+            [pump_number] => XTRA UNL 1 - 1-2
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 2
+            [fuel_type_id] => 30
+            [tank_id] => 33
+            [ugt_no] => UGT-05
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [15] => Array
+        (
+            [id] => 21434
+            [station_id] => 1253
+            [pump_number] => XTRA UNL 2 - 1-1
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 1
+            [fuel_type_id] => 31
+            [tank_id] => 34
+            [ugt_no] => UGT-06
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+    [16] => Array
+        (
+            [id] => 21435
+            [station_id] => 1253
+            [pump_number] => XTRA UNL 2 - 1-2
+            [pump_name] => Pump 1
+            [nozzle_number] => Nozzle 2
+            [fuel_type_id] => 31
+            [tank_id] => 34
+            [ugt_no] => UGT-06
+            [capacity] => 0.00
+            [status] => Active
+            [created_at] => 2026-07-02 21:44:40
+            [calibration_value] => 
+            [calibration_updated_by] => 
+            [calibration_updated_at] => 
+            [calibration_notes] => 
+        )
+
+)

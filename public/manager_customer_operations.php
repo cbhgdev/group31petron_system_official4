@@ -36,6 +36,7 @@ $rawRole = $me['role'] ?? $_SESSION['role'] ?? $_SESSION['user_role'] ?? 'manage
 $role = role_key($rawRole);
 
 customer_ensure_optional_columns($pdo);
+customer_ensure_vehicle_columns($pdo);
 customer_ensure_request_table($pdo);
 
 $action = $_GET['action'] ?? $_POST['action'] ?? '';
@@ -153,6 +154,10 @@ function manager_customer_select_sql(): array {
         'vehicle_make'   => customer_vehicle_expr($pdo, 'vehicle_make', 'c'),
         'vehicle_model'  => customer_vehicle_expr($pdo, 'vehicle_model', 'c'),
         'vehicle_type'   => customer_vehicle_expr($pdo, 'vehicle_type', 'c'),
+        'year_model'     => customer_expr_col($pdo, 'c', 'year_model', "''"),
+        'color'          => customer_expr_col($pdo, 'c', 'color', "''"),
+        'engine_no'      => customer_expr_col($pdo, 'c', 'engine_no', customer_expr_col($pdo, 'c', 'engine_number', "''")),
+        'chassis_no'     => customer_expr_col($pdo, 'c', 'chassis_no', customer_expr_col($pdo, 'c', 'chassis_number', "''")),
         'address'        => customer_expr_col($pdo, 'c', 'address', "''"),
         'gov_id_type'    => customer_expr_col($pdo, 'c', 'gov_id_type', "''"),
         'gov_id_file'    => customer_expr_col($pdo, 'c', 'gov_id_file', "''"),
@@ -263,7 +268,7 @@ function manager_empty_stats(): array {
 }
 
 function manager_list_customers(): void {
-    global $pdo;
+    global $pdo, $me, $station_id;
 
     try {
         $pdo->query("SELECT 1 FROM customers LIMIT 1");
@@ -282,12 +287,28 @@ function manager_list_customers(): void {
     $validStatuses = ['active', 'inactive', 'archived'];
 
     $station_id_scope = (int)user_station_id();
+    if ($station_id_scope <= 0 && !empty($me['station_id'])) {
+        $station_id_scope = (int)$me['station_id'];
+    }
+    if ($station_id_scope <= 0 && !empty($_SESSION['user']['station_id'])) {
+        $station_id_scope = (int)$_SESSION['user']['station_id'];
+    }
+    if ($station_id_scope <= 0) {
+        try {
+            $sStmt = $pdo->query("SELECT id FROM stations ORDER BY id ASC LIMIT 1");
+            $station_id_scope = (int)$sStmt->fetchColumn();
+        } catch (Throwable $e) {}
+    }
+    if ($station_id_scope <= 0) {
+        $station_id_scope = 1253;
+    }
+
     $where = [];
     $params = [];
     $expr = manager_customer_select_sql();
 
-    // ── Station isolation: only show this station's customers ──
-    $where[] = "c.station_id = ?";
+    // ── Station isolation: show station's customers, plus any unassigned/legacy customers ──
+    $where[] = "(c.station_id = ? OR c.station_id IS NULL OR c.station_id = 0)";
     $params[] = $station_id_scope;
 
     if ($tab === 'archived') {
@@ -413,7 +434,7 @@ function manager_list_customers(): void {
                 SUM(CASE WHEN (COALESCE(c.credit_limit, 0) > 0 OR LOWER(COALESCE(c.type, '')) = 'credit') AND {$expr['status']} != 'archived' THEN 1 ELSE 0 END) AS credit,
                 SUM(CASE WHEN DATE({$expr['registered_at']}) >= '$firstDayMonth' AND {$expr['status']} != 'archived' THEN 1 ELSE 0 END) AS new_this_month
             FROM customers c
-            WHERE c.station_id = ?
+            WHERE (c.station_id = ? OR c.station_id IS NULL OR c.station_id = 0)
         ");
         $statsStmt->execute([$station_id_scope]);
         $fetchedStats = $statsStmt->fetch(PDO::FETCH_ASSOC);
@@ -454,6 +475,10 @@ function manager_view_customer(): void {
             {$expr['vehicle_make']} AS vehicle_make,
             {$expr['vehicle_model']} AS vehicle_model,
             {$expr['vehicle_type']} AS vehicle_type,
+            {$expr['year_model']} AS year_model,
+            {$expr['color']} AS color,
+            {$expr['engine_no']} AS engine_no,
+            {$expr['chassis_no']} AS chassis_no,
             {$expr['credit_limit']} AS credit_limit,
             {$expr['credit_terms']} AS credit_terms,
             {$expr['balance']} AS outstanding_balance,
@@ -486,13 +511,27 @@ function manager_view_customer(): void {
         $vehicles = $vStmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Throwable $e) {}
 
+    foreach ($vehicles as &$vRow) {
+        if (empty($vRow['engine_no']) && !empty($vRow['engine_number'])) {
+            $vRow['engine_no'] = $vRow['engine_number'];
+        }
+        if (empty($vRow['chassis_no']) && !empty($vRow['chassis_number'])) {
+            $vRow['chassis_no'] = $vRow['chassis_number'];
+        }
+    }
+    unset($vRow);
+
     if (empty($vehicles) && !empty($customer['plate_no'])) {
         $vehicles[] = [
-            'id' => 0,
+            'id'           => 0,
             'plate_number' => $customer['plate_no'],
             'vehicle_type' => $customer['vehicle_type'] ?: 'N/A',
             'brand'        => $customer['vehicle_make'] ?: 'N/A',
             'model'        => $customer['vehicle_model'] ?: 'N/A',
+            'year_model'   => $customer['year_model'] ?? '',
+            'color'        => $customer['color'] ?? '',
+            'engine_no'    => $customer['engine_no'] ?? '',
+            'chassis_no'   => $customer['chassis_no'] ?? '',
             'status'       => 'active'
         ];
     }
@@ -779,6 +818,10 @@ function manager_validate_customer_payload(): array {
         'vehicle_brand'  => trim($_POST['vehicle_make'] ?? $_POST['brand'] ?? ''),
         'vehicle_model'  => trim($_POST['vehicle_model'] ?? ''),
         'vehicle_type'   => trim($_POST['vehicle_type'] ?? ''),
+        'year_model'     => trim($_POST['year_model'] ?? ''),
+        'color'          => trim($_POST['color'] ?? ''),
+        'engine_no'      => trim($_POST['engine_no'] ?? $_POST['engine_number'] ?? ''),
+        'chassis_no'     => trim($_POST['chassis_no'] ?? $_POST['chassis_number'] ?? ''),
         'loyalty_card_no' => sanitize_optional_field($_POST['loyalty_card_no'] ?? ''),
     ];
 }
@@ -847,6 +890,12 @@ function manager_add_customer(): void {
         'vehicle_brand'       => $data['vehicle_make'],
         'vehicle_model'       => $data['vehicle_model'],
         'vehicle_type'        => $data['vehicle_type'],
+        'year_model'          => $data['year_model'] ?? '',
+        'color'               => $data['color'] ?? '',
+        'engine_no'           => $data['engine_no'] ?? '',
+        'engine_number'       => $data['engine_no'] ?? '',
+        'chassis_no'          => $data['chassis_no'] ?? '',
+        'chassis_number'      => $data['chassis_no'] ?? '',
         'credit_limit'        => $data['credit_limit'],
         'credit_terms'        => $data['credit_terms'],
         'gov_id_type'         => $data['gov_id_type'],
@@ -880,27 +929,75 @@ function manager_add_customer(): void {
         foreach ($vList as $v) {
             $plate = strtoupper(trim($v['plate_number'] ?? ''));
             if ($plate !== '') {
+                $vType    = trim($v['vehicle_type'] ?? '');
+                $vBrand   = trim($v['brand'] ?? '');
+                $vModel   = trim($v['model'] ?? '');
+                $vYear    = trim($v['year_model'] ?? '');
+                $vColor   = trim($v['color'] ?? '');
+                $vEngine  = trim($v['engine_no'] ?? $v['engine_number'] ?? '');
+                $vChassis = trim($v['chassis_no'] ?? $v['chassis_number'] ?? '');
+
                 try {
-                    $vStmt = $pdo->prepare("INSERT INTO customer_vehicles (customer_id, plate_number, vehicle_type, brand, model, year_model, color, engine_no, chassis_no, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW())");
+                    $vStmt = $pdo->prepare("INSERT INTO customer_vehicles (customer_id, plate_number, vehicle_type, brand, model, year_model, color, engine_no, chassis_no, engine_number, chassis_number, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW())");
                     $vStmt->execute([
                         $newId,
                         $plate,
-                        trim($v['vehicle_type'] ?? ''),
-                        trim($v['brand'] ?? ''),
-                        trim($v['model'] ?? ''),
-                        trim($v['year_model'] ?? ''),
-                        trim($v['color'] ?? ''),
-                        trim($v['engine_no'] ?? ''),
-                        trim($v['chassis_no'] ?? '')
+                        $vType,
+                        $vBrand,
+                        $vModel,
+                        $vYear,
+                        $vColor,
+                        $vEngine,
+                        $vChassis,
+                        $vEngine,
+                        $vChassis
                     ]);
-                    manager_log_timeline($newId, 'Vehicle Added', "Vehicle {$plate} ({$v['brand']} {$v['model']}) registered.");
+                    manager_log_timeline($newId, 'Vehicle Added', "Vehicle {$plate} ({$vBrand} {$vModel}) registered.");
                 } catch (Throwable $e) {}
             }
         }
+
+        if (!empty($vList)) {
+            $pPlate   = strtoupper(trim($vList[0]['plate_number'] ?? ''));
+            $pMake    = trim($vList[0]['brand'] ?? '');
+            $pModel   = trim($vList[0]['model'] ?? '');
+            $pType    = trim($vList[0]['vehicle_type'] ?? '');
+            $pYear    = trim($vList[0]['year_model'] ?? '');
+            $pColor   = trim($vList[0]['color'] ?? '');
+            $pEngine  = trim($vList[0]['engine_no'] ?? $vList[0]['engine_number'] ?? '');
+            $pChassis = trim($vList[0]['chassis_no'] ?? $vList[0]['chassis_number'] ?? '');
+
+            customer_update_existing($pdo, [
+                'vehicle_plate'  => $pPlate,
+                'plate_number'   => $pPlate,
+                'vehicle_make'   => $pMake,
+                'vehicle_brand'  => $pMake,
+                'vehicle_model'  => $pModel,
+                'vehicle_type'   => $pType,
+                'year_model'     => $pYear,
+                'color'          => $pColor,
+                'engine_no'      => $pEngine,
+                'engine_number'  => $pEngine,
+                'chassis_no'     => $pChassis,
+                'chassis_number' => $pChassis,
+            ], 'id = ?', [$newId]);
+        }
     } else if (!empty($data['vehicle_plate'])) {
         try {
-            $vStmt = $pdo->prepare("INSERT INTO customer_vehicles (customer_id, plate_number, vehicle_type, brand, model, status, created_at) VALUES (?, ?, ?, ?, ?, 'active', NOW())");
-            $vStmt->execute([$newId, $data['vehicle_plate'], $data['vehicle_type'], $data['vehicle_make'], $data['vehicle_model']]);
+            $vStmt = $pdo->prepare("INSERT INTO customer_vehicles (customer_id, plate_number, vehicle_type, brand, model, year_model, color, engine_no, chassis_no, engine_number, chassis_number, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW())");
+            $vStmt->execute([
+                $newId,
+                $data['vehicle_plate'],
+                $data['vehicle_type'],
+                $data['vehicle_make'],
+                $data['vehicle_model'],
+                $data['year_model'] ?? '',
+                $data['color'] ?? '',
+                $data['engine_no'] ?? '',
+                $data['chassis_no'] ?? '',
+                $data['engine_no'] ?? '',
+                $data['chassis_no'] ?? ''
+            ]);
         } catch (Throwable $e) {}
     }
 
@@ -947,12 +1044,24 @@ function manager_update_customer(): void {
         'vehicle_brand'  => $data['vehicle_make'],
         'vehicle_model'  => $data['vehicle_model'],
         'vehicle_type'   => $data['vehicle_type'],
+        'year_model'     => $data['year_model'] ?? '',
+        'color'          => $data['color'] ?? '',
+        'engine_no'      => $data['engine_no'] ?? '',
+        'engine_number'  => $data['engine_no'] ?? '',
+        'chassis_no'     => $data['chassis_no'] ?? '',
+        'chassis_number' => $data['chassis_no'] ?? '',
         'credit_limit'   => $data['credit_limit'],
         'credit_terms'   => $data['credit_terms'],
         'gov_id_type'    => $data['gov_id_type'],
         'loyalty_card_no' => $data['loyalty_card_no'],
         'updated_by'     => $me['id'] ?? null,
     ];
+
+    $updStationId = (int)user_station_id();
+    if ($updStationId <= 0 && !empty($me['station_id'])) $updStationId = (int)$me['station_id'];
+    if ($updStationId <= 0 && !empty($_SESSION['user']['station_id'])) $updStationId = (int)$_SESSION['user']['station_id'];
+    if ($updStationId <= 0) $updStationId = 1253;
+    $updateValues['station_id'] = $updStationId;
 
     if ($data['gov_id_file']) $updateValues['gov_id_file'] = $data['gov_id_file'];
     if ($data['cr_file'])     $updateValues['cr_file']     = $data['cr_file'];
@@ -974,27 +1083,98 @@ function manager_update_customer(): void {
         $vList = json_decode($_POST['vehicles_json'], true) ?: [];
         foreach ($vList as $v) {
             $plate = strtoupper(trim($v['plate_number'] ?? ''));
-            if ($plate !== '') {
-                try {
-                    $vCheck = $pdo->prepare("SELECT id FROM customer_vehicles WHERE customer_id = ? AND plate_number = ? LIMIT 1");
-                    $vCheck->execute([$id, $plate]);
-                    if (!$vCheck->fetchColumn()) {
-                        $vStmt = $pdo->prepare("INSERT INTO customer_vehicles (customer_id, plate_number, vehicle_type, brand, model, year_model, color, engine_no, chassis_no, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW())");
-                        $vStmt->execute([
-                            $id,
-                            $plate,
-                            trim($v['vehicle_type'] ?? ''),
-                            trim($v['brand'] ?? ''),
-                            trim($v['model'] ?? ''),
-                            trim($v['year_model'] ?? ''),
-                            trim($v['color'] ?? ''),
-                            trim($v['engine_no'] ?? ''),
-                            trim($v['chassis_no'] ?? '')
-                        ]);
-                        manager_log_timeline($id, 'Vehicle Added', "Vehicle {$plate} added.");
-                    }
-                } catch (Throwable $e) {}
+            if ($plate === '') continue;
+
+            $vId      = (int)($v['id'] ?? 0);
+            $vType    = trim($v['vehicle_type'] ?? '');
+            $vBrand   = trim($v['brand'] ?? '');
+            $vModel   = trim($v['model'] ?? '');
+            $vYear    = trim($v['year_model'] ?? '');
+            $vColor   = trim($v['color'] ?? '');
+            $vEngine  = trim($v['engine_no'] ?? $v['engine_number'] ?? '');
+            $vChassis = trim($v['chassis_no'] ?? $v['chassis_number'] ?? '');
+
+            $existingVehId = 0;
+            if ($vId > 0) {
+                $vCheck = $pdo->prepare("SELECT id FROM customer_vehicles WHERE id = ? AND customer_id = ? LIMIT 1");
+                $vCheck->execute([$vId, $id]);
+                $existingVehId = (int)$vCheck->fetchColumn();
             }
+            if ($existingVehId <= 0) {
+                $vCheck = $pdo->prepare("SELECT id FROM customer_vehicles WHERE customer_id = ? AND plate_number = ? LIMIT 1");
+                $vCheck->execute([$id, $plate]);
+                $existingVehId = (int)$vCheck->fetchColumn();
+            }
+
+            if ($existingVehId > 0) {
+                // UPDATE existing vehicle
+                try {
+                    $uStmt = $pdo->prepare("UPDATE customer_vehicles SET plate_number = ?, vehicle_type = ?, brand = ?, model = ?, year_model = ?, color = ?, engine_no = ?, chassis_no = ?, engine_number = ?, chassis_number = ?, status = 'active' WHERE id = ?");
+                    $uStmt->execute([
+                        $plate,
+                        $vType,
+                        $vBrand,
+                        $vModel,
+                        $vYear,
+                        $vColor,
+                        $vEngine,
+                        $vChassis,
+                        $vEngine,
+                        $vChassis,
+                        $existingVehId
+                    ]);
+                } catch (Throwable $e) {
+                    error_log("Failed to update vehicle ID {$existingVehId}: " . $e->getMessage());
+                }
+            } else {
+                // INSERT new vehicle
+                try {
+                    $iStmt = $pdo->prepare("INSERT INTO customer_vehicles (customer_id, plate_number, vehicle_type, brand, model, year_model, color, engine_no, chassis_no, engine_number, chassis_number, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW())");
+                    $iStmt->execute([
+                        $id,
+                        $plate,
+                        $vType,
+                        $vBrand,
+                        $vModel,
+                        $vYear,
+                        $vColor,
+                        $vEngine,
+                        $vChassis,
+                        $vEngine,
+                        $vChassis
+                    ]);
+                    manager_log_timeline($id, 'Vehicle Added', "Vehicle {$plate} ({$vBrand} {$vModel}) added.");
+                } catch (Throwable $e) {
+                    error_log("Failed to insert vehicle {$plate}: " . $e->getMessage());
+                }
+            }
+        }
+
+        // Also update primary vehicle on customers table
+        if (!empty($vList)) {
+            $pPlate   = strtoupper(trim($vList[0]['plate_number'] ?? ''));
+            $pMake    = trim($vList[0]['brand'] ?? '');
+            $pModel   = trim($vList[0]['model'] ?? '');
+            $pType    = trim($vList[0]['vehicle_type'] ?? '');
+            $pYear    = trim($vList[0]['year_model'] ?? '');
+            $pColor   = trim($vList[0]['color'] ?? '');
+            $pEngine  = trim($vList[0]['engine_no'] ?? $vList[0]['engine_number'] ?? '');
+            $pChassis = trim($vList[0]['chassis_no'] ?? $vList[0]['chassis_number'] ?? '');
+
+            customer_update_existing($pdo, [
+                'vehicle_plate'  => $pPlate,
+                'plate_number'   => $pPlate,
+                'vehicle_make'   => $pMake,
+                'vehicle_brand'  => $pMake,
+                'vehicle_model'  => $pModel,
+                'vehicle_type'   => $pType,
+                'year_model'     => $pYear,
+                'color'          => $pColor,
+                'engine_no'      => $pEngine,
+                'engine_number'  => $pEngine,
+                'chassis_no'     => $pChassis,
+                'chassis_number' => $pChassis,
+            ], 'id = ?', [$id]);
         }
     }
 
@@ -1567,21 +1747,149 @@ function manager_ar_history(): void {
     // Source A: Manual AR payments from customer_credit_transactions
     if (manager_has_table($pdo, 'customer_credit_transactions')) {
         try {
+            // Ensure optional columns exist for clean structured storage
+            try {
+                $pdo->exec("ALTER TABLE customer_credit_transactions ADD COLUMN IF NOT EXISTS reference_no VARCHAR(100) NULL");
+                $pdo->exec("ALTER TABLE customer_credit_transactions ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(100) NULL");
+                $pdo->exec("ALTER TABLE customer_credit_transactions ADD COLUMN IF NOT EXISTS receipt_no VARCHAR(60) NULL");
+            } catch (Throwable $e) {}
+
+            $cctCols = manager_table_columns($pdo, 'customer_credit_transactions');
+            $refColExpr = isset($cctCols['reference_no']) ? 'cct.reference_no' : "''";
+            $txnColExpr = isset($cctCols['transaction_id']) ? 'cct.transaction_id' : "''";
+            $rcpColExpr = isset($cctCols['receipt_no']) ? 'cct.receipt_no' : "''";
+
             $pStmt = $pdo->prepare("
                 SELECT
-                    created_at AS pay_date,
-                    CONCAT('OR-', LPAD(id, 5, '0')) AS receipt_no,
-                    '' AS reference_no,
-                    COALESCE(payment_method, 'Cash') AS payment_method,
-                    amount AS amount_paid,
-                    COALESCE(remarks, '') AS remarks,
+                    cct.id,
+                    cct.customer_id,
+                    cct.created_at AS pay_date,
+                    COALESCE(NULLIF(TRIM($rcpColExpr), ''), CONCAT('OR-', LPAD(cct.id, 5, '0'))) AS receipt_no,
+                    $refColExpr AS cct_ref_no,
+                    $txnColExpr AS cct_tx_id,
+                    COALESCE(cct.payment_method, 'Cash') AS payment_method,
+                    cct.amount AS amount_paid,
+                    COALESCE(cct.remarks, '') AS remarks,
                     'Credit Payment' AS source_type
-                FROM customer_credit_transactions
-                WHERE customer_id = ?
-                ORDER BY created_at DESC
+                FROM customer_credit_transactions cct
+                WHERE cct.customer_id = ?
+                ORDER BY cct.created_at DESC, cct.id DESC
             ");
             $pStmt->execute([$customerId]);
             $cctRows = $pStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            // Fetch payment audit log entries to cross-reference official receipts & references
+            $palMap = [];
+            $palTxMap = [];
+            if (manager_has_table($pdo, 'payment_audit_log')) {
+                try {
+                    $palQ = $pdo->prepare("
+                        SELECT id, receipt_no, reference_no, transaction_ref, or_number, amount_paid, logged_at
+                        FROM payment_audit_log
+                        WHERE customer_id = ? OR station_id = ?
+                        ORDER BY id DESC
+                    ");
+                    $palQ->execute([$customerId, (int)(user_station_id() ?: 1)]);
+                    foreach ($palQ->fetchAll(PDO::FETCH_ASSOC) as $pal) {
+                        if (!empty($pal['receipt_no'])) {
+                            $palMap[strtoupper(trim($pal['receipt_no']))] = $pal;
+                        }
+                        if (!empty($pal['transaction_ref'])) {
+                            $palTxMap[strtoupper(trim($pal['transaction_ref']))][] = $pal;
+                        }
+                    }
+                } catch (Throwable $e) {}
+            }
+
+            foreach ($cctRows as &$row) {
+                $remarks = $row['remarks'] ?? '';
+                $method  = strtolower($row['payment_method'] ?? 'cash');
+                $isElectronic = in_array($method, ['gcash', 'maya', 'paymaya', 'card', 'credit card', 'debit card', 'e-wallet', 'ewallet', 'bank transfer', 'check']);
+
+                $extRef = trim($row['cct_ref_no'] ?? '');
+                $txRef  = trim($row['cct_tx_id'] ?? '');
+                $prRef  = '';
+
+                // Extract PR receipt from remarks: e.g. "Credit payment PR-2026-000016 ..."
+                if (preg_match('/(PR-\d{4}-\d+)/i', $remarks, $m)) {
+                    $prRef = strtoupper(trim($m[1]));
+                }
+
+                // Extract external ref from remarks: e.g. "GCash ref GCASH-123456789" or "ref: 12345"
+                if (!$extRef && preg_match('/(?:ref|reference)[:\s#]+([^\s\)\;,]+)/i', $remarks, $m)) {
+                    $extRef = trim($m[1]);
+                }
+
+                // Extract transaction ref from remarks: e.g. "for MERCH2026101220451412539591" or "for JO-001"
+                if (!$txRef && preg_match('/(?:for|inv|invoice)[:\s#]+([A-Za-z0-9\-_]+)/i', $remarks, $m)) {
+                    $txRef = trim($m[1]);
+                }
+
+                // Cross-reference with payment_audit_log
+                $matchedPal = null;
+                if ($prRef && isset($palMap[$prRef])) {
+                    $matchedPal = $palMap[$prRef];
+                } elseif ($txRef && isset($palTxMap[strtoupper($txRef)])) {
+                    foreach ($palTxMap[strtoupper($txRef)] as $candidate) {
+                        if (abs((float)$candidate['amount_paid'] - (float)$row['amount_paid']) < 0.01) {
+                            $matchedPal = $candidate;
+                            break;
+                        }
+                    }
+                }
+
+                if ($matchedPal) {
+                    if (!$extRef && !empty($matchedPal['reference_no'])) {
+                        $extRef = trim($matchedPal['reference_no']);
+                    }
+                    if (!$txRef && !empty($matchedPal['transaction_ref'])) {
+                        $txRef = trim($matchedPal['transaction_ref']);
+                    }
+                    if (!$prRef && !empty($matchedPal['receipt_no'])) {
+                        $prRef = trim($matchedPal['receipt_no']);
+                    }
+                    if (!empty($matchedPal['id'])) {
+                        $row['payment_id'] = (int)$matchedPal['id'];
+                    }
+                }
+
+                // Determine final reference_no:
+                // If electronic (GCash, Maya, Card), external payment reference is primary (e.g. GCASH-123456789)
+                // If cash or no external reference, transaction reference is primary (e.g. MERCH...)
+                if ($isElectronic && $extRef !== '') {
+                    $primaryRef = $extRef;
+                    $secondaryRef = $txRef;
+                } elseif ($extRef !== '') {
+                    $primaryRef = $extRef;
+                    $secondaryRef = $txRef;
+                } elseif ($txRef !== '') {
+                    $primaryRef = $txRef;
+                    $secondaryRef = '';
+                } elseif ($prRef !== '') {
+                    $primaryRef = $prRef;
+                    $secondaryRef = '';
+                } else {
+                    $primaryRef = '';
+                    $secondaryRef = '';
+                }
+
+                $row['reference_no']   = $primaryRef ?: '—';
+                $row['secondary_ref']  = ($secondaryRef !== $primaryRef) ? $secondaryRef : '';
+                $row['transaction_id'] = $txRef;
+                $row['external_ref']   = $extRef;
+                $row['pr_receipt_no']  = $prRef;
+
+                // Backfill customer_credit_transactions columns if empty in DB
+                if ((empty($row['cct_ref_no']) && !empty($primaryRef)) || (empty($row['cct_tx_id']) && !empty($txRef))) {
+                    try {
+                        $updSql = "UPDATE customer_credit_transactions SET reference_no = COALESCE(NULLIF(reference_no,''), ?), transaction_id = COALESCE(NULLIF(transaction_id,''), ?)" . ($prRef ? ", receipt_no = COALESCE(NULLIF(receipt_no,''), ?)" : "") . " WHERE id = ?";
+                        $updParams = $prRef ? [$primaryRef ?: null, $txRef ?: null, $prRef, (int)$row['id']] : [$primaryRef ?: null, $txRef ?: null, (int)$row['id']];
+                        $pdo->prepare($updSql)->execute($updParams);
+                    } catch (Throwable $e) {}
+                }
+            }
+            unset($row);
+
             $payments = array_merge($payments, $cctRows);
         } catch (Throwable $e) {}
     }
@@ -1589,11 +1897,16 @@ function manager_ar_history(): void {
     // Source B: Merchandise & Job Order transactions (paid)
     if (manager_has_table($pdo, 'merchandise_transactions')) {
         try {
+            $mcols = manager_table_columns($pdo, 'merchandise_transactions');
+            $mEwRef = isset($mcols['ewallet_reference']) ? 'NULLIF(TRIM(ewallet_reference),\'\')' : 'NULL';
+            $mCardRef = isset($mcols['card_reference']) ? 'NULLIF(TRIM(card_reference),\'\')' : 'NULL';
+
             $mStmt = $pdo->prepare("
                 SELECT
                     created_at AS pay_date,
                     CONCAT('OR-MT-', SUBSTR(transaction_id, -6)) AS receipt_no,
-                    transaction_id AS reference_no,
+                    COALESCE($mEwRef, $mCardRef, transaction_id) AS reference_no,
+                    transaction_id AS transaction_id,
                     COALESCE(payment_method, 'Cash') AS payment_method,
                     COALESCE(amount_paid, total_amount, 0) AS amount_paid,
                     CASE 
@@ -1614,20 +1927,42 @@ function manager_ar_history(): void {
             ");
             $mStmt->execute([$customerId, $customerId]);
             $mRows = $mStmt->fetchAll(PDO::FETCH_ASSOC);
-            $payments = array_merge($payments, $mRows);
+            foreach ($mRows as &$mr) {
+                if (!empty($mr['transaction_id']) && $mr['reference_no'] !== $mr['transaction_id']) {
+                    $mr['secondary_ref'] = $mr['transaction_id'];
+                } else {
+                    $mr['secondary_ref'] = '';
+                }
+            }
+            unset($mr);
+
+            // Avoid duplicate with Source A (credit payments already recorded)
+            $existCctTx = [];
+            foreach ($payments as $p) {
+                if (!empty($p['transaction_id'])) $existCctTx[] = $p['transaction_id'];
+                if (!empty($p['reference_no']) && $p['reference_no'] !== '—') $existCctTx[] = $p['reference_no'];
+            }
+            foreach ($mRows as $mr) {
+                if (!in_array($mr['transaction_id'], $existCctTx, true)) {
+                    $payments[] = $mr;
+                }
+            }
         } catch (Throwable $e) {}
     }
 
     // Source C: Job orders with payments
     if (manager_has_table($pdo, 'job_orders')) {
         try {
-            $joPayCols = manager_table_columns($pdo, 'job_orders');
-            if (isset($joPayCols['amount_paid']) && isset($joPayCols['payment_method'])) {
+            $jcols = manager_table_columns($pdo, 'job_orders');
+            if (isset($jcols['amount_paid']) && isset($jcols['payment_method'])) {
+                $jRefCol = isset($jcols['reference_no']) ? 'NULLIF(TRIM(reference_no),\'\')' : (isset($jcols['payment_ref']) ? 'NULLIF(TRIM(payment_ref),\'\')' : 'NULL');
+
                 $jPStmt = $pdo->prepare("
                     SELECT
                         created_at AS pay_date,
                         CONCAT('OR-JO-', LPAD(id, 5, '0')) AS receipt_no,
-                        job_order_number AS reference_no,
+                        COALESCE($jRefCol, job_order_number) AS reference_no,
+                        job_order_number AS transaction_id,
                         COALESCE(payment_method, 'Cash') AS payment_method,
                         COALESCE(amount_paid, 0) AS amount_paid,
                         CONCAT('Job Order: ', service_type) AS remarks,
@@ -1640,10 +1975,22 @@ function manager_ar_history(): void {
                 ");
                 $jPStmt->execute([$customerId]);
                 $joPayRows = $jPStmt->fetchAll(PDO::FETCH_ASSOC);
-                // Avoid duplicates with merchandise_transactions job orders
-                $existRefs = array_column($payments, 'reference_no');
+                foreach ($joPayRows as &$jr) {
+                    if (!empty($jr['transaction_id']) && $jr['reference_no'] !== $jr['transaction_id']) {
+                        $jr['secondary_ref'] = $jr['transaction_id'];
+                    } else {
+                        $jr['secondary_ref'] = '';
+                    }
+                }
+                unset($jr);
+
+                $existRefs = [];
+                foreach ($payments as $p) {
+                    if (!empty($p['reference_no']) && $p['reference_no'] !== '—') $existRefs[] = $p['reference_no'];
+                    if (!empty($p['transaction_id'])) $existRefs[] = $p['transaction_id'];
+                }
                 foreach ($joPayRows as $jp) {
-                    if (!in_array($jp['reference_no'], $existRefs)) {
+                    if (!in_array($jp['transaction_id'], $existRefs, true)) {
                         $payments[] = $jp;
                     }
                 }
@@ -1656,27 +2003,41 @@ function manager_ar_history(): void {
         try {
             $palCols = manager_table_columns($pdo, 'payment_audit_log');
             if (isset($palCols['customer_id']) || isset($palCols['record_id'])) {
-                // payment_audit_log doesn't have customer_id directly — join via merchandise_transactions
                 $palStmt = $pdo->prepare("
                     SELECT
                         pal.logged_at AS pay_date,
-                        CONCAT('OR-PAL-', LPAD(pal.id, 5, '0')) AS receipt_no,
-                        mt.transaction_id AS reference_no,
+                        COALESCE(NULLIF(TRIM(pal.receipt_no),''), CONCAT('OR-PAL-', LPAD(pal.id, 5, '0'))) AS receipt_no,
+                        COALESCE(NULLIF(TRIM(pal.reference_no),''), NULLIF(TRIM(pal.transaction_ref),''), mt.transaction_id, '—') AS reference_no,
+                        COALESCE(NULLIF(TRIM(pal.transaction_ref),''), mt.transaction_id, '') AS transaction_id,
                         COALESCE(pal.payment_method, 'Cash') AS payment_method,
                         COALESCE(pal.amount_paid, 0) AS amount_paid,
                         COALESCE(pal.remarks, 'Payment recorded') AS remarks,
-                        'Payment Log' AS source_type
+                        'Payment Log' AS source_type,
+                        pal.id AS payment_id
                     FROM payment_audit_log pal
-                    JOIN merchandise_transactions mt ON mt.id = pal.record_id AND pal.record_source = 'merchandise_transactions'
-                    WHERE mt.customer_id = ? OR mt.credit_customer_id = ?
+                    LEFT JOIN merchandise_transactions mt ON mt.id = pal.record_id AND pal.record_source = 'merchandise_transactions'
+                    WHERE (pal.customer_id = ? OR mt.customer_id = ? OR mt.credit_customer_id = ?)
                     ORDER BY pal.logged_at DESC
                     LIMIT 30
                 ");
-                $palStmt->execute([$customerId, $customerId]);
+                $palStmt->execute([$customerId, $customerId, $customerId]);
                 $palRows = $palStmt->fetchAll(PDO::FETCH_ASSOC);
-                $existRefs2 = array_column($payments, 'reference_no');
+                foreach ($palRows as &$pr) {
+                    if (!empty($pr['transaction_id']) && $pr['reference_no'] !== $pr['transaction_id']) {
+                        $pr['secondary_ref'] = $pr['transaction_id'];
+                    } else {
+                        $pr['secondary_ref'] = '';
+                    }
+                }
+                unset($pr);
+
+                $existRcpts = [];
+                foreach ($payments as $p) {
+                    if (!empty($p['pr_receipt_no'])) $existRcpts[] = $p['pr_receipt_no'];
+                    if (!empty($p['receipt_no'])) $existRcpts[] = $p['receipt_no'];
+                }
                 foreach ($palRows as $pr) {
-                    if (!in_array($pr['reference_no'], $existRefs2)) {
+                    if (!in_array($pr['receipt_no'], $existRcpts, true)) {
                         $payments[] = $pr;
                     }
                 }
@@ -1784,10 +2145,42 @@ function manager_record_ar_payment(): void {
             if ($paymentMethod === 'E-Wallet' && !empty($ewalletProvider) && strpos($paymentNote, $ewalletProvider) === false) {
                 $paymentNote .= " via {$ewalletProvider}";
             }
-            $pdo->prepare("
-                INSERT INTO customer_credit_transactions (station_id, customer_id, amount, payment_method, remarks, created_at)
-                VALUES (?, ?, ?, ?, ?, NOW())
-            ")->execute([$stationId, $customerId, $amount, $paymentMethod, $paymentNote]);
+
+            $cctCols   = manager_table_columns($pdo, 'customer_credit_transactions');
+            $refToSave = $remarks ?: $referenceNo;
+            $txToSave  = $referenceNo ?: '';
+
+            $fields = ['station_id', 'customer_id', 'amount', 'payment_method', 'remarks'];
+            $vals   = [$stationId, $customerId, $amount, $paymentMethod, $paymentNote];
+
+            if (isset($cctCols['reference_no'])) {
+                $fields[] = 'reference_no';
+                $vals[]   = $refToSave;
+            }
+            if (isset($cctCols['transaction_id'])) {
+                $fields[] = 'transaction_id';
+                $vals[]   = $txToSave;
+            }
+            if (isset($cctCols['created_by'])) {
+                $fields[] = 'created_by';
+                $vals[]   = (int)($me['id'] ?? 0);
+            }
+            if (isset($cctCols['transaction_type'])) {
+                $fields[] = 'transaction_type';
+                $vals[]   = 'Payment';
+            }
+
+            $fieldStr = implode(',', $fields) . ', created_at';
+            $phStr    = implode(',', array_fill(0, count($fields), '?')) . ', NOW()';
+
+            $insStmt = $pdo->prepare("INSERT INTO customer_credit_transactions ($fieldStr) VALUES ($phStr)");
+            $insStmt->execute($vals);
+            $newCctId = (int)$pdo->lastInsertId();
+
+            if (isset($cctCols['receipt_no']) && $newCctId > 0) {
+                $genRcpt = 'PR-' . date('Y') . '-' . str_pad((string)$newCctId, 6, '0', STR_PAD_LEFT);
+                $pdo->prepare("UPDATE customer_credit_transactions SET receipt_no = ? WHERE id = ?")->execute([$genRcpt, $newCctId]);
+            }
         }
 
         // ── Apply payment to specific transaction ─────────────────────────────

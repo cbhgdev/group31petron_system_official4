@@ -678,7 +678,7 @@ $logo_fallback = $_asset_base . '/img/petron_logo.png';
     <link rel="apple-touch-icon" sizes="180x180" href="<?= htmlspecialchars($_asset_base) ?>/img/apple-touch-icon.png?v=2.2">
     <link rel="icon" type="image/png" sizes="192x192" href="<?= htmlspecialchars($_asset_base) ?>/img/android-chrome-192x192.png?v=2.2">
     <link rel="icon" type="image/png" sizes="512x512" href="<?= htmlspecialchars($_asset_base) ?>/img/android-chrome-512x512.png?v=2.2">
-    <link rel="manifest" href="<?= htmlspecialchars($_login_base) ?>/manifest.json?v=2.2">
+    <link rel="manifest" href="manifest.json?v=2.2">
 
     <title>Login | Station MS</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">

@@ -296,19 +296,19 @@ try {
             COALESCE(
                 NULLIF(TRIM(mt.job_order_service), ''),
                 jo_mt.service_type,
-                (SELECT GROUP_CONCAT(product_name SEPARATOR ', ') FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category != 'Labor' AND product_name NOT LIKE '%Labor%'),
+                (SELECT GROUP_CONCAT(product_name SEPARATOR ', ') FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category NOT IN ('Labor', 'Tip') AND product_name NOT LIKE '%Labor%' AND LOWER(TRIM(product_name)) != 'tip' AND product_name NOT LIKE '%Tip%'),
                 ''
             ) AS service_type,
             COALESCE(
                 jo_mt.estimated_cost,
-                (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category != 'Labor' AND product_name NOT LIKE '%Labor%'),
+                (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category NOT IN ('Labor', 'Tip') AND product_name NOT LIKE '%Labor%' AND LOWER(TRIM(product_name)) != 'tip' AND product_name NOT LIKE '%Tip%'),
                 CASE WHEN (mt.job_order_service IS NOT NULL AND TRIM(mt.job_order_service) != '') OR mt.transaction_type IN ('job_order', 'combined') THEN mt.total_amount ELSE 0 END,
                 0
             ) AS service_fee,
             COALESCE(
-                jo_mt.actual_labor_cost,
-                jo_mt.estimated_labor_cost,
-                (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category = 'Labor' OR product_name LIKE '%Labor%')),
+                NULLIF(jo_mt.actual_labor_cost, 0),
+                NULLIF(jo_mt.estimated_labor_cost, 0),
+                (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category IN ('Labor', 'Tip') OR product_name LIKE '%Labor%' OR LOWER(TRIM(product_name)) = 'tip' OR product_name LIKE '%Tip%')),
                 0
             ) AS labor_fee,
             {$mt_jo_service_expr} AS job_order_service
@@ -1626,7 +1626,7 @@ try {
                             echo '<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px 4px;margin-bottom:3px;max-width:100%;"><span style="color:#475569;font-size:11px;font-weight:700;">Svc:</span><span style="color:#1d4ed8;font-weight:800;font-size:12.5px;white-space:nowrap;">₱' . number_format($s_cost, 2) . '</span></div>';
                         }
                         if ($l_cost > 0) {
-                            echo '<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px 4px;max-width:100%;"><span style="color:#475569;font-size:11px;font-weight:700;">Labor:</span><span style="color:#15803d;font-weight:800;font-size:12.5px;white-space:nowrap;">₱' . number_format($l_cost, 2) . '</span></div>';
+                            echo '<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:2px 4px;max-width:100%;"><span style="color:#475569;font-size:11px;font-weight:700;">Tip:</span><span style="color:#15803d;font-weight:800;font-size:12.5px;white-space:nowrap;">₱' . number_format($l_cost, 2) . '</span></div>';
                         }
                         if ($s_cost <= 0 && $l_cost <= 0) {
                             echo '<span style="color:#94a3b8;font-size:14px;font-weight:600;">—</span>';
@@ -2533,6 +2533,70 @@ function viewValidatedTransaction(source, id, orNo, txnIdStr, statusText) {
                 html += `</tbody></table></div>`;
             }
 
+            /* ── PAYMENT & COLLECTION HISTORY (Credit Accounts & Settlements) ── */
+            if (data.payment_history && data.payment_history.length > 0) {
+                html += `<div style="margin-top:16px;border-top:1.5px solid #cbd5e1;padding-top:12px;overflow-x:hidden;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                        <div style="font-size:12.5px;font-weight:800;color:#002F70;text-transform:uppercase;letter-spacing:.4px;">
+                            <i class="fas fa-history" style="margin-right:5px;"></i>Payment &amp; Collection History (${data.payment_history.length})
+                        </div>
+                    </div>
+                    <table class="report-table no-min-width print-table" style="width:100%;border-collapse:collapse;font-size:11.5px;table-layout:fixed;">
+                        <colgroup>
+                            <col style="width:22%;">
+                            <col style="width:20%;">
+                            <col style="width:16%;">
+                            <col style="width:14%;">
+                            <col style="width:14%;">
+                            <col style="width:14%;">
+                        </colgroup>
+                        <thead><tr style="background:#f1f5f9;border-bottom:2px solid #cbd5e1;color:#475569;font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;">
+                            <th style="padding:6px 8px;text-align:left;">Receipt / Date</th>
+                            <th style="padding:6px 8px;text-align:left;">Method / Ref</th>
+                            <th style="padding:6px 8px;text-align:right;">Amount Paid</th>
+                            <th style="padding:6px 8px;text-align:right;">Prev. Paid</th>
+                            <th style="padding:6px 8px;text-align:right;">Balance</th>
+                            <th style="padding:6px 8px;text-align:center;">Action</th>
+                        </tr></thead>
+                        <tbody>`;
+                data.payment_history.forEach((pay, idx) => {
+                    const bg = idx % 2 === 1 ? '#f8fafc' : '#ffffff';
+                    const recNo = pay.receipt_no || ('PR-' + pay.id);
+                    const recUrl = pay.receipt_url || ('payment_receipt.php?id=' + pay.id);
+                    const dt = pay.logged_at ? new Date(pay.logged_at).toLocaleString('en-PH', {dateStyle:'medium', timeStyle:'short'}) : '—';
+                    const staff = pay.staff_name || 'Staff';
+                    const refInfo = pay.reference_no ? `<div style="font-size:10px;color:#64748b;">Ref: ${pay.reference_no}</div>` : '';
+                    const amt = parseFloat(pay.amount_paid || 0).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
+                    const prev = parseFloat(pay.previous_paid || 0).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
+                    const bal = parseFloat(pay.balance_due || 0).toLocaleString('en-PH', {minimumFractionDigits:2, maximumFractionDigits:2});
+                    const isFullyPaid = parseFloat(pay.balance_due || 0) <= 0.009;
+                    const statBadge = isFullyPaid 
+                        ? `<span style="background:#dcfce7;color:#166534;padding:1px 5px;border-radius:3px;font-size:9.5px;font-weight:800;">PAID</span>`
+                        : `<span style="background:#fef9c3;color:#854d0e;padding:1px 5px;border-radius:3px;font-size:9.5px;font-weight:800;">PARTIAL</span>`;
+                    html += `<tr style="background:${bg};border-bottom:1px solid #f1f5f9;">
+                        <td style="padding:6px 8px;vertical-align:middle;">
+                            <div style="font-weight:800;color:#002F70;font-family:monospace;font-size:11px;">${recNo}</div>
+                            <div style="font-size:10px;color:#64748b;">${dt}</div>
+                            <div style="font-size:9.5px;color:#475569;">By: ${staff}</div>
+                        </td>
+                        <td style="padding:6px 8px;vertical-align:middle;">
+                            <strong style="color:#1e293b;font-size:11px;">${pay.payment_method}</strong>
+                            ${refInfo}
+                            <div>${statBadge}</div>
+                        </td>
+                        <td style="padding:6px 8px;text-align:right;font-weight:800;color:#166534;vertical-align:middle;font-size:12px;">₱${amt}</td>
+                        <td style="padding:6px 8px;text-align:right;color:#64748b;vertical-align:middle;font-size:11px;">₱${prev}</td>
+                        <td style="padding:6px 8px;text-align:right;font-weight:700;color:#dc2626;vertical-align:middle;font-size:11px;">₱${bal}</td>
+                        <td style="padding:6px 8px;text-align:center;vertical-align:middle;">
+                            <a href="${recUrl}" target="_blank" class="txn-btn secondary" style="padding:3px 7px;font-size:10.5px;font-weight:700;display:inline-flex;align-items:center;gap:3px;text-decoration:none;border-radius:4px;">
+                                <i class="fas fa-print"></i> Receipt
+                            </a>
+                        </td>
+                    </tr>`;
+                });
+                html += `</tbody></table></div>`;
+            }
+
             document.getElementById('viewTransactionContent').innerHTML = html;
         })
         .catch(error => {
@@ -2610,10 +2674,10 @@ function openAdjustModal(rowId, txnId, customer, entryType, txnDate, staffName, 
                     if (fieldLower.includes('quantity') || fieldLower.includes('qty')) {
                         targetNewQty = parseInt(parsedNum, 10) || 1;
                         targetAdjustIdx = 0;
-                    } else if (fieldLower.includes('labor')) {
+                    } else if (fieldLower.includes('labor') || fieldLower.includes('tip')) {
                         _adjItems.forEach((item, idx) => {
                             const nameLower = (item.product_name || '').toLowerCase();
-                            if (nameLower.includes('labor') || nameLower.includes('service')) {
+                            if (nameLower.includes('tip') || nameLower.includes('labor') || nameLower.includes('service')) {
                                 targetAdjustIdx = idx;
                             }
                         });
@@ -2689,7 +2753,8 @@ function openAdjustModal(rowId, txnId, customer, entryType, txnDate, staffName, 
             } else {
                 _adjItems.forEach((item, idx) => {
                     const isSvc = item.item_type === 'service';
-                    const isLabor = (item.product_name || '').toLowerCase().includes('labor');
+                    const nameL = (item.product_name || '').toLowerCase();
+                    const isLabor = nameL.includes('labor') || nameL.includes('tip') || (item.category || '').toLowerCase() === 'tip';
                     let itemQty = parseInt(item.quantity) || 1;
                     let itemPrice = parseFloat(item.unit_price) || 0;
 

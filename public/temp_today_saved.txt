@@ -1,0 +1,787 @@
+Array
+(
+    [TURBO DIESEL - 1-1] => Array
+        (
+            [id] => 1
+            [pump_label] => TURBO DIESEL - 1-1
+            [fuel_type] => TURBO DIESEL - 1-1
+            [pump_id] => 21426
+            [present_reading] => 73194.00
+            [previous_reading] => 73194.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [TURBO DIESEL - 1 - 1] => Array
+        (
+            [id] => 1
+            [pump_label] => TURBO DIESEL - 1-1
+            [fuel_type] => TURBO DIESEL - 1-1
+            [pump_id] => 21426
+            [present_reading] => 73194.00
+            [previous_reading] => 73194.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [TURBODIESEL-1-1] => Array
+        (
+            [id] => 1
+            [pump_label] => TURBO DIESEL - 1-1
+            [fuel_type] => TURBO DIESEL - 1-1
+            [pump_id] => 21426
+            [present_reading] => 73194.00
+            [previous_reading] => 73194.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [PUMP_21426] => Array
+        (
+            [id] => 1
+            [pump_label] => TURBO DIESEL - 1-1
+            [fuel_type] => TURBO DIESEL - 1-1
+            [pump_id] => 21426
+            [present_reading] => 73194.00
+            [previous_reading] => 73194.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [TURBO DIESEL - 1-2] => Array
+        (
+            [id] => 2
+            [pump_label] => TURBO DIESEL - 1-2
+            [fuel_type] => TURBO DIESEL - 1-2
+            [pump_id] => 21427
+            [present_reading] => 497741.00
+            [previous_reading] => 497741.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [TURBO DIESEL - 1 - 2] => Array
+        (
+            [id] => 2
+            [pump_label] => TURBO DIESEL - 1-2
+            [fuel_type] => TURBO DIESEL - 1-2
+            [pump_id] => 21427
+            [present_reading] => 497741.00
+            [previous_reading] => 497741.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [TURBODIESEL-1-2] => Array
+        (
+            [id] => 2
+            [pump_label] => TURBO DIESEL - 1-2
+            [fuel_type] => TURBO DIESEL - 1-2
+            [pump_id] => 21427
+            [present_reading] => 497741.00
+            [previous_reading] => 497741.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [PUMP_21427] => Array
+        (
+            [id] => 2
+            [pump_label] => TURBO DIESEL - 1-2
+            [fuel_type] => TURBO DIESEL - 1-2
+            [pump_id] => 21427
+            [present_reading] => 497741.00
+            [previous_reading] => 497741.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCS PLUS - 1-1] => Array
+        (
+            [id] => 3
+            [pump_label] => XCS PLUS - 1-1
+            [fuel_type] => XCS PLUS - 1-1
+            [pump_id] => 21428
+            [present_reading] => 521201.00
+            [previous_reading] => 521201.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCS PLUS - 1 - 1] => Array
+        (
+            [id] => 3
+            [pump_label] => XCS PLUS - 1-1
+            [fuel_type] => XCS PLUS - 1-1
+            [pump_id] => 21428
+            [present_reading] => 521201.00
+            [previous_reading] => 521201.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCSPLUS-1-1] => Array
+        (
+            [id] => 3
+            [pump_label] => XCS PLUS - 1-1
+            [fuel_type] => XCS PLUS - 1-1
+            [pump_id] => 21428
+            [present_reading] => 521201.00
+            [previous_reading] => 521201.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [PUMP_21428] => Array
+        (
+            [id] => 3
+            [pump_label] => XCS PLUS - 1-1
+            [fuel_type] => XCS PLUS - 1-1
+            [pump_id] => 21428
+            [present_reading] => 521201.00
+            [previous_reading] => 521201.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCS PLUS - 1-2] => Array
+        (
+            [id] => 4
+            [pump_label] => XCS PLUS - 1-2
+            [fuel_type] => XCS PLUS - 1-2
+            [pump_id] => 21429
+            [present_reading] => 1014555.00
+            [previous_reading] => 1014555.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCS PLUS - 1 - 2] => Array
+        (
+            [id] => 4
+            [pump_label] => XCS PLUS - 1-2
+            [fuel_type] => XCS PLUS - 1-2
+            [pump_id] => 21429
+            [present_reading] => 1014555.00
+            [previous_reading] => 1014555.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCSPLUS-1-2] => Array
+        (
+            [id] => 4
+            [pump_label] => XCS PLUS - 1-2
+            [fuel_type] => XCS PLUS - 1-2
+            [pump_id] => 21429
+            [present_reading] => 1014555.00
+            [previous_reading] => 1014555.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [PUMP_21429] => Array
+        (
+            [id] => 4
+            [pump_label] => XCS PLUS - 1-2
+            [fuel_type] => XCS PLUS - 1-2
+            [pump_id] => 21429
+            [present_reading] => 1014555.00
+            [previous_reading] => 1014555.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCS PLUS - 1-3] => Array
+        (
+            [id] => 5
+            [pump_label] => XCS PLUS - 1-3
+            [fuel_type] => XCS PLUS - 1-3
+            [pump_id] => 
+            [present_reading] => 1310942.00
+            [previous_reading] => 1310942.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCS PLUS - 1 - 3] => Array
+        (
+            [id] => 5
+            [pump_label] => XCS PLUS - 1-3
+            [fuel_type] => XCS PLUS - 1-3
+            [pump_id] => 
+            [present_reading] => 1310942.00
+            [previous_reading] => 1310942.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCSPLUS-1-3] => Array
+        (
+            [id] => 5
+            [pump_label] => XCS PLUS - 1-3
+            [fuel_type] => XCS PLUS - 1-3
+            [pump_id] => 
+            [present_reading] => 1310942.00
+            [previous_reading] => 1310942.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCS PLUS - 1-4] => Array
+        (
+            [id] => 6
+            [pump_label] => XCS PLUS - 1-4
+            [fuel_type] => XCS PLUS - 1-4
+            [pump_id] => 
+            [present_reading] => 1128082.00
+            [previous_reading] => 1128082.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCS PLUS - 1 - 4] => Array
+        (
+            [id] => 6
+            [pump_label] => XCS PLUS - 1-4
+            [fuel_type] => XCS PLUS - 1-4
+            [pump_id] => 
+            [present_reading] => 1128082.00
+            [previous_reading] => 1128082.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XCSPLUS-1-4] => Array
+        (
+            [id] => 6
+            [pump_label] => XCS PLUS - 1-4
+            [fuel_type] => XCS PLUS - 1-4
+            [pump_id] => 
+            [present_reading] => 1128082.00
+            [previous_reading] => 1128082.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRA UNL - 1-1] => Array
+        (
+            [id] => 7
+            [pump_label] => XTRA UNL - 1-1
+            [fuel_type] => XTRA UNL - 1-1
+            [pump_id] => 
+            [present_reading] => 1505885.00
+            [previous_reading] => 1505885.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRA UNL - 1 - 1] => Array
+        (
+            [id] => 7
+            [pump_label] => XTRA UNL - 1-1
+            [fuel_type] => XTRA UNL - 1-1
+            [pump_id] => 
+            [present_reading] => 1505885.00
+            [previous_reading] => 1505885.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRAUNL-1-1] => Array
+        (
+            [id] => 7
+            [pump_label] => XTRA UNL - 1-1
+            [fuel_type] => XTRA UNL - 1-1
+            [pump_id] => 
+            [present_reading] => 1505885.00
+            [previous_reading] => 1505885.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRA UNL - 1-2] => Array
+        (
+            [id] => 8
+            [pump_label] => XTRA UNL - 1-2
+            [fuel_type] => XTRA UNL - 1-2
+            [pump_id] => 
+            [present_reading] => 2878315.00
+            [previous_reading] => 2878315.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRA UNL - 1 - 2] => Array
+        (
+            [id] => 8
+            [pump_label] => XTRA UNL - 1-2
+            [fuel_type] => XTRA UNL - 1-2
+            [pump_id] => 
+            [present_reading] => 2878315.00
+            [previous_reading] => 2878315.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRAUNL-1-2] => Array
+        (
+            [id] => 8
+            [pump_label] => XTRA UNL - 1-2
+            [fuel_type] => XTRA UNL - 1-2
+            [pump_id] => 
+            [present_reading] => 2878315.00
+            [previous_reading] => 2878315.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRA UNL - 2-1] => Array
+        (
+            [id] => 9
+            [pump_label] => XTRA UNL - 2-1
+            [fuel_type] => XTRA UNL - 2-1
+            [pump_id] => 
+            [present_reading] => 1311620.00
+            [previous_reading] => 1311620.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRA UNL - 2 - 1] => Array
+        (
+            [id] => 9
+            [pump_label] => XTRA UNL - 2-1
+            [fuel_type] => XTRA UNL - 2-1
+            [pump_id] => 
+            [present_reading] => 1311620.00
+            [previous_reading] => 1311620.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRAUNL-2-1] => Array
+        (
+            [id] => 9
+            [pump_label] => XTRA UNL - 2-1
+            [fuel_type] => XTRA UNL - 2-1
+            [pump_id] => 
+            [present_reading] => 1311620.00
+            [previous_reading] => 1311620.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRA UNL - 2-2] => Array
+        (
+            [id] => 10
+            [pump_label] => XTRA UNL - 2-2
+            [fuel_type] => XTRA UNL - 2-2
+            [pump_id] => 
+            [present_reading] => 801298.00
+            [previous_reading] => 801298.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRA UNL - 2 - 2] => Array
+        (
+            [id] => 10
+            [pump_label] => XTRA UNL - 2-2
+            [fuel_type] => XTRA UNL - 2-2
+            [pump_id] => 
+            [present_reading] => 801298.00
+            [previous_reading] => 801298.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [XTRAUNL-2-2] => Array
+        (
+            [id] => 10
+            [pump_label] => XTRA UNL - 2-2
+            [fuel_type] => XTRA UNL - 2-2
+            [pump_id] => 
+            [present_reading] => 801298.00
+            [previous_reading] => 801298.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [KEROSENE - 1-1] => Array
+        (
+            [id] => 11
+            [pump_label] => KEROSENE - 1-1
+            [fuel_type] => KEROSENE - 1-1
+            [pump_id] => 21425
+            [present_reading] => 528576.00
+            [previous_reading] => 528576.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [KEROSENE - 1 - 1] => Array
+        (
+            [id] => 11
+            [pump_label] => KEROSENE - 1-1
+            [fuel_type] => KEROSENE - 1-1
+            [pump_id] => 21425
+            [present_reading] => 528576.00
+            [previous_reading] => 528576.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [KEROSENE-1-1] => Array
+        (
+            [id] => 11
+            [pump_label] => KEROSENE - 1-1
+            [fuel_type] => KEROSENE - 1-1
+            [pump_id] => 21425
+            [present_reading] => 528576.00
+            [previous_reading] => 528576.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [PUMP_21425] => Array
+        (
+            [id] => 11
+            [pump_label] => KEROSENE - 1-1
+            [fuel_type] => KEROSENE - 1-1
+            [pump_id] => 21425
+            [present_reading] => 528576.00
+            [previous_reading] => 528576.00
+            [calibration] => 0.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 1-1] => Array
+        (
+            [id] => 12
+            [pump_label] => DIESEL - 1-1
+            [fuel_type] => DIESEL - 1-1
+            [pump_id] => 
+            [present_reading] => 986796.00
+            [previous_reading] => 986796.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 1 - 1] => Array
+        (
+            [id] => 12
+            [pump_label] => DIESEL - 1-1
+            [fuel_type] => DIESEL - 1-1
+            [pump_id] => 
+            [present_reading] => 986796.00
+            [previous_reading] => 986796.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL-1-1] => Array
+        (
+            [id] => 12
+            [pump_label] => DIESEL - 1-1
+            [fuel_type] => DIESEL - 1-1
+            [pump_id] => 
+            [present_reading] => 986796.00
+            [previous_reading] => 986796.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 1-2] => Array
+        (
+            [id] => 13
+            [pump_label] => DIESEL - 1-2
+            [fuel_type] => DIESEL - 1-2
+            [pump_id] => 
+            [present_reading] => 1706845.00
+            [previous_reading] => 1706432.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 1 - 2] => Array
+        (
+            [id] => 13
+            [pump_label] => DIESEL - 1-2
+            [fuel_type] => DIESEL - 1-2
+            [pump_id] => 
+            [present_reading] => 1706845.00
+            [previous_reading] => 1706432.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL-1-2] => Array
+        (
+            [id] => 13
+            [pump_label] => DIESEL - 1-2
+            [fuel_type] => DIESEL - 1-2
+            [pump_id] => 
+            [present_reading] => 1706845.00
+            [previous_reading] => 1706432.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 1-3] => Array
+        (
+            [id] => 14
+            [pump_label] => DIESEL - 1-3
+            [fuel_type] => DIESEL - 1-3
+            [pump_id] => 
+            [present_reading] => 2709356.00
+            [previous_reading] => 2708849.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 1 - 3] => Array
+        (
+            [id] => 14
+            [pump_label] => DIESEL - 1-3
+            [fuel_type] => DIESEL - 1-3
+            [pump_id] => 
+            [present_reading] => 2709356.00
+            [previous_reading] => 2708849.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL-1-3] => Array
+        (
+            [id] => 14
+            [pump_label] => DIESEL - 1-3
+            [fuel_type] => DIESEL - 1-3
+            [pump_id] => 
+            [present_reading] => 2709356.00
+            [previous_reading] => 2708849.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 1-4] => Array
+        (
+            [id] => 15
+            [pump_label] => DIESEL - 1-4
+            [fuel_type] => DIESEL - 1-4
+            [pump_id] => 
+            [present_reading] => 2073839.00
+            [previous_reading] => 2072771.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 1 - 4] => Array
+        (
+            [id] => 15
+            [pump_label] => DIESEL - 1-4
+            [fuel_type] => DIESEL - 1-4
+            [pump_id] => 
+            [present_reading] => 2073839.00
+            [previous_reading] => 2072771.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL-1-4] => Array
+        (
+            [id] => 15
+            [pump_label] => DIESEL - 1-4
+            [fuel_type] => DIESEL - 1-4
+            [pump_id] => 
+            [present_reading] => 2073839.00
+            [previous_reading] => 2072771.00
+            [calibration] => 2340.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 2-1] => Array
+        (
+            [id] => 16
+            [pump_label] => DIESEL - 2-1
+            [fuel_type] => DIESEL - 2-1
+            [pump_id] => 
+            [present_reading] => 931925.00
+            [previous_reading] => 931591.00
+            [calibration] => 518.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 2 - 1] => Array
+        (
+            [id] => 16
+            [pump_label] => DIESEL - 2-1
+            [fuel_type] => DIESEL - 2-1
+            [pump_id] => 
+            [present_reading] => 931925.00
+            [previous_reading] => 931591.00
+            [calibration] => 518.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL-2-1] => Array
+        (
+            [id] => 16
+            [pump_label] => DIESEL - 2-1
+            [fuel_type] => DIESEL - 2-1
+            [pump_id] => 
+            [present_reading] => 931925.00
+            [previous_reading] => 931591.00
+            [calibration] => 518.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 2-2] => Array
+        (
+            [id] => 17
+            [pump_label] => DIESEL - 2-2
+            [fuel_type] => DIESEL - 2-2
+            [pump_id] => 
+            [present_reading] => 2380621.00
+            [previous_reading] => 2380437.00
+            [calibration] => 518.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL - 2 - 2] => Array
+        (
+            [id] => 17
+            [pump_label] => DIESEL - 2-2
+            [fuel_type] => DIESEL - 2-2
+            [pump_id] => 
+            [present_reading] => 2380621.00
+            [previous_reading] => 2380437.00
+            [calibration] => 518.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+    [DIESEL-2-2] => Array
+        (
+            [id] => 17
+            [pump_label] => DIESEL - 2-2
+            [fuel_type] => DIESEL - 2-2
+            [pump_id] => 
+            [present_reading] => 2380621.00
+            [previous_reading] => 2380437.00
+            [calibration] => 518.00
+            [liters_sold] => 0.00
+            [total_amount] => 0.00
+            [status] => CLOSING_COMPLETED
+        )
+
+)

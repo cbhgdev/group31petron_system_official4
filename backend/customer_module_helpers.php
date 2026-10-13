@@ -59,6 +59,12 @@ if (!function_exists('customer_ensure_optional_columns')) {
             'vehicle_brand'          => "VARCHAR(100) NULL DEFAULT NULL",
             'vehicle_model'          => "VARCHAR(100) NULL DEFAULT NULL",
             'vehicle_type'           => "VARCHAR(100) NULL DEFAULT NULL",
+            'year_model'             => "VARCHAR(20) NULL DEFAULT NULL",
+            'color'                  => "VARCHAR(50) NULL DEFAULT NULL",
+            'engine_no'              => "VARCHAR(100) NULL DEFAULT NULL",
+            'chassis_no'             => "VARCHAR(100) NULL DEFAULT NULL",
+            'engine_number'          => "VARCHAR(100) NULL DEFAULT NULL",
+            'chassis_number'         => "VARCHAR(100) NULL DEFAULT NULL",
             'credit_limit'           => "DECIMAL(15,2) NOT NULL DEFAULT 0.00",
             'credit_terms'           => "VARCHAR(50) NULL DEFAULT '30 Days'",
             'balance'                => "DECIMAL(15,2) NOT NULL DEFAULT 0.00",
@@ -128,11 +134,46 @@ if (!function_exists('customer_ensure_optional_columns')) {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
         } catch (Exception $e) {}
 
+        customer_ensure_vehicle_columns($pdo);
+
         customer_table_columns($pdo, true);
         $done = true;
         if (session_status() === PHP_SESSION_ACTIVE) {
             $_SESSION['customer_cols_ensured'] = true;
         }
+    }
+}
+
+if (!function_exists('customer_ensure_vehicle_columns')) {
+    function customer_ensure_vehicle_columns(PDO $pdo): void {
+        try {
+            $vehCols = [];
+            $vColStmt = $pdo->query("SHOW COLUMNS FROM customer_vehicles");
+            if ($vColStmt) {
+                foreach ($vColStmt->fetchAll(PDO::FETCH_ASSOC) as $cRow) {
+                    $vehCols[strtolower($cRow['Field'])] = true;
+                }
+            }
+            $vehDefs = [
+                'vehicle_type'   => "VARCHAR(100) NULL DEFAULT NULL",
+                'brand'          => "VARCHAR(100) NULL DEFAULT NULL",
+                'model'          => "VARCHAR(100) NULL DEFAULT NULL",
+                'year_model'     => "VARCHAR(20) NULL DEFAULT NULL",
+                'color'          => "VARCHAR(50) NULL DEFAULT NULL",
+                'engine_no'      => "VARCHAR(100) NULL DEFAULT NULL",
+                'chassis_no'     => "VARCHAR(100) NULL DEFAULT NULL",
+                'engine_number'  => "VARCHAR(100) NULL DEFAULT NULL",
+                'chassis_number' => "VARCHAR(100) NULL DEFAULT NULL",
+                'status'         => "VARCHAR(30) NOT NULL DEFAULT 'active'",
+            ];
+            foreach ($vehDefs as $col => $def) {
+                if (!isset($vehCols[strtolower($col)])) {
+                    try {
+                        $pdo->exec("ALTER TABLE customer_vehicles ADD COLUMN `$col` $def");
+                    } catch (Exception $e) {}
+                }
+            }
+        } catch (Exception $e) {}
     }
 }
 

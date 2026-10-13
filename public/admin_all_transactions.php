@@ -251,19 +251,19 @@ try {
         COALESCE(
             NULLIF(TRIM(mt.job_order_service), ''),
             jo.service_type,
-            (SELECT GROUP_CONCAT(product_name SEPARATOR ', ') FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category != 'Labor' AND product_name NOT LIKE '%Labor%'),
+            (SELECT GROUP_CONCAT(product_name SEPARATOR ', ') FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category NOT IN ('Labor', 'Tip') AND product_name NOT LIKE '%Labor%' AND LOWER(TRIM(product_name)) != 'tip' AND product_name NOT LIKE '%Tip%'),
             ''
         ) as service_type,
         COALESCE(
             jo.estimated_cost,
-            (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category != 'Labor' AND product_name NOT LIKE '%Labor%'),
+            (SELECT NULLIF(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (item_type = 'service' OR category LIKE '%Service%') AND category NOT IN ('Labor', 'Tip') AND product_name NOT LIKE '%Labor%' AND LOWER(TRIM(product_name)) != 'tip' AND product_name NOT LIKE '%Tip%'),
             CASE WHEN (mt.job_order_service IS NOT NULL AND TRIM(mt.job_order_service) != '') OR mt.transaction_type IN ('job_order', 'combined') THEN mt.total_amount ELSE 0 END,
             0
         ) as service_fee,
         COALESCE(
-            jo.actual_labor_cost,
-            jo.estimated_labor_cost,
-            (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category = 'Labor' OR product_name LIKE '%Labor%')),
+            NULLIF(jo.actual_labor_cost, 0),
+            NULLIF(jo.estimated_labor_cost, 0),
+            (SELECT COALESCE(SUM(subtotal),0) FROM merchandise_transaction_items WHERE transaction_id = mt.id AND (category IN ('Labor', 'Tip') OR product_name LIKE '%Labor%' OR LOWER(TRIM(product_name)) = 'tip' OR product_name LIKE '%Tip%')),
             0
         ) as labor_fee
         FROM merchandise_transactions mt
@@ -333,7 +333,7 @@ if(in_array($export,['excel','csv'])) {
     if($export==='excel'){ header('Content-Type: application/vnd.ms-excel'); header("Content-Disposition: attachment; filename={$fn}.xls"); }
     else { header('Content-Type: text/csv; charset=utf-8'); header("Content-Disposition: attachment; filename={$fn}.csv"); }
     $out=fopen('php://output','w');
-    fputcsv($out,['OR No.','Transaction ID','Customer','Type','Products','Service Type','Svc Fee','Labor Fee','Plate No.','Total','Payment Method','Shift','Staff Encoder','Status','Date & Time']);
+    fputcsv($out,['OR No.','Transaction ID','Customer','Type','Products','Service Type','Svc Fee','Tip','Plate No.','Total','Payment Method','Shift','Staff Encoder','Status','Date & Time']);
     foreach($rows as $r) {
         $t=strtolower($r['txn_type']??'');
         $has_items   = !empty(trim($r['items'] ?? ''));
@@ -835,7 +835,7 @@ overflow: hidden;
                         echo '<div style="color:#334155;">Svc: <strong style="color:#2563eb;font-weight:800;">₱' . number_format($s_cost, 2) . '</strong></div>';
                     }
                     if ($l_cost > 0) {
-                        echo '<div style="color:#334155;margin-top:2px;">Labor: <strong style="color:#16a34a;font-weight:800;">₱' . number_format($l_cost, 2) . '</strong></div>';
+                        echo '<div style="color:#334155;margin-top:2px;">Tip: <strong style="color:#16a34a;font-weight:800;">₱' . number_format($l_cost, 2) . '</strong></div>';
                     }
                     if ($s_cost <= 0 && $l_cost <= 0) {
                         echo '<span style="color:#94a3b8;">—</span>';

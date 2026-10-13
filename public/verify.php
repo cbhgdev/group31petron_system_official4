@@ -488,10 +488,15 @@ body {
             </tr>
           </thead>
           <tbody>
-            <?php foreach ($items as $it): ?>
+            <?php foreach ($items as $it):
+              $v_item_name = $it['product_name'] ?? '—';
+              if (stripos($v_item_name, 'labor') !== false || strtolower(trim($it['category'] ?? '')) === 'labor') {
+                  $v_item_name = 'Tip';
+              }
+            ?>
             <tr>
               <td>
-                <?php echo htmlspecialchars($it['product_name'] ?? '—'); ?>
+                <?php echo htmlspecialchars($v_item_name); ?>
                 <?php if (!empty($it['size_variant'])): ?>
                 <small style="color:#94a3b8; font-weight:600;"> &bull; <?php echo htmlspecialchars($it['size_variant']); ?></small>
                 <?php endif; ?>

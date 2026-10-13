@@ -98,6 +98,20 @@ try {
     ");
     $stmt_items->execute([$txn['id']]);
     $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($items as &$itm) {
+        $p_nm  = trim((string)($itm['product_name'] ?? ''));
+        $p_cat = trim((string)($itm['category'] ?? ''));
+        if (strcasecmp($p_nm, 'Labor Charge') === 0 || strcasecmp($p_nm, 'Labor') === 0 || strcasecmp($p_nm, 'Labor Fee') === 0 || strcasecmp($p_cat, 'Labor') === 0 || strcasecmp($p_cat, 'Tip') === 0 || strcasecmp($p_nm, 'Tip') === 0) {
+            $itm['product_name'] = 'Tip';
+            $itm['category']     = 'Tip';
+            if (empty($itm['product_id']) || $itm['sku'] === 'P0000') {
+                $itm['sku'] = 'TIP';
+            }
+        } elseif (($itm['item_type'] ?? '') === 'service' && (empty($itm['product_id']) || $itm['sku'] === 'P0000')) {
+            $itm['sku'] = 'SVC';
+        }
+    }
+    unset($itm);
 
     // Check for pending transaction requests (Adjustment or Void)
     $stmt_pr = $pdo->prepare("

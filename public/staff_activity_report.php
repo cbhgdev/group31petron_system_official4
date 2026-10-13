@@ -56,57 +56,215 @@ $filter_search   = trim($_GET['search']     ?? '');
 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_start)) $date_start = $seven_days_ago;
 if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_end))   $date_end   = $today;
 
-// ── Helper to check table existence ──────────────────────────────────────────
+// ── Helpers to check table & column existence safely ─────────────────────────
 if (!function_exists('check_table_exists')) {
     function check_table_exists($pdo, $table) {
+        static $table_cache = [];
+        if (array_key_exists($table, $table_cache)) return $table_cache[$table];
         try {
             $stmt = $pdo->query("SHOW TABLES LIKE " . $pdo->quote($table));
-            return $stmt && $stmt->fetch() !== false;
+            return $table_cache[$table] = ($stmt && $stmt->fetch() !== false);
         } catch (Exception $e) {
-            return false;
+            return $table_cache[$table] = false;
+        }
+    }
+}
+
+if (!function_exists('check_column_exists')) {
+    function check_column_exists($pdo, $table, $column) {
+        static $col_cache = [];
+        $key = $table . '.' . $column;
+        if (array_key_exists($key, $col_cache)) return $col_cache[$key];
+        if (!check_table_exists($pdo, $table)) return $col_cache[$key] = false;
+        try {
+            $stmt = $pdo->query("SHOW COLUMNS FROM `{$table}` LIKE " . $pdo->quote($column));
+            return $col_cache[$key] = ($stmt && $stmt->fetch() !== false);
+        } catch (Exception $e) {
+            return $col_cache[$key] = false;
         }
     }
 }
 
 $raw_activities = [];
+$known_refs     = [];
+$known_jo_ids   = [];
+
+$register_known_ref = function($ref) use (&$known_refs) {
+    $r = strtoupper(trim((string)$ref));
+    if ($r !== '' && !in_array($r, ['—', '-', 'N/A', 'NONE', 'NULL'], true)) {
+        $known_refs[$r] = true;
+    }
+};
 
 // ==============================================================================
-// 1. MY ACTIVITY REPORT DATA FETCHING
+// 1. MY ACTIVITY REPORT DATA FETCHING (ALL STAFF MODULES)
 // ==============================================================================
 if ($active_tab === 'my_activity') {
 
-    // 1. Merchandise Sales & Transactions
+    // 1. Merchandise, Job Order & Combined Transactions (staff_transactions_hub.php)
     if (check_table_exists($pdo, 'merchandise_transactions')) {
         try {
             $sql = "
                 SELECT 
                     mt.id,
                     mt.created_at AS datetime,
-                    'Sales' AS module,
+                    mt.transaction_id,
+                    mt.or_number,
+                    mt.job_order_id,
+                    mt.job_order_db_id,
+                    mt.transaction_type,
+                    CASE 
+                        WHEN LOWER(COALESCE(mt.transaction_type,'')) = 'job_order' THEN 'Job Orders'
+                        ELSE 'Sales'
+                    END AS module,
                     CASE 
                         WHEN mt.void_reason IS NOT NULL AND TRIM(mt.void_reason) != '' THEN 'Void Request'
                         WHEN mt.adjustment_reason IS NOT NULL AND TRIM(mt.adjustment_reason) != '' THEN 'Adjustment Request'
                         WHEN LOWER(COALESCE(mt.transaction_type,'')) LIKE '%return%' THEN 'Processed Return'
+                        WHEN LOWER(COALESCE(mt.transaction_type,'')) = 'job_order' THEN 'Created Job Order'
+                        WHEN LOWER(COALESCE(mt.transaction_type,'')) = 'combined' THEN 'Job Order + Merchandise'
                         ELSE 'Merchandise Sale'
                     END AS activity,
-                    COALESCE(NULLIF(mt.transaction_id,''), CONCAT('MTX-', mt.id)) AS ref_no,
+                    COALESCE(NULLIF(mt.transaction_id,''), NULLIF(mt.or_number,''), NULLIF(mt.job_order_id,''), CONCAT('MTX-', mt.id)) AS ref_no,
                     CASE 
                         WHEN LOWER(COALESCE(mt.validation_status, mt.workflow_status, mt.payment_status, '')) IN ('voided','rejected','cancelled','canceled') THEN 'Cancelled'
                         ELSE 'Success'
                     END AS status,
                     COALESCE(mt.shift_period, '') AS shift_period,
-                    CONCAT('Customer: ', COALESCE(mt.customer_name,'Walk-in'), ' | Total: ₱', FORMAT(COALESCE(mt.total_amount,0),2), ' | Payment: ', COALESCE(mt.payment_method,'Cash')) AS details
+                    CONCAT(
+                        'Customer: ', COALESCE(NULLIF(mt.customer_name,''),'Walk-in'),
+                        IF(mt.service_type IS NOT NULL AND TRIM(mt.service_type) != '', CONCAT(' | Service: ', mt.service_type), ''),
+                        IF(mt.vehicle_plate IS NOT NULL AND TRIM(mt.vehicle_plate) != '', CONCAT(' | Vehicle: ', mt.vehicle_plate), ''),
+                        ' | Total: ₱', FORMAT(COALESCE(mt.total_amount,0),2),
+                        ' | Payment: ', COALESCE(NULLIF(mt.payment_method,''),'Cash'),
+                        IF(mt.payment_status IS NOT NULL AND TRIM(mt.payment_status) != '', CONCAT(' (', mt.payment_status, ')'), '')
+                    ) AS details
                 FROM merchandise_transactions mt
                 WHERE mt.station_id = :sid AND mt.staff_id = :uid AND DATE(mt.created_at) BETWEEN :dstart AND :dend
             ";
             $stmt = $pdo->prepare($sql);
             $stmt->execute(['sid' => $station_id, 'uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $register_known_ref($r['ref_no'] ?? '');
+                $register_known_ref($r['transaction_id'] ?? '');
+                $register_known_ref($r['or_number'] ?? '');
+                $register_known_ref($r['job_order_id'] ?? '');
+                if (!empty($r['job_order_db_id'])) {
+                    $known_jo_ids[(int)$r['job_order_db_id']] = true;
+                }
+                $raw_activities[] = $r;
+            }
         } catch (Exception $e) {}
     }
 
-    // 2. Fuel Transactions & Meter Readings
+    // 2. Job Order Payments / Settlements (staff_job_order_tracker.php)
+    if (check_table_exists($pdo, 'job_order_payments')) {
+        try {
+            $has_mt = check_table_exists($pdo, 'merchandise_transactions');
+            $has_rec_by = check_column_exists($pdo, 'job_order_payments', 'recorded_by');
+            $has_rec_no = check_column_exists($pdo, 'job_order_payments', 'receipt_no');
+            $rec_no_expr = $has_rec_no ? "NULLIF(jop.receipt_no,'')" : "NULL";
+
+            if ($has_mt) {
+                $where_staff = $has_rec_by
+                    ? "(jop.recorded_by = :uid1 OR (jop.recorded_by IS NULL AND mt.staff_id = :uid2))"
+                    : "mt.staff_id = :uid1";
+                $sql = "
+                    SELECT 
+                        jop.id,
+                        COALESCE(jop.payment_date, jop.created_at) AS datetime,
+                        'Job Orders' AS module,
+                        'Job Order Payment' AS activity,
+                        COALESCE({$rec_no_expr}, NULLIF(mt.or_number,''), NULLIF(mt.transaction_id,''), CONCAT('PR-', YEAR(COALESCE(jop.payment_date, NOW())), '-', LPAD(jop.id, 6, '0'))) AS ref_no,
+                        mt.transaction_id AS parent_txn_id,
+                        mt.job_order_id AS parent_jo_id,
+                        'Success' AS status,
+                        COALESCE(mt.shift_period, '') AS shift_period,
+                        CONCAT(
+                            'Customer: ', COALESCE(NULLIF(mt.customer_name,''),'Walk-in'),
+                            IF(mt.job_order_id IS NOT NULL AND mt.job_order_id != '', CONCAT(' | JO: ', mt.job_order_id), ''),
+                            ' | Paid: ₱', FORMAT(COALESCE(jop.amount_paid,0),2),
+                            ' (', COALESCE(NULLIF(jop.payment_method,''),'Cash'), ')',
+                            IF(mt.transaction_id IS NOT NULL AND mt.transaction_id != '', CONCAT(' | Ref: ', mt.transaction_id), '')
+                        ) AS details
+                    FROM job_order_payments jop
+                    LEFT JOIN merchandise_transactions mt ON mt.id = jop.transaction_id
+                    WHERE (mt.station_id = :sid OR mt.station_id IS NULL)
+                      AND {$where_staff}
+                      AND DATE(COALESCE(jop.payment_date, jop.created_at)) BETWEEN :dstart AND :dend
+                ";
+                $stmt = $pdo->prepare($sql);
+                $params = ['sid' => $station_id, 'uid1' => $user_id, 'dstart' => $date_start, 'dend' => $date_end];
+                if ($has_rec_by) $params['uid2'] = $user_id;
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                foreach ($rows as $r) {
+                    $register_known_ref($r['ref_no'] ?? '');
+                    $register_known_ref('PR-' . date('Y', strtotime($r['datetime'] ?? 'now')) . '-' . str_pad((string)$r['id'], 6, '0', STR_PAD_LEFT));
+                    $raw_activities[] = $r;
+                }
+            }
+        } catch (Exception $e) {}
+    }
+
+    // 3. Job Orders (job_orders table — excluding duplicates already shown via merchandise_transactions)
+    if (check_table_exists($pdo, 'job_orders')) {
+        try {
+            $has_user_id    = check_column_exists($pdo, 'job_orders', 'user_id');
+            $has_created_by = check_column_exists($pdo, 'job_orders', 'created_by');
+            $has_staff_id   = check_column_exists($pdo, 'job_orders', 'staff_id');
+            $user_conds = [];
+            $params = ['sid' => $station_id, 'dstart' => $date_start, 'dend' => $date_end];
+            if ($has_user_id)    { $user_conds[] = "jo.user_id = :uid1";    $params['uid1'] = $user_id; }
+            if ($has_created_by) { $user_conds[] = "jo.created_by = :uid2"; $params['uid2'] = $user_id; }
+            if ($has_staff_id)   { $user_conds[] = "jo.staff_id = :uid3";   $params['uid3'] = $user_id; }
+
+            if (!empty($user_conds)) {
+                $has_jo_id  = check_column_exists($pdo, 'job_orders', 'job_order_id');
+                $has_jo_num = check_column_exists($pdo, 'job_orders', 'job_order_number');
+                $ref_parts  = [];
+                if ($has_jo_id)  $ref_parts[] = "NULLIF(jo.job_order_id,'')";
+                if ($has_jo_num) $ref_parts[] = "NULLIF(jo.job_order_number,'')";
+                $ref_parts[] = "CONCAT('JO-', jo.id)";
+                $ref_expr = "COALESCE(" . implode(', ', $ref_parts) . ")";
+
+                $sql = "
+                    SELECT 
+                        jo.id,
+                        jo.created_at AS datetime,
+                        'Job Orders' AS module,
+                        CASE 
+                            WHEN jo.updated_at IS NOT NULL AND jo.updated_at > jo.created_at THEN 'Updated Job Order'
+                            ELSE 'Created Job Order'
+                        END AS activity,
+                        {$ref_expr} AS ref_no,
+                        CASE 
+                            WHEN LOWER(COALESCE(jo.status, '')) IN ('cancelled','canceled','rejected','voided') THEN 'Cancelled'
+                            ELSE 'Success'
+                        END AS status,
+                        '' AS shift_period,
+                        CONCAT('Service: ', COALESCE(jo.service_type,'General Service'), ' | Vehicle: ', COALESCE(jo.vehicle_plate,'N/A'), ' | Total: ₱', FORMAT(COALESCE(jo.total_cost, 0),2)) AS details
+                    FROM job_orders jo
+                    WHERE jo.station_id = :sid AND (" . implode(' OR ', $user_conds) . ") AND DATE(jo.created_at) BETWEEN :dstart AND :dend
+                ";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                foreach ($rows as $r) {
+                    $jid = (int)($r['id'] ?? 0);
+                    $jref = strtoupper(trim($r['ref_no'] ?? ''));
+                    if (isset($known_jo_ids[$jid]) || isset($known_refs[$jref])) {
+                        continue;
+                    }
+                    $register_known_ref($jref);
+                    $raw_activities[] = $r;
+                }
+            }
+        } catch (Exception $e) {}
+    }
+
+    // 4. Fuel Transactions & Meter Readings (staff_inventory_fuel.php)
     if (check_table_exists($pdo, 'fuel_transactions')) {
         try {
             $sql = "
@@ -128,40 +286,46 @@ if ($active_tab === 'my_activity') {
             $stmt = $pdo->prepare($sql);
             $stmt->execute(['sid' => $station_id, 'uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $register_known_ref($r['ref_no'] ?? '');
+                $raw_activities[] = $r;
+            }
         } catch (Exception $e) {}
     }
 
-    // 3. Job Orders
-    if (check_table_exists($pdo, 'job_orders')) {
+    // 4b. Fuel Daily Readings (if encoded in fuel_daily_readings)
+    if (check_table_exists($pdo, 'fuel_daily_readings')) {
         try {
-            $sql = "
-                SELECT 
-                    jo.id,
-                    jo.created_at AS datetime,
-                    'Job Orders' AS module,
-                    CASE 
-                        WHEN jo.updated_at > jo.created_at THEN 'Updated Job Order'
-                        ELSE 'Created Job Order'
-                    END AS activity,
-                    COALESCE(NULLIF(jo.job_order_id,''), COALESCE(NULLIF(jo.job_order_number,''), CONCAT('JO-', jo.id))) AS ref_no,
-                    CASE 
-                        WHEN LOWER(COALESCE(jo.status, jo.validation_status, '')) IN ('cancelled','canceled','rejected','voided') THEN 'Cancelled'
-                        ELSE 'Success'
-                    END AS status,
-                    '' AS shift_period,
-                    CONCAT('Service: ', COALESCE(jo.service_type,'General Service'), ' | Vehicle: ', COALESCE(jo.vehicle_plate,'N/A'), ' | Total: ₱', FORMAT(COALESCE(jo.total_cost, jo.actual_labor_cost + jo.actual_parts_cost, 0),2)) AS details
-                FROM job_orders jo
-                WHERE jo.station_id = :sid AND (jo.user_id = :uid1 OR jo.created_by = :uid2) AND DATE(jo.created_at) BETWEEN :dstart AND :dend
-            ";
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute(['sid' => $station_id, 'uid1' => $user_id, 'uid2' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            $u_col = check_column_exists($pdo, 'fuel_daily_readings', 'user_id') ? 'user_id' : (check_column_exists($pdo, 'fuel_daily_readings', 'staff_id') ? 'staff_id' : '');
+            if ($u_col !== '') {
+                $sql = "
+                    SELECT 
+                        fdr.id,
+                        fdr.created_at AS datetime,
+                        'Fuel Management' AS module,
+                        'Fuel Meter Reading' AS activity,
+                        CONCAT('FDR-', fdr.id) AS ref_no,
+                        CASE 
+                            WHEN LOWER(COALESCE(fdr.status,'')) IN ('voided','rejected','cancelled','canceled') THEN 'Cancelled'
+                            ELSE 'Success'
+                        END AS status,
+                        COALESCE(fdr.shift, '') AS shift_period,
+                        CONCAT('Reading Date: ', COALESCE(fdr.reading_date,''), ' | Shift: ', COALESCE(fdr.shift,''), ' | Liters Sold: ', FORMAT(COALESCE(fdr.liters_sold, fdr.sales_liters, 0), 2), ' L') AS details
+                    FROM fuel_daily_readings fdr
+                    WHERE fdr.station_id = :sid AND fdr.{$u_col} = :uid AND DATE(COALESCE(fdr.created_at, fdr.reading_date)) BETWEEN :dstart AND :dend
+                ";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute(['sid' => $station_id, 'uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                foreach ($rows as $r) {
+                    $register_known_ref($r['ref_no'] ?? '');
+                    $raw_activities[] = $r;
+                }
+            }
         } catch (Exception $e) {}
     }
 
-    // 4. Record Delivery (Deliveries Oversight - Merchandise & Fuel Deliveries)
+    // 5. Record Delivery (Deliveries Oversight - Merchandise & Fuel Deliveries)
     if (check_table_exists($pdo, 'deliveries_oversight')) {
         try {
             $user_full_name = trim(($me['first_name'] ?? '') . ' ' . ($me['last_name'] ?? '')) ?: ($me['name'] ?? $me['username'] ?? '');
@@ -172,6 +336,7 @@ if ($active_tab === 'my_activity') {
                     'Inventory' AS module,
                     'Record Delivery' AS activity,
                     COALESCE(NULLIF(do.delivery_ref,''), CONCAT('DLV-', do.id)) AS ref_no,
+                    do.dr_number,
                     CASE 
                         WHEN LOWER(COALESCE(do.status,'')) IN ('rejected','cancelled','canceled','voided') THEN 'Cancelled'
                         ELSE 'Success'
@@ -200,72 +365,147 @@ if ($active_tab === 'my_activity') {
                 'dend'   => $date_end
             ]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $register_known_ref($r['ref_no'] ?? '');
+                $register_known_ref($r['dr_number'] ?? '');
+                $raw_activities[] = $r;
+            }
         } catch (Exception $e) {}
     }
 
-    // 5. Merchandise Stock Requests
+    // 6. Merchandise Stock Requests (supports both item_name/requested_quantity and product_name/quantity schemas)
     if (check_table_exists($pdo, 'stock_requests')) {
         try {
-            $sql = "
-                SELECT 
-                    sr.id,
-                    sr.created_at AS datetime,
-                    'Inventory' AS module,
-                    'Stock Request' AS activity,
-                    COALESCE(NULLIF(sr.request_no,''), CONCAT('SR-', sr.id)) AS ref_no,
-                    CASE 
-                        WHEN LOWER(COALESCE(sr.status,'')) IN ('rejected','cancelled','canceled','voided') THEN 'Cancelled'
-                        ELSE 'Success'
-                    END AS status,
-                    '' AS shift_period,
-                    CONCAT(
-                        'Item: ', COALESCE(sr.item_name,'N/A'), 
-                        ' (SKU: ', COALESCE(sr.item_sku,'N/A'), ')',
-                        ' | Requested Qty: ', FORMAT(COALESCE(NULLIF(sr.requested_quantity,0), sr.approved_quantity, 0), 0),
-                        IF(sr.remarks IS NOT NULL AND sr.remarks != '', CONCAT(' | Remarks: ', sr.remarks), '')
-                    ) AS details
-                FROM stock_requests sr
-                WHERE sr.station_id = :sid AND sr.staff_id = :uid AND DATE(sr.created_at) BETWEEN :dstart AND :dend
-            ";
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute(['sid' => $station_id, 'uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            $has_req_no   = check_column_exists($pdo, 'stock_requests', 'request_no');
+            $has_item_nm  = check_column_exists($pdo, 'stock_requests', 'item_name');
+            $has_prod_nm  = check_column_exists($pdo, 'stock_requests', 'product_name');
+            $has_item_sku = check_column_exists($pdo, 'stock_requests', 'item_sku');
+            $has_req_qty  = check_column_exists($pdo, 'stock_requests', 'requested_quantity');
+            $has_app_qty  = check_column_exists($pdo, 'stock_requests', 'approved_quantity');
+            $has_qty      = check_column_exists($pdo, 'stock_requests', 'quantity');
+            $has_remarks  = check_column_exists($pdo, 'stock_requests', 'remarks');
+            $has_notes    = check_column_exists($pdo, 'stock_requests', 'notes');
+            $has_staff_id = check_column_exists($pdo, 'stock_requests', 'staff_id');
+            $has_req_by   = check_column_exists($pdo, 'stock_requests', 'requested_by');
+
+            $ref_expr  = $has_req_no ? "COALESCE(NULLIF(sr.request_no,''), CONCAT('SR-', sr.id))" : "CONCAT('SR-', sr.id)";
+            $name_cols = [];
+            if ($has_item_nm) $name_cols[] = "NULLIF(sr.item_name,'')";
+            if ($has_prod_nm) $name_cols[] = "NULLIF(sr.product_name,'')";
+            $name_cols[] = "'N/A'";
+            $name_expr = "COALESCE(" . implode(', ', $name_cols) . ")";
+
+            $sku_expr = $has_item_sku ? "IF(sr.item_sku IS NOT NULL AND sr.item_sku != '', CONCAT(' (SKU: ', sr.item_sku, ')'), '')" : "''";
+
+            $qty_cols = [];
+            if ($has_req_qty) $qty_cols[] = "NULLIF(sr.requested_quantity,0)";
+            if ($has_qty)     $qty_cols[] = "NULLIF(sr.quantity,0)";
+            if ($has_app_qty) $qty_cols[] = "NULLIF(sr.approved_quantity,0)";
+            $qty_cols[] = "0";
+            $qty_expr = "COALESCE(" . implode(', ', $qty_cols) . ")";
+
+            $rem_col  = $has_remarks ? 'sr.remarks' : ($has_notes ? 'sr.notes' : "''");
+            $rem_expr = ($has_remarks || $has_notes) ? "IF({$rem_col} IS NOT NULL AND {$rem_col} != '', CONCAT(' | Remarks: ', {$rem_col}), '')" : "''";
+
+            $u_conds = [];
+            $params = ['sid' => $station_id, 'dstart' => $date_start, 'dend' => $date_end];
+            if ($has_staff_id) { $u_conds[] = "sr.staff_id = :uid1";     $params['uid1'] = $user_id; }
+            if ($has_req_by)   { $u_conds[] = "sr.requested_by = :uid2"; $params['uid2'] = $user_id; }
+
+            if (!empty($u_conds)) {
+                $sql = "
+                    SELECT 
+                        sr.id,
+                        sr.created_at AS datetime,
+                        'Inventory' AS module,
+                        'Stock Request' AS activity,
+                        {$ref_expr} AS ref_no,
+                        CASE 
+                            WHEN LOWER(COALESCE(sr.status,'')) IN ('rejected','cancelled','canceled','voided') THEN 'Cancelled'
+                            ELSE 'Success'
+                        END AS status,
+                        '' AS shift_period,
+                        CONCAT(
+                            'Item: ', {$name_expr},
+                            {$sku_expr},
+                            ' | Requested Qty: ', FORMAT({$qty_expr}, 0),
+                            {$rem_expr}
+                        ) AS details
+                    FROM stock_requests sr
+                    WHERE sr.station_id = :sid AND (" . implode(' OR ', $u_conds) . ") AND DATE(sr.created_at) BETWEEN :dstart AND :dend
+                ";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                foreach ($rows as $r) {
+                    $register_known_ref($r['ref_no'] ?? '');
+                    $raw_activities[] = $r;
+                }
+            }
         } catch (Exception $e) {}
     }
 
-    // 6. Fuel Stock Requests
+    // 7. Fuel Stock Requests (supports both requested_liters and volume schemas)
     if (check_table_exists($pdo, 'fuel_stock_requests')) {
         try {
-            $sql = "
-                SELECT 
-                    fsr.id,
-                    fsr.created_at AS datetime,
-                    'Inventory' AS module,
-                    'Stock Request' AS activity,
-                    COALESCE(NULLIF(fsr.request_no,''), CONCAT('FSR-', fsr.id)) AS ref_no,
-                    CASE 
-                        WHEN LOWER(COALESCE(fsr.status,'')) IN ('rejected','cancelled','canceled','voided') THEN 'Cancelled'
-                        ELSE 'Success'
-                    END AS status,
-                    '' AS shift_period,
-                    CONCAT(
-                        'Fuel: ', COALESCE(fsr.fuel_type,'Fuel'), 
-                        ' | Requested Volume: ', FORMAT(COALESCE(NULLIF(fsr.requested_liters,0), fsr.approved_liters, 0), 2), ' L',
-                        IF(fsr.remarks IS NOT NULL AND fsr.remarks != '', CONCAT(' | Remarks: ', fsr.remarks), '')
-                    ) AS details
-                FROM fuel_stock_requests fsr
-                WHERE fsr.station_id = :sid AND fsr.staff_id = :uid AND DATE(fsr.created_at) BETWEEN :dstart AND :dend
-            ";
-            $stmt = $pdo->prepare($sql);
-            $stmt->execute(['sid' => $station_id, 'uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
-            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            $has_req_no   = check_column_exists($pdo, 'fuel_stock_requests', 'request_no');
+            $has_req_lit  = check_column_exists($pdo, 'fuel_stock_requests', 'requested_liters');
+            $has_app_lit  = check_column_exists($pdo, 'fuel_stock_requests', 'approved_liters');
+            $has_vol      = check_column_exists($pdo, 'fuel_stock_requests', 'volume');
+            $has_remarks  = check_column_exists($pdo, 'fuel_stock_requests', 'remarks');
+            $has_notes    = check_column_exists($pdo, 'fuel_stock_requests', 'notes');
+            $has_staff_id = check_column_exists($pdo, 'fuel_stock_requests', 'staff_id');
+            $has_req_by   = check_column_exists($pdo, 'fuel_stock_requests', 'requested_by');
+
+            $ref_expr = $has_req_no ? "COALESCE(NULLIF(fsr.request_no,''), CONCAT('FSR-', fsr.id))" : "CONCAT('FSR-', fsr.id)";
+            $vol_cols = [];
+            if ($has_req_lit) $vol_cols[] = "NULLIF(fsr.requested_liters,0)";
+            if ($has_vol)     $vol_cols[] = "NULLIF(fsr.volume,0)";
+            if ($has_app_lit) $vol_cols[] = "NULLIF(fsr.approved_liters,0)";
+            $vol_cols[] = "0";
+            $vol_expr = "COALESCE(" . implode(', ', $vol_cols) . ")";
+
+            $rem_col  = $has_remarks ? 'fsr.remarks' : ($has_notes ? 'fsr.notes' : "''");
+            $rem_expr = ($has_remarks || $has_notes) ? "IF({$rem_col} IS NOT NULL AND {$rem_col} != '', CONCAT(' | Remarks: ', {$rem_col}), '')" : "''";
+
+            $u_conds = [];
+            $params = ['sid' => $station_id, 'dstart' => $date_start, 'dend' => $date_end];
+            if ($has_staff_id) { $u_conds[] = "fsr.staff_id = :uid1";     $params['uid1'] = $user_id; }
+            if ($has_req_by)   { $u_conds[] = "fsr.requested_by = :uid2"; $params['uid2'] = $user_id; }
+
+            if (!empty($u_conds)) {
+                $sql = "
+                    SELECT 
+                        fsr.id,
+                        fsr.created_at AS datetime,
+                        'Inventory' AS module,
+                        'Stock Request' AS activity,
+                        {$ref_expr} AS ref_no,
+                        CASE 
+                            WHEN LOWER(COALESCE(fsr.status,'')) IN ('rejected','cancelled','canceled','voided') THEN 'Cancelled'
+                            ELSE 'Success'
+                        END AS status,
+                        '' AS shift_period,
+                        CONCAT(
+                            'Fuel: ', COALESCE(fsr.fuel_type,'Fuel'), 
+                            ' | Requested Volume: ', FORMAT({$vol_expr}, 2), ' L',
+                            {$rem_expr}
+                        ) AS details
+                    FROM fuel_stock_requests fsr
+                    WHERE fsr.station_id = :sid AND (" . implode(' OR ', $u_conds) . ") AND DATE(fsr.created_at) BETWEEN :dstart AND :dend
+                ";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                foreach ($rows as $r) {
+                    $register_known_ref($r['ref_no'] ?? '');
+                    $raw_activities[] = $r;
+                }
+            }
         } catch (Exception $e) {}
     }
 
-    // 7. Master Data Requests
+    // 8. Master Data Requests
     if (check_table_exists($pdo, 'master_data_requests')) {
         try {
             $sql = "
@@ -287,11 +527,14 @@ if ($active_tab === 'my_activity') {
             $stmt = $pdo->prepare($sql);
             $stmt->execute(['sid' => $station_id, 'uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $register_known_ref($r['ref_no'] ?? '');
+                $raw_activities[] = $r;
+            }
         } catch (Exception $e) {}
     }
 
-    // 8. Fuel Adjustments (Physical Count / Tank Dip, Calibration, Stock-in, Variances)
+    // 9. Fuel Adjustments (Physical Count / Tank Dip, Calibration, Stock-in, Variances)
     if (check_table_exists($pdo, 'fuel_adjustments')) {
         try {
             $sql = "
@@ -299,7 +542,10 @@ if ($active_tab === 'my_activity') {
                     fa.id,
                     COALESCE(fa.approved_at, fa.created_at, CONCAT(fa.adjustment_date, ' 00:00:00')) AS datetime,
                     'Fuel Management' AS module,
-                    'Fuel Adjustment' AS activity,
+                    CASE 
+                        WHEN LOWER(COALESCE(fa.adjustment_type,'')) LIKE '%calib%' THEN 'Fuel Calibration'
+                        ELSE 'Fuel Adjustment'
+                    END AS activity,
                     CONCAT('FADJ-', fa.id) AS ref_no,
                     CASE 
                         WHEN LOWER(COALESCE(fa.status,'')) IN ('rejected','cancelled','canceled','voided','declined') THEN 'Cancelled'
@@ -322,11 +568,14 @@ if ($active_tab === 'my_activity') {
             $stmt = $pdo->prepare($sql);
             $stmt->execute(['sid' => $station_id, 'uid1' => $user_id, 'uid2' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $register_known_ref($r['ref_no'] ?? '');
+                $raw_activities[] = $r;
+            }
         } catch (Exception $e) {}
     }
 
-    // 9. Merchandise / Stock Adjustments
+    // 10. Merchandise / Stock Adjustments
     if (check_table_exists($pdo, 'merchandise_adjustments')) {
         try {
             $sql = "
@@ -350,11 +599,14 @@ if ($active_tab === 'my_activity') {
             $stmt = $pdo->prepare($sql);
             $stmt->execute(['sid' => $station_id, 'uid1' => $user_id, 'uid2' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $register_known_ref($r['ref_no'] ?? '');
+                $raw_activities[] = $r;
+            }
         } catch (Exception $e) {}
     }
 
-    // 10. Fuel Calibration Records
+    // 11. Fuel Calibration Records
     if (check_table_exists($pdo, 'fuel_calibration_records')) {
         try {
             $sql = "
@@ -373,11 +625,14 @@ if ($active_tab === 'my_activity') {
             $stmt = $pdo->prepare($sql);
             $stmt->execute(['sid' => $station_id, 'uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $register_known_ref($r['ref_no'] ?? '');
+                $raw_activities[] = $r;
+            }
         } catch (Exception $e) {}
     }
 
-    // 11. Transaction Adjustments
+    // 12. Transaction Adjustments
     if (check_table_exists($pdo, 'transaction_adjustments')) {
         try {
             $sql = "
@@ -399,37 +654,280 @@ if ($active_tab === 'my_activity') {
             $stmt = $pdo->prepare($sql);
             $stmt->execute(['sid' => $station_id, 'uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $register_known_ref($r['ref_no'] ?? '');
+                $raw_activities[] = $r;
+            }
         } catch (Exception $e) {}
     }
 
-    // 12. Fuel Sales Closing / Shift Turnover
+    // 13. Fuel Sales Closing (fuel_sales_closing & shift_reports)
+    if (check_table_exists($pdo, 'fuel_sales_closing')) {
+        try {
+            $u_conds = [];
+            $params = ['sid' => $station_id, 'dstart' => $date_start, 'dend' => $date_end];
+            if (check_column_exists($pdo, 'fuel_sales_closing', 'staff_id'))   { $u_conds[] = "fsc.staff_id = :uid1";   $params['uid1'] = $user_id; }
+            if (check_column_exists($pdo, 'fuel_sales_closing', 'user_id'))    { $u_conds[] = "fsc.user_id = :uid2";    $params['uid2'] = $user_id; }
+            if (check_column_exists($pdo, 'fuel_sales_closing', 'encoded_by')) { $u_conds[] = "fsc.encoded_by = :uid3"; $params['uid3'] = $user_id; }
+
+            if (!empty($u_conds)) {
+                $sql = "
+                    SELECT 
+                        fsc.id,
+                        COALESCE(fsc.created_at, CONCAT(fsc.closing_date, ' 23:59:00')) AS datetime,
+                        'Fuel Management' AS module,
+                        'Fuel Sales Closing' AS activity,
+                        CONCAT('FSC-', fsc.id) AS ref_no,
+                        CASE 
+                            WHEN LOWER(COALESCE(fsc.status,'')) IN ('rejected','cancelled','canceled','voided') THEN 'Cancelled'
+                            ELSE 'Success'
+                        END AS status,
+                        COALESCE(fsc.shift, '') AS shift_period,
+                        CONCAT(
+                            'Shift: ', COALESCE(fsc.shift,'All'),
+                            ' | Date: ', COALESCE(fsc.closing_date,''),
+                            IF(fsc.fuel_type IS NOT NULL AND fsc.fuel_type != '', CONCAT(' | Fuel: ', fsc.fuel_type), ''),
+                            IF(fsc.total_sales IS NOT NULL, CONCAT(' | Sales: ₱', FORMAT(fsc.total_sales, 2)), '')
+                        ) AS details
+                    FROM fuel_sales_closing fsc
+                    WHERE fsc.station_id = :sid AND (" . implode(' OR ', $u_conds) . ") AND DATE(COALESCE(fsc.created_at, fsc.closing_date)) BETWEEN :dstart AND :dend
+                ";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                foreach ($rows as $r) {
+                    $register_known_ref($r['ref_no'] ?? '');
+                    $raw_activities[] = $r;
+                }
+            }
+        } catch (Exception $e) {}
+    }
+
     if (check_table_exists($pdo, 'shift_reports')) {
+        try {
+            $u_conds = [];
+            $params = ['sid' => $station_id, 'dstart' => $date_start, 'dend' => $date_end];
+            if (check_column_exists($pdo, 'shift_reports', 'user_id'))    { $u_conds[] = "sr.user_id = :uid1";    $params['uid1'] = $user_id; }
+            if (check_column_exists($pdo, 'shift_reports', 'created_by')) { $u_conds[] = "sr.created_by = :uid2"; $params['uid2'] = $user_id; }
+            if (check_column_exists($pdo, 'shift_reports', 'staff_id'))   { $u_conds[] = "sr.staff_id = :uid3";   $params['uid3'] = $user_id; }
+
+            if (!empty($u_conds)) {
+                $sql = "
+                    SELECT 
+                        sr.id,
+                        sr.created_at AS datetime,
+                        'Fuel Management' AS module,
+                        'Fuel Sales Closing' AS activity,
+                        CONCAT('STR-', sr.id) AS ref_no,
+                        CASE 
+                            WHEN LOWER(COALESCE(sr.status,'')) IN ('rejected','cancelled','canceled') THEN 'Cancelled'
+                            ELSE 'Success'
+                        END AS status,
+                        sr.shift AS shift_period,
+                        CONCAT('Shift: ', sr.shift, ' | Date: ', sr.report_date) AS details
+                    FROM shift_reports sr
+                    WHERE sr.station_id = :sid AND (" . implode(' OR ', $u_conds) . ") AND DATE(sr.created_at) BETWEEN :dstart AND :dend
+                ";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                foreach ($rows as $r) {
+                    $register_known_ref($r['ref_no'] ?? '');
+                    $raw_activities[] = $r;
+                }
+            }
+        } catch (Exception $e) {}
+    }
+
+    // 14. Customer Requests (customers.php)
+    if (check_table_exists($pdo, 'customer_requests')) {
+        try {
+            $u_conds = [];
+            $params = ['sid' => $station_id, 'dstart' => $date_start, 'dend' => $date_end];
+            if (check_column_exists($pdo, 'customer_requests', 'requested_by')) { $u_conds[] = "cr.requested_by = :uid1"; $params['uid1'] = $user_id; }
+            if (check_column_exists($pdo, 'customer_requests', 'staff_id'))     { $u_conds[] = "cr.staff_id = :uid2";     $params['uid2'] = $user_id; }
+            if (check_column_exists($pdo, 'customer_requests', 'created_by'))   { $u_conds[] = "cr.created_by = :uid3";   $params['uid3'] = $user_id; }
+            if (check_column_exists($pdo, 'customer_requests', 'user_id'))      { $u_conds[] = "cr.user_id = :uid4";      $params['uid4'] = $user_id; }
+
+            if (!empty($u_conds)) {
+                $nm_cols = [];
+                if (check_column_exists($pdo, 'customer_requests', 'customer_name')) $nm_cols[] = "NULLIF(cr.customer_name,'')";
+                if (check_column_exists($pdo, 'customer_requests', 'name'))          $nm_cols[] = "NULLIF(cr.name,'')";
+                if (check_column_exists($pdo, 'customer_requests', 'company_name'))  $nm_cols[] = "NULLIF(cr.company_name,'')";
+                $nm_cols[] = "'Customer'";
+                $nm_expr = "COALESCE(" . implode(', ', $nm_cols) . ")";
+
+                $sql = "
+                    SELECT 
+                        cr.id,
+                        cr.created_at AS datetime,
+                        'Customers' AS module,
+                        'Customer Request' AS activity,
+                        CONCAT('CUST-', cr.id) AS ref_no,
+                        CASE 
+                            WHEN LOWER(COALESCE(cr.status,'')) IN ('rejected','cancelled','canceled','declined') THEN 'Cancelled'
+                            ELSE 'Success'
+                        END AS status,
+                        '' AS shift_period,
+                        CONCAT('Customer: ', {$nm_expr}, ' | Status: ', COALESCE(cr.status,'Submitted')) AS details
+                    FROM customer_requests cr
+                    WHERE cr.station_id = :sid AND (" . implode(' OR ', $u_conds) . ") AND DATE(cr.created_at) BETWEEN :dstart AND :dend
+                ";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+                $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                foreach ($rows as $r) {
+                    $register_known_ref($r['ref_no'] ?? '');
+                    $raw_activities[] = $r;
+                }
+            }
+        } catch (Exception $e) {}
+    }
+
+    // 15. Staff Calendar Events (staff_calendar.php)
+    if (check_table_exists($pdo, 'staff_calendar_events')) {
         try {
             $sql = "
                 SELECT 
-                    sr.id,
-                    sr.created_at AS datetime,
-                    'Fuel Management' AS module,
-                    'Fuel Sales Closing' AS activity,
-                    CONCAT('STR-', sr.id) AS ref_no,
+                    sce.id,
+                    COALESCE(sce.created_at, CONCAT(sce.event_date, ' ', COALESCE(sce.event_time, '08:00:00'))) AS datetime,
+                    'Calendar' AS module,
+                    'Calendar Schedule' AS activity,
+                    CONCAT('CAL-EVT-', sce.id) AS ref_no,
                     CASE 
-                        WHEN LOWER(COALESCE(sr.status,'')) IN ('rejected','cancelled','canceled') THEN 'Cancelled'
+                        WHEN LOWER(COALESCE(sce.status,'')) IN ('cancelled','canceled','rejected') THEN 'Cancelled'
                         ELSE 'Success'
                     END AS status,
-                    sr.shift AS shift_period,
-                    CONCAT('Shift: ', sr.shift, ' | Date: ', sr.report_date) AS details
-                FROM shift_reports sr
-                WHERE sr.station_id = :sid AND (sr.user_id = :uid1 OR sr.created_by = :uid2 OR sr.staff_id = :uid3) AND DATE(sr.created_at) BETWEEN :dstart AND :dend
+                    '' AS shift_period,
+                    CONCAT(
+                        'Type: ', COALESCE(sce.event_type,'Schedule'),
+                        ' | Date: ', COALESCE(sce.event_date,''),
+                        IF(sce.event_time IS NOT NULL, CONCAT(' ', TIME_FORMAT(sce.event_time, '%h:%i %p')), ''),
+                        ' | Details: ', COALESCE(sce.description,'N/A')
+                    ) AS details
+                FROM staff_calendar_events sce
+                WHERE sce.station_id = :sid AND sce.staff_encoder_id = :uid AND DATE(COALESCE(sce.created_at, sce.event_date)) BETWEEN :dstart AND :dend
             ";
             $stmt = $pdo->prepare($sql);
-            $stmt->execute(['sid' => $station_id, 'uid1' => $user_id, 'uid2' => $user_id, 'uid3' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
+            $stmt->execute(['sid' => $station_id, 'uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $register_known_ref($r['ref_no'] ?? '');
+                $raw_activities[] = $r;
+            }
         } catch (Exception $e) {}
     }
 
-    // 13. Activity Logs (Operational miscellaneous actions only — Login/Logout events are in Login History tab)
+    // Helper to normalize raw activity_logs / audit_logs entries and extract real Reference Numbers
+    $normalize_log_entry = function(array $row) use (&$known_refs, $register_known_ref) {
+        $raw_action  = trim((string)($row['activity'] ?? ''));
+        $act_lower   = strtolower($raw_action);
+        $details     = trim((string)($row['details'] ?? ''));
+        $det_lower   = strtolower($details);
+        $module      = trim((string)($row['module'] ?? 'Sales'));
+        $ref_no      = trim((string)($row['ref_no'] ?? ''));
+        $is_generic  = (bool)preg_match('/^(ACT|LOG|AUD)-\d+$/i', $ref_no);
+
+        // Extract any real reference number embedded in details
+        $extracted_ref = '';
+        if (preg_match('/\b(PR-\d{4}-\d+)\b/i', $details, $m)) {
+            $extracted_ref = strtoupper($m[1]);
+        } elseif (preg_match('/\b(MERCH\d+[A-Z0-9\-]*)\b/i', $details, $m)) {
+            $extracted_ref = strtoupper($m[1]);
+        } elseif (preg_match('/\b(OR-[A-Z0-9\-]+)\b/i', $details, $m)) {
+            $extracted_ref = strtoupper($m[1]);
+        } elseif (preg_match('/\b(JO-\d{4}-\d+|JO-\d+)\b/i', $details, $m)) {
+            $extracted_ref = strtoupper($m[1]);
+        } elseif (preg_match('/\b(DLV-[A-Z0-9\-]+|SR-[A-Z0-9\-]+|FSR-[A-Z0-9\-]+|MDR-[A-Z0-9\-]+|FTX-[A-Z0-9\-]+|FADJ-\d+|MADJ-\d+|CAL-\d+|FSC-\d+)\b/i', $details, $m)) {
+            $extracted_ref = strtoupper($m[1]);
+        } elseif (preg_match('/Ref:\s*([A-Za-z0-9\-_]+)/i', $details, $m)) {
+            $extracted_ref = strtoupper($m[1]);
+        }
+
+        // Also check if details contains a secondary MERCH/JO reference already in $known_refs
+        $all_found_refs = [];
+        if ($extracted_ref !== '') $all_found_refs[] = $extracted_ref;
+        if (preg_match_all('/\b(PR-\d{4}-\d+|MERCH\d+[A-Z0-9\-]*|OR-[A-Z0-9\-]+|JO-\d{4}-\d+|JO-\d+|DLV-[A-Z0-9\-]+|SR-[A-Z0-9\-]+|FSR-[A-Z0-9\-]+|MDR-[A-Z0-9\-]+)\b/i', $details, $matches)) {
+            foreach ($matches[1] as $mr) {
+                $all_found_refs[] = strtoupper($mr);
+            }
+        }
+
+        // Normalize raw internal action codes & generic Create/Update logs
+        if ($act_lower === 'jo_settle_payment' || strpos($act_lower, 'settle_payment') !== false || strpos($det_lower, 'settled payment') !== false) {
+            $module     = 'Job Orders';
+            $raw_action = 'Job Order Payment';
+        } elseif ($act_lower === 'jo_status_update' || strpos($act_lower, 'jo_status') !== false) {
+            $module     = 'Job Orders';
+            $raw_action = 'Updated Job Order';
+        } elseif ($act_lower === 'jo_change_customer' || $act_lower === 'update_customer') {
+            $module     = 'Job Orders';
+            $raw_action = 'Updated Job Order';
+        } elseif (in_array($act_lower, ['create', 'created', 'insert', 'add', 'system action', 'action'], true)) {
+            if (strpos($det_lower, 'merchandise transaction') !== false || strpos($det_lower, 'merchandise sale') !== false) {
+                if (strpos($det_lower, 'job_order') !== false) {
+                    $module     = 'Job Orders';
+                    $raw_action = 'Created Job Order';
+                } elseif (strpos($det_lower, 'combined') !== false) {
+                    $module     = 'Sales';
+                    $raw_action = 'Job Order + Merchandise';
+                } else {
+                    $module     = 'Sales';
+                    $raw_action = 'Merchandise Sale';
+                }
+            } elseif (strpos($det_lower, 'job order') !== false) {
+                $module     = 'Job Orders';
+                $raw_action = 'Created Job Order';
+            } elseif (strpos($det_lower, 'delivery') !== false) {
+                $module     = 'Inventory';
+                $raw_action = 'Record Delivery';
+            } elseif (strpos($det_lower, 'stock request') !== false) {
+                $module     = 'Inventory';
+                $raw_action = 'Stock Request';
+            } elseif (strpos($det_lower, 'calendar') !== false || strpos($det_lower, 'scheduled') !== false) {
+                $module     = 'Calendar';
+                $raw_action = 'Calendar Schedule';
+            } elseif (strpos($det_lower, 'customer') !== false) {
+                $module     = 'Customers';
+                $raw_action = 'Customer Request';
+            } elseif (strpos($det_lower, 'calibration') !== false) {
+                $module     = 'Fuel Management';
+                $raw_action = 'Fuel Calibration';
+            } elseif (strpos($det_lower, 'fuel') !== false && strpos($det_lower, 'closing') !== false) {
+                $module     = 'Fuel Management';
+                $raw_action = 'Fuel Sales Closing';
+            } elseif (strpos($det_lower, 'fuel') !== false && (strpos($det_lower, 'reading') !== false || strpos($det_lower, 'pump') !== false)) {
+                $module     = 'Fuel Management';
+                $raw_action = 'Fuel Meter Reading';
+            }
+        } elseif (strpos($act_lower, 'calendar') !== false) {
+            $module     = 'Calendar';
+            $raw_action = 'Calendar Schedule';
+        }
+
+        // If this log entry refers to a primary record already loaded from its dedicated table, skip it to prevent duplicate rows
+        foreach ($all_found_refs as $fr) {
+            if (isset($known_refs[$fr])) {
+                // Allow Updated Job Order status changes even if Created Job Order is in $known_refs,
+                // but skip duplicate Creation / Sale / Payment / Delivery logs that already came from primary tables
+                if (!in_array($raw_action, ['Updated Job Order'], true)) {
+                    return null;
+                }
+            }
+        }
+
+        if ($is_generic && $extracted_ref !== '') {
+            $ref_no = $extracted_ref;
+        }
+        $register_known_ref($ref_no);
+
+        $row['module']   = $module;
+        $row['activity'] = $raw_action;
+        $row['ref_no']   = $ref_no;
+        return $row;
+    };
+
+    // 16. Activity Logs (Operational actions — Login/Logout events are in Login History tab)
     if (check_table_exists($pdo, 'activity_logs')) {
         try {
             $sql = "
@@ -437,10 +935,11 @@ if ($active_tab === 'my_activity') {
                     act.id,
                     act.created_at AS datetime,
                     CASE 
+                        WHEN LOWER(COALESCE(act.action,'')) LIKE '%calendar%' THEN 'Calendar'
                         WHEN LOWER(COALESCE(act.action,'')) LIKE '%deliver%' THEN 'Inventory'
                         WHEN LOWER(COALESCE(act.action,'')) LIKE '%stock%' OR LOWER(COALESCE(act.action,'')) LIKE '%invent%' THEN 'Inventory'
                         WHEN LOWER(COALESCE(act.action,'')) LIKE '%fuel%' THEN 'Fuel Management'
-                        WHEN LOWER(COALESCE(act.action,'')) LIKE '%job%' THEN 'Job Orders'
+                        WHEN LOWER(COALESCE(act.action,'')) LIKE '%job%' OR LOWER(COALESCE(act.action,'')) LIKE '%jo_%' THEN 'Job Orders'
                         WHEN LOWER(COALESCE(act.action,'')) LIKE '%customer%' THEN 'Customers'
                         ELSE 'Sales'
                     END AS module,
@@ -470,17 +969,23 @@ if ($active_tab === 'my_activity') {
                   AND LOWER(COALESCE(act.action,'')) NOT LIKE '%calibration%'
                   AND LOWER(COALESCE(act.action,'')) NOT LIKE '%merchandise transaction%'
                   AND LOWER(COALESCE(act.action,'')) NOT LIKE '%fuel reading%'
+                  AND LOWER(COALESCE(act.action,'')) NOT LIKE '%save calendar event%'
                   AND LOWER(COALESCE(act.action,'')) NOT LIKE '%view%'
                   AND LOWER(COALESCE(act.action,'')) NOT LIKE '%search%'
             ";
             $stmt = $pdo->prepare($sql);
             $stmt->execute(['uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $norm = $normalize_log_entry($r);
+                if ($norm !== null) {
+                    $raw_activities[] = $norm;
+                }
+            }
         } catch (Exception $e) {}
     }
 
-    // 14. Audit Logs (Operational actions only — Login/Logout events are in Login History tab)
+    // 17. Audit Logs (Operational actions — Login/Logout events are in Login History tab)
     if (check_table_exists($pdo, 'audit_logs')) {
         try {
             $sql = "
@@ -488,6 +993,7 @@ if ($active_tab === 'my_activity') {
                     al.id,
                     al.created_at AS datetime,
                     CASE 
+                        WHEN LOWER(COALESCE(al.log_type,'')) LIKE '%calendar%' OR LOWER(COALESCE(al.action_type,'')) LIKE '%calendar%' THEN 'Calendar'
                         WHEN LOWER(COALESCE(al.log_type,'')) LIKE '%deliver%' OR LOWER(COALESCE(al.action_type,'')) LIKE '%deliver%' THEN 'Inventory'
                         WHEN LOWER(COALESCE(al.log_type,'')) LIKE '%invent%' OR LOWER(COALESCE(al.log_type,'')) LIKE '%stock%' OR LOWER(COALESCE(al.action_type,'')) LIKE '%stock%' THEN 'Inventory'
                         WHEN LOWER(COALESCE(al.log_type,'')) LIKE '%fuel%' THEN 'Fuel Management'
@@ -523,7 +1029,12 @@ if ($active_tab === 'my_activity') {
             $stmt = $pdo->prepare($sql);
             $stmt->execute(['uid' => $user_id, 'dstart' => $date_start, 'dend' => $date_end]);
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC) ?: [];
-            $raw_activities = array_merge($raw_activities, $rows);
+            foreach ($rows as $r) {
+                $norm = $normalize_log_entry($r);
+                if ($norm !== null) {
+                    $raw_activities[] = $norm;
+                }
+            }
         } catch (Exception $e) {}
     }
 
@@ -693,9 +1204,11 @@ foreach ($raw_activities as $act) {
             $match = true;
         } elseif ($fa === 'merchandise sale' && (strpos($act_name, 'merchandise') !== false || strpos($act_name, 'sale') !== false)) {
             $match = true;
-        } elseif ($fa === 'created job order' && strpos($act_name, 'job order') !== false) {
+        } elseif ($fa === 'job order payment' && (strpos($act_name, 'payment') !== false || strpos($act_name, 'settle') !== false)) {
             $match = true;
-        } elseif ($fa === 'updated job order' && strpos($act_name, 'job order') !== false) {
+        } elseif ($fa === 'created job order' && strpos($act_name, 'created job order') !== false) {
+            $match = true;
+        } elseif ($fa === 'updated job order' && strpos($act_name, 'updated job order') !== false) {
             $match = true;
         } elseif (strpos($act_name, $fa) !== false) {
             $match = true;
@@ -735,11 +1248,11 @@ foreach ($filtered_activities as $item) {
         $time_minute = date('Y-m-d H:i', strtotime($item['datetime']));
         $key = strtolower($item['user'] ?? '') . '|' . strtolower($item['activity'] ?? '') . '|' . strtolower($item['status'] ?? '') . '|' . $time_minute;
     } else {
-        $ref = trim($item['ref_no'] ?? '');
+        $ref = strtoupper(trim($item['ref_no'] ?? ''));
         if ($ref !== '' && !in_array($ref, ['—', '-', 'N/A'], true)) {
-            $key = ($item['module'] ?? '') . '|' . ($item['activity'] ?? '') . '|' . $ref;
+            $key = strtolower($item['module'] ?? '') . '|' . strtolower($item['activity'] ?? '') . '|' . $ref;
         } else {
-            $key = ($item['module'] ?? '') . '|' . ($item['activity'] ?? '') . '|' . substr($item['datetime'] ?? '', 0, 16);
+            $key = strtolower($item['module'] ?? '') . '|' . strtolower($item['activity'] ?? '') . '|' . substr($item['datetime'] ?? '', 0, 16);
         }
     }
     if (!isset($seen[$key])) {
@@ -1334,6 +1847,7 @@ table.act-table tr:last-child td {
                         <option value="Inventory"       <?= strtolower($filter_module)==='inventory'       ? 'selected':'' ?>>Inventory</option>
                         <option value="Master Data"     <?= strtolower($filter_module)==='master data'     ? 'selected':'' ?>>Master Data</option>
                         <option value="Customers"       <?= strtolower($filter_module)==='customers'       ? 'selected':'' ?>>Customers</option>
+                        <option value="Calendar"        <?= strtolower($filter_module)==='calendar'        ? 'selected':'' ?>>Calendar</option>
                     </select>
                 </div>
 
@@ -1343,16 +1857,20 @@ table.act-table tr:last-child td {
                     <select id="filter_activity" class="act-filter-select">
                         <option value="">All Activities</option>
                         <option value="Merchandise Sale"               <?= strtolower($filter_activity)==='merchandise sale'               ? 'selected':'' ?>>Merchandise Sale</option>
-                        <option value="Record Delivery"                <?= strtolower($filter_activity)==='record delivery'                ? 'selected':'' ?>>Record Delivery</option>
-                        <option value="Stock Request"                  <?= strtolower($filter_activity)==='stock request'                  ? 'selected':'' ?>>Stock Request</option>
-                        <option value="Fuel Adjustment"                <?= strtolower($filter_activity)==='fuel adjustment'                ? 'selected':'' ?>>Fuel Adjustment</option>
-                        <option value="Stock Adjustment"               <?= strtolower($filter_activity)==='stock adjustment'               ? 'selected':'' ?>>Stock Adjustment</option>
-                        <option value="Fuel Calibration"               <?= strtolower($filter_activity)==='fuel calibration'               ? 'selected':'' ?>>Fuel Calibration</option>
+                        <option value="Job Order + Merchandise"        <?= strtolower($filter_activity)==='job order + merchandise'        ? 'selected':'' ?>>Job Order + Merchandise</option>
                         <option value="Created Job Order"              <?= strtolower($filter_activity)==='created job order'              ? 'selected':'' ?>>Created Job Order</option>
                         <option value="Updated Job Order"              <?= strtolower($filter_activity)==='updated job order'              ? 'selected':'' ?>>Updated Job Order</option>
+                        <option value="Job Order Payment"              <?= strtolower($filter_activity)==='job order payment'              ? 'selected':'' ?>>Job Order Payment</option>
+                        <option value="Record Delivery"                <?= strtolower($filter_activity)==='record delivery'                ? 'selected':'' ?>>Record Delivery</option>
+                        <option value="Stock Request"                  <?= strtolower($filter_activity)==='stock request'                  ? 'selected':'' ?>>Stock Request</option>
+                        <option value="Stock Adjustment"               <?= strtolower($filter_activity)==='stock adjustment'               ? 'selected':'' ?>>Stock Adjustment</option>
                         <option value="Fuel Meter Reading"             <?= strtolower($filter_activity)==='fuel meter reading'             ? 'selected':'' ?>>Fuel Meter Reading</option>
+                        <option value="Fuel Calibration"               <?= strtolower($filter_activity)==='fuel calibration'               ? 'selected':'' ?>>Fuel Calibration</option>
+                        <option value="Fuel Adjustment"                <?= strtolower($filter_activity)==='fuel adjustment'                ? 'selected':'' ?>>Fuel Adjustment</option>
                         <option value="Fuel Sales Closing"             <?= strtolower($filter_activity)==='fuel sales closing'             ? 'selected':'' ?>>Fuel Sales Closing</option>
                         <option value="Master Data Request"            <?= strtolower($filter_activity)==='master data request'            ? 'selected':'' ?>>Master Data Request</option>
+                        <option value="Customer Request"               <?= strtolower($filter_activity)==='customer request'               ? 'selected':'' ?>>Customer Request</option>
+                        <option value="Calendar Schedule"              <?= strtolower($filter_activity)==='calendar schedule'              ? 'selected':'' ?>>Calendar Schedule</option>
                         <option value="Void Request"                   <?= strtolower($filter_activity)==='void request'                   ? 'selected':'' ?>>Void Request</option>
                         <option value="Adjustment Request"             <?= strtolower($filter_activity)==='adjustment request'             ? 'selected':'' ?>>Adjustment Request</option>
                     </select>

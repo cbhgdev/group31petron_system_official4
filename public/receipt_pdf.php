@@ -353,6 +353,10 @@ $item_rows = '';
 foreach ($items as $it) {
     $name = $it['product_name'] ?? $it['name'] ?? 'Item';
     $category = $it['category'] ?? '';
+    if (stripos($name, 'labor') !== false || strtolower(trim($category)) === 'labor') {
+        $name = 'Tip';
+        $category = 'Tip';
+    }
     $size = $it['size_variant'] ?? $it['size'] ?? '';
     $qty = (float) ($it['quantity'] ?? $it['qty'] ?? 1);
     $price = (float) ($it['unit_price'] ?? $it['price'] ?? 0);
@@ -474,7 +478,7 @@ $footer_note = 'This document is valid as an official service record.';
 if ($pay_status_norm === 'partial') {
     $footer_note = 'This receipt reflects a partial payment. Balance due: ' . rp_money($balance_due_db);
 } elseif ($pay_status_norm === 'pending') {
-    $footer_note = 'No payment collected yet. Balance due: ' . rp_money($total);
+    $footer_note = 'No payment collected yet. Full balance of ' . rp_money($total) . ' remains balance outstanding.';
 } elseif ($pay_status_norm === 'credit') {
     $footer_note = 'Credit transaction. Amount forwarded to Receivables module.';
 }
@@ -596,7 +600,10 @@ table { width: 100%; border-collapse: collapse; }
     <div class="foot-line">TIN: ' . rp_e($vat_tin) . ' | VAT Reg: ' . rp_e($vat_reg_no) . '</div>
     <div class="foot-line">ATP No.: ' . rp_e($atp_no) . (!empty($min_serial) ? ' | MIN: ' . rp_e($min_serial) : '') . '</div>
     <div class="foot-line" style="font-weight: bold; color: #003d7a; margin: 1mm 0;">' . rp_e(!empty($receipt_cfg['footer_message']) ? $receipt_cfg['footer_message'] : 'Thank you for your purchase!') . '</div>'
-    . (!empty($receipt_cfg['terms_notes']) ? '<div class="foot-line" style="font-size:7px;color:#666;">' . nl2br(rp_e($receipt_cfg['terms_notes'])) . '</div>' : '') . '
+    . (!empty($receipt_cfg['terms_notes']) ? '<div class="foot-line" style="font-size:7px;color:#666;">' . nl2br(rp_e($receipt_cfg['terms_notes'])) . '</div>' : '')
+    . ($pay_status_norm === 'pending' ? '<div class="foot-line" style="color:#9a3412;font-weight:bold;border:0.2mm solid #fed7aa;background:#ffedd5;padding:1mm 1.5mm;margin:1.5mm 0;font-size:7.2px;text-align:center;">&#9888; No payment collected yet. Full balance of ' . rp_money($total) . ' remains balance outstanding.</div>' : '')
+    . ($pay_status_norm === 'partial' ? '<div class="foot-line" style="color:#92400e;font-weight:bold;border:0.2mm solid #fde68a;background:#fef9c3;padding:1mm 1.5mm;margin:1.5mm 0;font-size:7.2px;text-align:center;">&#9888; This receipt reflects a partial payment.<br>Balance due of ' . rp_money($balance_due_db) . ' must be settled upon completion of service.</div>' : '')
+    . ($pay_status_norm === 'credit' ? '<div class="foot-line" style="color:#6b21a8;font-weight:bold;border:0.2mm solid #d8b4fe;background:#f3e8ff;padding:1mm 1.5mm;margin:1.5mm 0;font-size:7.2px;text-align:center;">&#9888; Credit transaction (Utang). Amount forwarded to the Receivables module.</div>' : '') . '
     <div class="foot-meta">Printed: ' . date('M j, Y h:i A') . ' | ' . rp_e($txn_id) . '</div>
   </div>
 </div>

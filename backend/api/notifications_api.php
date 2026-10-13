@@ -55,7 +55,13 @@ try {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
     $pdo->exec("UPDATE notifications n JOIN users u ON u.id = n.user_id SET n.redirect_url = CASE WHEN (n.title LIKE '%Fuel%' OR n.message LIKE '%Fuel%') THEN 'staff_record_delivery.php?tab=fuel' ELSE 'staff_record_delivery.php?tab=merchandise' END WHERE u.role IN ('staff','cashier','pump_attendant') AND (n.title LIKE '%Stock Request%' OR n.title LIKE '%Purchase Order%' OR n.message LIKE '%Purchase Order%' OR n.event_type = 'purchase_order' OR n.reference_type = 'purchase_order')");
     $pdo->exec("UPDATE notifications n JOIN users u ON u.id = n.user_id SET n.redirect_url = 'manager_stock_request_review.php' WHERE u.role IN ('manager','admin','superadmin') AND (n.title LIKE '%Purchase Order%' OR n.message LIKE '%Purchase Order%' OR n.event_type = 'purchase_order' OR n.reference_type = 'purchase_order') AND (n.redirect_url LIKE '%staff%' OR n.redirect_url = '' OR n.redirect_url IS NULL)");
-    $pdo->exec("UPDATE notifications SET redirect_url = 'manager_inventory_merchandise.php?tab=adjustments' WHERE (title LIKE '%Stock Adjustment%' OR title LIKE '%Merchandise Adjustment%' OR event_type IN ('inventory_adjustment','stock_adjustment','merchandise_adjustment')) AND (redirect_url NOT LIKE '%manager_inventory_merchandise.php?tab=adjustments%' OR redirect_url IS NULL OR redirect_url = '')");
+    $pdo->exec("UPDATE notifications SET redirect_url = 'manager_inventory_merchandise.php?tab=adjustments' WHERE (title LIKE '%Stock Adjustment%' OR title LIKE '%Merchandise Adjustment%' OR event_type IN ('inventory_adjustment','stock_adjustment','merchandise_adjustment')) AND (redirect_url NOT LIKE '%manager_inventory_merchandise.php?tab=adjustments%' AND redirect_url NOT LIKE '%admin_inventory_merchandise.php?tab=adjustments%' OR redirect_url IS NULL OR redirect_url = '')");
+    if ($role === 'admin' && function_exists('sync_station_notifications_to_admin')) {
+        $admStationId = (int)(user_station_id() ?? $me['station_id'] ?? 0);
+        if ($admStationId > 0) {
+            sync_station_notifications_to_admin($pdo, $user_id, $admStationId);
+        }
+    }
 } catch (Throwable $e) {}
 
 /**
@@ -170,23 +176,49 @@ function get_category_unread_counts(PDO $pdo, int $user_id, string $role = '', i
         $counts['mgr_customers'] = $counts['customers'];
 
     } elseif (in_array($role, ['admin'])) {
-        // ADMIN — strictly scope to station_id
+        // ADMIN — strictly scope to station_id and include all Manager + Staff + Admin actionable counts
         $stn_where  = "si.station_id = ? AND ";
         $stn_param  = [$station_id];
         $stn_where2 = "station_id = ? AND ";
         $stn_param2 = [$station_id];
 
+        $admin_pending_jos = $safe_count(
+            "SELECT COUNT(*) FROM job_orders WHERE {$stn_where2}LOWER(COALESCE(status,'')) IN ('pending','pending validation','reviewed','in progress','awaiting parts')",
+            $stn_param2
+        );
+        $admin_pending_merch = $safe_count(
+            "SELECT COUNT(*) FROM merchandise_transactions WHERE {$stn_where2}LOWER(COALESCE(validation_status,'')) IN ('pending','pending validation','pending_validation')",
+            $stn_param2
+        );
+        $admin_pending_adj = $safe_count(
+            "SELECT COUNT(*) FROM fuel_adjustments WHERE {$stn_where2}LOWER(COALESCE(status,'')) IN ('pending','pending validation','pending admin approv','pending admin approval','pending admin review')",
+            $stn_param2
+        );
+        $counts['transactions']       = $admin_pending_jos + $admin_pending_merch + $admin_pending_adj;
+        $counts['admin_transactions'] = $counts['transactions'];
+
         $admin_crit_stock = $safe_count(
             "SELECT COUNT(*) FROM station_inventory si LEFT JOIN inventory_products ip ON ip.id = si.product_id WHERE {$stn_where}(LOWER(COALESCE(ip.category,'')) NOT IN ('fuel','fuels') OR ip.category IS NULL) AND si.stock_level <= COALESCE(NULLIF(si.critical_level, 0), NULLIF(ip.critical_level, 0), NULLIF(si.reorder_level, 0), NULLIF(ip.min_stock, 0), 10)",
             $stn_param
         );
-        $admin_pos = $safe_count(
-            "SELECT COUNT(*) FROM purchase_orders WHERE {$stn_where2}status IN ('Pending Admin Review', 'Submitted', 'Pending Approval')",
+        $admin_stock_reqs = $safe_count(
+            "SELECT COUNT(*) FROM stock_requests WHERE {$stn_where2}status IN ('Pending','pending','Pending Manager Review')",
             $stn_param2
         );
-        $admin_inv_total = $admin_crit_stock + $admin_pos;
+        $admin_pos = $safe_count(
+            "SELECT COUNT(*) FROM purchase_orders WHERE {$stn_where2}status IN ('Pending','Pending Admin Review','Submitted','Pending Approval','Pending Admin Validation','Approved','Pending Stock-In')",
+            $stn_param2
+        );
+        $admin_inv_total = $admin_crit_stock + $admin_stock_reqs + $admin_pos;
         $counts['inventory']       = $admin_inv_total;
         $counts['admin_inventory'] = $admin_inv_total;
+
+        $admin_cust_reqs = $safe_count(
+            "SELECT COUNT(*) FROM customer_requests WHERE {$stn_where2}LOWER(status) = 'pending'",
+            $stn_param2
+        );
+        $counts['customers']     = $admin_cust_reqs;
+        $counts['mgr_customers'] = $admin_cust_reqs;
 
         $admin_price_change = $safe_count(
             "SELECT COUNT(*) FROM pending_price_approvals WHERE {$stn_where2}status = 'pending'",
@@ -204,9 +236,15 @@ function get_category_unread_counts(PDO $pdo, int $user_id, string $role = '', i
         $counts['reports']       = $admin_system_alerts;
         $counts['admin_reports'] = $admin_system_alerts;
 
-        // Fuel Management Oversight: Pending Fuel Transactions requiring admin attention
+        // Fuel Management Oversight: Pending Fuel Transactions + Adjustments + Low Fuel
         $admin_fuel_pending = $safe_count(
-            "SELECT COUNT(*) FROM fuel_transactions WHERE {$stn_where2}LOWER(COALESCE(status,'')) IN ('pending','pending validation')",
+            "SELECT COUNT(*) FROM fuel_transactions WHERE {$stn_where2}LOWER(COALESCE(status,'')) IN ('pending','pending validation','pending_validation')",
+            $stn_param2
+        ) + $safe_count(
+            "SELECT COUNT(*) FROM fuel_adjustments WHERE {$stn_where2}LOWER(COALESCE(status,'')) IN ('pending','pending review','pending validation','pending admin approv','pending admin approval','pending admin review')",
+            $stn_param2
+        ) + $safe_count(
+            "SELECT COUNT(*) FROM fuel_inventory WHERE {$stn_where2}current_level >= 0 AND capacity > 0 AND current_level <= COALESCE(NULLIF(reorder_level, 0), capacity * 0.20, 500)",
             $stn_param2
         );
         $counts['fuel']                  = $admin_fuel_pending;
@@ -374,7 +412,9 @@ try {
                             $n['redirect_url'] = 'staff_inventory_merchandise.php';
                         }
                     } elseif ($is_fuel_adj) {
-                        if (in_array($role, ['admin', 'superadmin', 'developer', 'manager', 'supervisor'], true)) {
+                        if (in_array($role, ['admin', 'superadmin', 'developer'], true)) {
+                            $n['redirect_url'] = 'admin_inventory_fuel.php?tab=adjustments';
+                        } elseif (in_array($role, ['manager', 'supervisor'], true)) {
                             $n['redirect_url'] = 'manager_fuel_adjustments.php';
                         } else {
                             $n['redirect_url'] = 'staff_inventory_fuel.php';
@@ -407,6 +447,47 @@ try {
                         }
                     }
 
+                    // Remap Fuel Sales Closing & Fuel Readings Pending Validation
+                    $is_fuel_val = (
+                        stripos($n['title'], 'fuel sales closing') !== false ||
+                        stripos($n['title'], 'fuel reading') !== false ||
+                        stripos($n['title'], 'fuel meter') !== false ||
+                        stripos($n['title'], 'fuel transaction') !== false ||
+                        ($n['event_type'] ?? '') === 'fuel_sales_closing' ||
+                        (($n['event_type'] ?? '') === 'fuel_transaction' && stripos($n['title'], 'validation') !== false) ||
+                        (stripos($n['title'], 'fuel') !== false && stripos($n['title'], 'validation') !== false) ||
+                        stripos((string)($n['redirect_url'] ?? ''), 'manager_fuel_transaction_validation.php') !== false ||
+                        stripos((string)($n['redirect_url'] ?? ''), 'admin_fuel_management.php') !== false
+                    );
+                    if ($is_fuel_val && !$is_fuel_adj && !$is_merch_adj) {
+                        if (in_array($role, ['admin', 'manager', 'supervisor', 'superadmin', 'developer'], true)) {
+                            $raw_tgt = (string)($n['redirect_url'] ?? '');
+                            if (stripos($raw_tgt, 'manager_fuel_transaction_validation.php') !== false && stripos($raw_tgt, '?') !== false) {
+                                $n['redirect_url'] = $raw_tgt;
+                            } else {
+                                $is_approved = (
+                                    stripos($n['title'], 'approved') !== false ||
+                                    stripos($n['title'], 'validated') !== false ||
+                                    stripos($n['message'], 'approved') !== false ||
+                                    stripos($n['message'], 'validated') !== false
+                                );
+                                $n['redirect_url'] = $is_approved 
+                                    ? 'manager_fuel_transaction_validation.php?status_filter=validated' 
+                                    : 'manager_fuel_transaction_validation.php?status_filter=pending';
+                            }
+                        } else {
+                            if (stripos($n['title'], 'fuel sales closing') !== false || ($n['event_type'] ?? '') === 'fuel_sales_closing') {
+                                $n['redirect_url'] = 'staff_fuel_sales_closing.php';
+                            } else {
+                                $n['redirect_url'] = 'staff_transactions_hub.php?section=fuel&fuel_tab=readings';
+                            }
+                        }
+                    }
+
+                    if (stripos((string)($n['redirect_url'] ?? ''), 'admin_fuel_management.php') !== false) {
+                        $n['redirect_url'] = 'manager_fuel_transaction_validation.php';
+                    }
+
                     if (empty($n['redirect_url']) || $n['redirect_url'] === '#' || $n['redirect_url'] === 'null') {
                         if (!empty($n['reference_type'])) {
                             $n['redirect_url'] = notification_redirect_url(
@@ -414,9 +495,23 @@ try {
                                 (int)($n['reference_id'] ?? 0),
                                 $role
                             );
-                        } elseif (strpos($n['title'], 'Fuel Reading') !== false || strpos($n['title'], 'Fuel Transaction') !== false) {
-                            $n['redirect_url'] = ($role === 'manager' || $role === 'admin') ? 'manager_fuel_transaction_validation.php' : 'staff_transactions_hub.php?section=fuel&fuel_tab=readings';
+                        } elseif (stripos($n['title'], 'Fuel Sales Closing') !== false || stripos($n['title'], 'Fuel Sales') !== false || ($n['event_type'] ?? '') === 'fuel_sales_closing') {
+                            $n['redirect_url'] = in_array($role, ['manager', 'admin', 'supervisor', 'superadmin', 'developer']) ? 'manager_fuel_transaction_validation.php' : 'staff_fuel_sales_closing.php';
+                        } elseif (stripos($n['title'], 'Fuel Reading') !== false || stripos($n['title'], 'Fuel Transaction') !== false) {
+                            $n['redirect_url'] = in_array($role, ['manager', 'admin', 'supervisor', 'superadmin', 'developer']) ? 'manager_fuel_transaction_validation.php' : 'staff_transactions_hub.php?section=fuel&fuel_tab=readings';
                         }
+                    }
+
+                    // Ensure Admin always lands on Admin/Manager modules with full authority
+                    if ($role === 'admin' && function_exists('remap_notification_url_for_admin')) {
+                        $n['redirect_url'] = remap_notification_url_for_admin(
+                            (string)($n['redirect_url'] ?? ''),
+                            (string)($n['event_type'] ?? ''),
+                            (string)($n['title'] ?? ''),
+                            (string)($n['message'] ?? ''),
+                            (string)($n['reference_type'] ?? ''),
+                            (int)($n['reference_id'] ?? 0)
+                        );
                     }
                 }
                 unset($n);
@@ -530,6 +625,15 @@ try {
                     // Pending job orders
                     $action_count += $safe_count(
                         "SELECT COUNT(*) FROM job_orders WHERE {$station_where}LOWER(COALESCE(validation_status,status,'')) IN ('pending','pending validation','pending_validation')",
+                        $station_param
+                    );
+                    // Pending stock requests
+                    $action_count += $safe_count(
+                        "SELECT COUNT(*) FROM stock_requests WHERE {$station_where}LOWER(COALESCE(status,'')) IN ('pending','pending manager review','pending approval')",
+                        $station_param
+                    );
+                    $action_count += $safe_count(
+                        "SELECT COUNT(*) FROM fuel_stock_requests WHERE {$station_where}LOWER(COALESCE(status,'')) IN ('pending','pending manager review','pending approval')",
                         $station_param
                     );
                     // Pending merchandise POs

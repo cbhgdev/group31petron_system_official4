@@ -1,0 +1,28 @@
+4420: // Purge any drafts from user_form_drafts table so draft engine never restores them into fuel encoding
+4424: $pdo->prepare("DELETE FROM user_form_drafts WHERE user_id = ? AND (module_key LIKE '%fuel%' OR module_key LIKE '%meter%' OR module_key LIKE '%reading%' OR module_key LIKE '%transactions_hub%')")->execute([$clean_uid]);
+4444: sessionStorage.setItem('petron_fuel_reading_cache', JSON.stringify(data));
+4446: sessionStorage.removeItem('petron_fuel_reading_cache');
+4452: function restoreFuelInputCache() {
+4454: var raw = sessionStorage.getItem('petron_fuel_reading_cache');
+4470: window.restoreFuelInputCache = restoreFuelInputCache;
+5301: if (lk && lk.indexOf('petron_draft_') === 0 && (lk.indexOf('fuel') !== -1 || lk.indexOf('meter') !== -1 || lk.indexOf('reading') !== -1 || lk.indexOf('transactions_hub') !== -1 || (localStorage.getItem(lk) && localStorage.getItem(lk).indexOf('Γé') !== -1))) {
+5412: if (typeof window.restoreFuelInputCache === 'function') {
+5413: window.restoreFuelInputCache();
+5424: if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
+5428: if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
+5432: if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
+5435: if (typeof window.restoreFuelInputCache === 'function') window.restoreFuelInputCache();
+5617: if (typeof window.restoreFuelInputCache === 'function') {
+5618: window.restoreFuelInputCache();
+5792: if (endingEl) endingEl.value = beginningVal.toFixed(2);
+5880: beginningEl.value = submittedEnding.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+5897: if (endingEl)    endingEl.value    = '';
+5903: try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
+5954: if (endingEl) endingEl.value = '';
+6005: try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
+6097: endingEl.value = beginningEl.value;
+6200: beginningEl.value = endingVal.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+6216: if (endingEl)    endingEl.value    = '';
+6249: try { sessionStorage.removeItem('petron_fuel_reading_cache'); } catch(e) {}
+6758: $pdo->prepare("DELETE FROM user_form_drafts WHERE user_id = ? AND (module_key LIKE 'pos_merchandise%' OR module_key LIKE '%job_order%' OR module_key LIKE '%merchandise%' OR module_key LIKE '%transactions_hub%')")->execute([$clean_uid]);
+6774: if (k && (k.indexOf('petron_draft_') === 0 || k.indexOf('jo_draft') !== -1 || k.indexOf('pos_merchandise') !== -1 || k.indexOf('job_order') !== -1 || k.indexOf('merchandise') !== -1)) {

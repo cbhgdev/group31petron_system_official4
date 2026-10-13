@@ -46,6 +46,11 @@ $date_to      = trim($_GET['date_to'] ?? '');
 
 $assigned_shift = trim($me['assigned_shift'] ?? '');
 
+if ($role === 'admin' && function_exists('sync_station_notifications_to_admin')) {
+    $__notif_stn_id = (int)($me['station_id'] ?? (function_exists('user_station_id') ? user_station_id() : 0));
+    sync_station_notifications_to_admin($pdo, (int)($me['id'] ?? 0), $__notif_stn_id);
+}
+
 // Overall Counts
 $counts = ['total' => 0, 'unread' => 0, 'read' => 0, 'archived' => 0];
 try {
@@ -196,6 +201,17 @@ try {
                     $role
                 );
             }
+        }
+
+        if ($role === 'admin' && function_exists('remap_notification_url_for_admin')) {
+            $nr['redirect_url'] = remap_notification_url_for_admin(
+                (string)($nr['redirect_url'] ?? ''),
+                (string)($nr['event_type'] ?? ''),
+                (string)($nr['title'] ?? ''),
+                (string)($nr['message'] ?? ''),
+                (string)($nr['reference_type'] ?? ''),
+                (int)($nr['reference_id'] ?? 0)
+            );
         }
     }
     unset($nr);
@@ -1021,7 +1037,8 @@ function handleFeedItemClick(el, notifId, redirectUrl, nData) {
     const managerFallback = {
         'fuel_transaction'  : 'manager_fuel_transaction_validation.php',
         'fuel_reading'      : 'manager_fuel_transaction_validation.php',
-        'fuel_management'   : 'manager_inventory_fuel.php',
+        'fuel_sales_closing': 'manager_fuel_transaction_validation.php',
+        'fuel_management'   : 'manager_fuel_transaction_validation.php',
         'inventory'         : 'manager_inventory_merchandise.php',
         'stock_request'     : 'manager_stock_request_review.php?tab=pending_requests',
         'job_order'         : 'manager_validated_transactions.php',
@@ -1033,16 +1050,29 @@ function handleFeedItemClick(el, notifId, redirectUrl, nData) {
         'general'           : 'manager_fuel_transaction_validation.php'
     };
     const adminFallback = {
-        'fuel_transaction'  : 'admin_fuel_management.php',
-        'fuel_management'   : 'admin_fuel_management.php',
-        'inventory'         : 'admin_stock_in.php',
+        'fuel_transaction'  : 'manager_fuel_transaction_validation.php',
+        'fuel_reading'      : 'manager_fuel_transaction_validation.php',
+        'fuel_sales_closing': 'manager_fuel_transaction_validation.php',
+        'fuel_management'   : 'manager_fuel_transaction_validation.php',
+        'fuel'              : 'admin_inventory_fuel.php',
+        'inventory'         : 'admin_inventory_merchandise.php',
+        'stock_request'     : 'manager_stock_request_review.php',
+        'purchase_order'    : 'manager_stock_request_review.php',
+        'stock_in'          : 'manager_stock_in.php',
+        'merchandise_stock_in': 'manager_stock_in.php?tab=merchandise',
+        'fuel_stock_in'     : 'manager_stock_in.php?tab=fuel',
         'transaction'       : 'manager_validated_transactions.php',
         'job_order'         : 'manager_validated_transactions.php',
-        'delivery'          : 'admin_deliveries_oversight.php',
-        'general'           : 'admin_fuel_management.php'
+        'delivery'          : 'manager_stock_in.php',
+        'customer'          : 'manager_customers.php',
+        'calendar'          : 'admin_calendar.php',
+        'report'            : 'admin_reports.php',
+        'general'           : 'manager_fuel_transaction_validation.php'
     };
     const staffFallback = {
         'fuel_transaction'      : 'staff_fuel_sales_closing.php',
+        'fuel_reading'          : 'staff_transactions_hub.php?section=fuel&fuel_tab=readings',
+        'fuel_sales_closing'    : 'staff_fuel_sales_closing.php',
         'fuel_management'       : 'staff_fuel_sales_closing.php',
         'inventory'             : 'staff_inventory_merchandise.php',
         'stock_in'              : 'staff_inventory_merchandise.php',
@@ -1067,28 +1097,36 @@ function handleFeedItemClick(el, notifId, redirectUrl, nData) {
         }
     }
 
+    if (redirectUrl && redirectUrl.includes('admin_fuel_management.php')) {
+        redirectUrl = 'manager_fuel_transaction_validation.php';
+    }
+
     // Title-based overrides (handles "general" event_type or generic delivery/stock-in notifications)
     let titleFallback = null;
-    if (role === 'manager') {
-        if (notifTitle.includes('fuel reading') || notifTitle.includes('fuel meter') || notifTitle.includes('fuel transaction') || notifTitle.includes('pending validation')) {
+    if (['manager', 'admin', 'superadmin', 'developer', 'supervisor'].includes(role)) {
+        if (notifTitle.includes('fuel reading') || notifTitle.includes('fuel meter') || notifTitle.includes('fuel transaction') || notifTitle.includes('fuel sales closing') || notifTitle.includes('fuel sales') || notifTitle.includes('pending validation')) {
             titleFallback = 'manager_fuel_transaction_validation.php';
         } else if (notifTitle.includes('stock request') || notifTitle.includes('new stock')) {
             titleFallback = 'manager_stock_request_review.php?tab=pending_requests';
         } else if (notifTitle.includes('adjustment') || notifTitle.includes('job order')) {
             titleFallback = 'manager_validated_transactions.php';
         } else if (notifTitle.includes('delivery')) {
-            titleFallback = 'manager_merchandise_deliveries.php';
+            titleFallback = (role === 'admin') ? 'manager_stock_in.php' : 'manager_merchandise_deliveries.php';
         } else if (notifTitle.includes('customer')) {
             titleFallback = 'manager_customers.php';
         } else if (notifTitle.includes('inventory') || notifTitle.includes('stock alert')) {
-            titleFallback = 'manager_inventory_merchandise.php';
+            titleFallback = (role === 'admin') ? 'admin_inventory_merchandise.php' : 'manager_inventory_merchandise.php';
         } else if (notifTitle.includes('fuel') || notifTitle.includes('low fuel')) {
-            titleFallback = 'manager_inventory_fuel.php';
+            titleFallback = 'manager_fuel_transaction_validation.php';
         }
     } else if (['staff', 'cashier', 'pump_attendant'].includes(role)) {
         const lowerTitle = notifTitle.toLowerCase();
         const lowerMsg = (nData.message || '').toLowerCase();
-        if (lowerTitle.includes('stock - in') || lowerTitle.includes('stock-in') || lowerTitle.includes('delivery') || lowerTitle.includes('stocked in')) {
+        if (lowerTitle.includes('fuel sales closing') || lowerTitle.includes('fuel sales')) {
+            titleFallback = 'staff_fuel_sales_closing.php';
+        } else if (lowerTitle.includes('fuel reading') || lowerTitle.includes('fuel meter')) {
+            titleFallback = 'staff_transactions_hub.php?section=fuel&fuel_tab=readings';
+        } else if (lowerTitle.includes('stock - in') || lowerTitle.includes('stock-in') || lowerTitle.includes('delivery') || lowerTitle.includes('stocked in')) {
             const isFuel = lowerTitle.includes('fuel') || lowerMsg.includes('fuel') || lowerMsg.includes('diesel') || lowerMsg.includes('unleaded') || lowerMsg.includes('gasoline') || lowerMsg.includes('liters') || lowerMsg.includes('xcs') || lowerMsg.includes('tank');
             titleFallback = isFuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
         }
@@ -1097,6 +1135,26 @@ function handleFeedItemClick(el, notifId, redirectUrl, nData) {
     let finalUrl = redirectUrl && redirectUrl.trim() !== '' && redirectUrl !== '#' && redirectUrl !== 'null'
         ? redirectUrl
         : (titleFallback || (role === 'manager' ? managerFallback[evType] : (role === 'admin' ? adminFallback[evType] : staffFallback[evType])) || null);
+
+    if (finalUrl && finalUrl.includes('admin_fuel_management.php')) {
+        finalUrl = 'manager_fuel_transaction_validation.php';
+    }
+
+    if (role === 'admin' && finalUrl) {
+        if (finalUrl.includes('staff_inventory_merchandise.php') || finalUrl.includes('manager_inventory_merchandise.php')) {
+            finalUrl = finalUrl.replace(/(?:staff|manager)_inventory_merchandise\.php/i, 'admin_inventory_merchandise.php');
+        } else if (finalUrl.includes('staff_inventory_fuel.php') || finalUrl.includes('manager_inventory_fuel.php')) {
+            finalUrl = finalUrl.replace(/(?:staff|manager)_inventory_fuel\.php/i, 'admin_inventory_fuel.php');
+        } else if (finalUrl.includes('staff_customer_list.php')) {
+            finalUrl = 'manager_customers.php';
+        } else if (finalUrl.includes('staff_transactions_hub.php')) {
+            finalUrl = 'manager_validated_transactions.php';
+        } else if (finalUrl.includes('manager_calendar.php')) {
+            finalUrl = finalUrl.replace(/manager_calendar\.php/i, 'admin_calendar.php');
+        } else if (finalUrl.includes('manager_reports.php')) {
+            finalUrl = finalUrl.replace(/manager_reports\.php/i, 'admin_reports.php');
+        }
+    }
 
     if (finalUrl) {
         const targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl(finalUrl) : finalUrl;

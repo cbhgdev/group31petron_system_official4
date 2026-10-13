@@ -370,6 +370,27 @@ try {
     $stock_in_list = $stIn->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {}
 
+if (isset($_GET['ajax_live_inventory']) && $_GET['ajax_live_inventory'] === '1') {
+    while (ob_get_level() > 0) { @ob_end_clean(); }
+    header('Content-Type: application/json; charset=UTF-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    echo json_encode([
+        'ok' => true,
+        'stats' => [
+            'total'        => (int)($stats['total'] ?? 0),
+            'available'    => (int)($stats['available'] ?? 0),
+            'low'          => (int)($stats['low'] ?? 0),
+            'out'          => (int)($stats['out'] ?? 0),
+            'expired'      => (int)($stats['expired'] ?? 0),
+            'alerts_count' => (int)(($stats['low'] ?? 0) + ($stats['out'] ?? 0) + ($stats['expired'] ?? 0)),
+        ],
+        'items'         => array_values($js_items),
+        'stock_in_list' => array_values($stock_in_list),
+        'server_time'   => date('Y-m-d H:i:s'),
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 include __DIR__ . '/../partials/header.php';
 
 // Display redirected notice from staff_stock_in.php access attempt
@@ -1442,40 +1463,43 @@ function applyFilters() {
     var tbody = document.getElementById('merchTableBody');
     if (!tbody) return;
 
-    if (sortBy === 'default') {
-        var rows = Array.from(tbody.querySelectorAll('tr'));
-        var currentHeader = null;
-        var hasVisibleItems = false;
+    var headers = Array.from(tbody.querySelectorAll('.cat-header'));
+    var merchRows = Array.from(tbody.querySelectorAll('.merch-row'));
 
-        rows.forEach(function(r) {
-            if (r.classList.contains('cat-header')) {
-                if (currentHeader) {
-                    currentHeader.style.display = hasVisibleItems ? '' : 'none';
-                    if (!hasVisibleItems) currentHeader.classList.add('search-hidden');
-                    else currentHeader.classList.remove('search-hidden');
-                }
-                currentHeader = r;
-                hasVisibleItems = false;
-            } else if (r.classList.contains('merch-row')) {
-                if (!r.classList.contains('search-hidden')) {
-                    hasVisibleItems = true;
-                }
-            }
+    if (sortBy === 'default') {
+        // Ensure rows are grouped under their matching category header in alphabetical order
+        merchRows.sort(function(a, b) {
+            var catA = (a.dataset.category || '').toLowerCase();
+            var catB = (b.dataset.category || '').toLowerCase();
+            if (catA !== catB) return catA.localeCompare(catB);
+            return (a.dataset.name || '').localeCompare(b.dataset.name || '');
         });
-        if (currentHeader) {
-            currentHeader.style.display = hasVisibleItems ? '' : 'none';
-            if (!hasVisibleItems) currentHeader.classList.add('search-hidden');
-            else currentHeader.classList.remove('search-hidden');
-        }
+
+        headers.forEach(function(h) {
+            tbody.appendChild(h);
+            var hCat = h.textContent.trim().toLowerCase();
+            var hasVisibleItems = false;
+            merchRows.forEach(function(r) {
+                var rCat = (r.dataset.category || '').toLowerCase();
+                if (rCat === hCat) {
+                    tbody.appendChild(r);
+                    if (!r.classList.contains('search-hidden')) {
+                        hasVisibleItems = true;
+                    }
+                }
+            });
+            h.style.display = hasVisibleItems ? '' : 'none';
+            if (!hasVisibleItems) h.classList.add('search-hidden');
+            else h.classList.remove('search-hidden');
+        });
     } else {
         // Global sort mode — hide category headers
-        Array.from(tbody.querySelectorAll('.cat-header')).forEach(function(h) {
+        headers.forEach(function(h) {
             h.style.display = 'none';
             h.classList.add('search-hidden');
         });
 
         // Perform in-place sorting of merch-rows
-        var merchRows = Array.from(tbody.querySelectorAll('.merch-row'));
         merchRows.sort(function(a, b) {
             if (sortBy === 'name_asc') {
                 return (a.dataset.name || '').localeCompare(b.dataset.name || '');
@@ -1567,56 +1591,7 @@ function filterByCard(statusKey, cardEl) {
     document.getElementById('filterStatus').addEventListener(ev, applyFilters);
 });
 
-document.getElementById('sortBy').addEventListener('change', function() {
-    var val = this.value;
-    var tbody = document.getElementById('merchTableBody');
-    var rows  = Array.from(tbody.querySelectorAll('.merch-row'));
-    var headers = Array.from(tbody.querySelectorAll('.cat-header'));
-
-    if (val === 'default') {
-        // Show all category headers initially
-        headers.forEach(function(h) { h.style.display = ''; });
-
-        // Sort rows by category first, then by name
-        rows.sort(function(a, b) {
-            var catA = (a.dataset.category || '').toLowerCase();
-            var catB = (b.dataset.category || '').toLowerCase();
-            if (catA !== catB) {
-                return catA.localeCompare(catB);
-            }
-            var nameA = (a.dataset.name || '').toLowerCase();
-            var nameB = (b.dataset.name || '').toLowerCase();
-            return nameA.localeCompare(nameB);
-        });
-
-        // Re-append in grouped category order
-        headers.forEach(function(h) {
-            tbody.appendChild(h);
-            var hCat = h.textContent.trim().toLowerCase();
-            rows.forEach(function(r) {
-                var rCat = (r.dataset.category || '').toLowerCase();
-                if (rCat === hCat) {
-                    tbody.appendChild(r);
-                }
-            });
-        });
-    } else {
-        // Hide all category headers because it's a global sort
-        headers.forEach(function(h) { h.style.display = 'none'; });
-
-        // Sort rows globally
-        if (val === 'name_asc')    rows.sort(function(a,b){ return (a.dataset.name||'').localeCompare(b.dataset.name||''); });
-        if (val === 'name_desc')   rows.sort(function(a,b){ return (b.dataset.name||'').localeCompare(a.dataset.name||''); });
-        if (val === 'stock_asc')   rows.sort(function(a,b){ return parseInt(a.dataset.stock||0)-parseInt(b.dataset.stock||0); });
-        if (val === 'stock_desc')  rows.sort(function(a,b){ return parseInt(b.dataset.stock||0)-parseInt(a.dataset.stock||0); });
-        if (val === 'newest')      rows.sort(function(a,b){ return (b.dataset.updated||'').localeCompare(a.dataset.updated||''); });
-
-        rows.forEach(function(r){ tbody.appendChild(r); });
-    }
-
-    // Re-apply filters and update pagination
-    applyFilters();
-});
+document.getElementById('sortBy').addEventListener('change', applyFilters);
 
 // ── Tabs Navigation Switcher ─────────────────────────────────
 window.switchInvTab = function switchInvTab(tab) {
@@ -2012,12 +1987,13 @@ function srHandleSubmit(btn) {
 function closeSrSuccess() {
     document.getElementById('srSuccessPopup').style.display = 'none';
     document.getElementById('srSuccessOverlay').style.display = 'none';
-    // Persist banner info across reload
     var bannerText = (document.getElementById('srSuccessMsg') || {}).innerHTML || '';
     if (bannerText && bannerText.indexOf('Successfully') !== -1) {
-        try { sessionStorage.setItem('srBannerMsg', bannerText); } catch(e) {}
+        showSrBanner("STOCK REQUEST SUBMITTED!", bannerText);
     }
-    window.location.reload();
+    if (window.PetronRealtime && typeof window.PetronRealtime.refreshActiveView === 'function') {
+        window.PetronRealtime.refreshActiveView({ force: true });
+    }
 }
 function closeSrBanner() {
     var b = document.getElementById('srGlobalSuccessBanner');
@@ -2468,6 +2444,9 @@ function submitAdjustmentForm(e) {
         if (res.success) {
             closeAdjustmentModal();
             showSrBanner("ADJUSTMENT SUBMITTED!", "Your inventory adjustment request is now Pending Manager Approval.");
+            if (typeof window.refreshMerchandiseInventoryLive === 'function') {
+                window.refreshMerchandiseInventoryLive({ force: true });
+            }
         } else {
             alert('Error: ' + (res.message || 'Failed to submit adjustment.'));
         }
@@ -2632,47 +2611,434 @@ body.sidebar-collapsed #staffAdjustmentModal {
 </div> <!-- /stock-page -->
 
 <script id="merchAutoRefreshScript">
-// ── Seamless Silent Background Auto-Fetch for Merchandise Inventory (15 seconds) ──
+// ── Non-Destructive Automatic Data Refresh & Live UI Updates for Merchandise Inventory ──
 (function() {
     'use strict';
-    function autoRefreshMerchandiseInventory() {
-        if (document.hidden) return;
-        var openModal = document.querySelector('.modal-overlay.open, .sr-modal-overlay.open, .modal.show, div[style*="display: block"][id*="Modal"], div[style*="display: flex"][id*="Modal"]');
-        if (openModal) return;
-        var searchInput = document.getElementById('searchMerchandise') || document.querySelector('input[type="search"]');
-        if (searchInput && searchInput === document.activeElement && searchInput.value.trim() !== '') return;
 
-        fetch(window.location.href, {
-            headers: { 'X-Requested-With': 'XMLHttpRequest' },
-            cache: 'no-store'
-        })
-        .then(function(res) { return res.text(); })
-        .then(function(html) {
-            var parser = new DOMParser();
-            var doc = parser.parseFromString(html, 'text/html');
-            
-            // Update table body
-            var newTbody = doc.querySelector('#merchTableBody') || doc.querySelector('#merchandiseTable tbody') || doc.querySelector('table tbody');
-            var curTbody = document.querySelector('#merchTableBody') || document.querySelector('#merchandiseTable tbody') || document.querySelector('table tbody');
-            if (newTbody && curTbody) {
-                curTbody.innerHTML = newTbody.innerHTML;
-                if (typeof applyFilters === 'function') applyFilters();
+    var _isUpdating = false;
+    var _liveTimer = null;
+
+    function isAnyModalOpen() {
+        var vd = document.getElementById('vdModal');
+        var sr = document.getElementById('srModal');
+        var adj = document.getElementById('staffAdjustmentModal');
+        var pop = document.getElementById('srSuccessPopup');
+        if (vd && vd.classList.contains('open')) return true;
+        if (sr && sr.classList.contains('open')) return true;
+        if (adj && adj.style.display && adj.style.display !== 'none') return true;
+        if (pop && pop.style.display && pop.style.display !== 'none') return true;
+        return false;
+    }
+
+    function escapeHtml(str) {
+        return String(str == null ? '' : str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function formatUpdatedDateTime(raw) {
+        if (!raw) return { date: '—', time: '' };
+        var normalized = String(raw).replace(' ', 'T');
+        var dt = new Date(normalized);
+        if (isNaN(dt.getTime())) {
+            dt = new Date(raw);
+        }
+        if (isNaN(dt.getTime())) return { date: String(raw), time: '' };
+        var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        var m = months[dt.getMonth()];
+        var d = String(dt.getDate()).padStart(2, '0');
+        var y = dt.getFullYear();
+        var hr = dt.getHours();
+        var ampm = hr >= 12 ? 'PM' : 'AM';
+        hr = hr % 12;
+        if (hr === 0) hr = 12;
+        var min = String(dt.getMinutes()).padStart(2, '0');
+        return {
+            date: m + ' ' + d + ', ' + y,
+            time: String(hr).padStart(2, '0') + ':' + min + ' ' + ampm
+        };
+    }
+
+    function buildMerchRowCellsHtml(it) {
+        var expDate = it.expiration_date || 'N/A';
+        var expStatus = it.exp_status || '';
+        var hasVariance = (it.variance !== null && it.variance !== undefined && parseFloat(it.variance) !== 0);
+        var displayStatus = (expStatus === 'expired') ? 'EXPIRED' : (it.status || 'Available');
+        var displayColor = (expStatus === 'expired') ? '#dc3545' : (it.color || '#28a745');
+        var batchId = (it.batches && it.batches.length > 0 && it.batches[0].batch_id)
+            ? it.batches[0].batch_id
+            : ('B' + String(it.id).padStart(3, '0'));
+        var initialQty = (parseInt(it.stock_in || 0, 10) > 0)
+            ? parseInt(it.stock_in, 10)
+            : parseInt(it.capacity || 480, 10);
+        var stock = parseFloat(it.stock || 0);
+        var reorder = parseFloat(it.reorder || 0);
+        var unit = escapeHtml(it.unit || 'pcs');
+        var fillPct = Math.min(100, Math.round(parseFloat(it.fill_pct || 0)));
+        var ts = formatUpdatedDateTime(it.last_updated);
+
+        var expBadgeHtml = '';
+        if (expStatus === 'expired') {
+            expBadgeHtml = '<div style="margin-top:4px;"><span style="display:inline-block;background:#dc354520;color:#dc3545;border:1.5px solid #dc354560;border-radius:5px;font-size:10px;font-weight:800;padding:2px 7px;text-transform:uppercase;white-space:nowrap;letter-spacing:0.4px;"><i class="fas fa-exclamation-circle" style="font-size:9px;margin-right:2px;"></i>EXPIRED</span></div>';
+        } else if (expStatus === 'expiring_soon') {
+            expBadgeHtml = '<div style="margin-top:4px;"><span style="display:inline-block;background:#fd7e1420;color:#c05c00;border:1.5px solid #fd7e1460;border-radius:5px;font-size:10px;font-weight:800;padding:2px 7px;text-transform:uppercase;white-space:nowrap;letter-spacing:0.4px;"><i class="fas fa-clock" style="font-size:9px;margin-right:2px;"></i>EXPIRING SOON</span></div>';
+        }
+
+        var statusBadgeHtml = '';
+        if (expStatus === 'expired') {
+            statusBadgeHtml = '<span class="inv-stock-badge" style="background:#dc354520;color:#dc3545;border:1.5px solid #dc354560;padding:4px 9px;border-radius:6px;font-size:11px;font-weight:800;text-transform:uppercase;white-space:nowrap;display:inline-block;"><i class="fas fa-ban" style="font-size:9.5px;margin-right:2px;"></i> EXPIRED</span>';
+        } else {
+            statusBadgeHtml = '<span class="inv-stock-badge" style="background:' + displayColor + '20;color:' + displayColor + ';border:1.5px solid ' + displayColor + '50;padding:4px 9px;border-radius:6px;font-size:11px;font-weight:800;text-transform:uppercase;white-space:nowrap;display:inline-block;">' + escapeHtml(displayStatus) + '</span>';
+        }
+        if (hasVariance && expStatus !== 'expired') {
+            statusBadgeHtml += '<div style="margin-top:3px;"><span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:2px 6px;font-size:10px;font-weight:800;display:inline-flex;align-items:center;gap:3px;text-transform:uppercase;letter-spacing:0.3px;"><i class="fas fa-balance-scale" style="font-size:9px;color:#d97706;"></i> VARIANCE</span></div>';
+        }
+
+        var tsHtml = (ts.date !== '—')
+            ? ('<div style="font-size:12px;font-weight:700;color:#1e293b;white-space:nowrap;">' + escapeHtml(ts.date) + '</div><div style="font-size:11px;color:#64748b;font-weight:600;margin-top:2px;white-space:nowrap;">' + escapeHtml(ts.time) + '</div>')
+            : '<span style="color:#94a3b8;font-size:12px;">—</span>';
+
+        var jsonArg = escapeHtml(JSON.stringify(it));
+
+        return '' +
+            '<td style="padding:9px 8px;max-width:0;overflow:hidden;box-sizing:border-box;vertical-align:middle;">' +
+                '<div style="font-family:monospace;font-size:12.5px;font-weight:700;color:#002F70;white-space:nowrap;" title="Batch ID">' +
+                    '<i class="fas fa-layer-group" style="font-size:10.5px;color:#2563eb;margin-right:2px;"></i> ' + escapeHtml(batchId) +
+                '</div>' +
+                '<div style="font-family:monospace;font-size:11.5px;font-weight:700;color:#4f46e5;margin-top:2px;white-space:nowrap;" title="SKU">' +
+                    escapeHtml(it.sku || '—') +
+                '</div>' +
+            '</td>' +
+            '<td style="padding:9px 8px;max-width:0;overflow:hidden;box-sizing:border-box;vertical-align:middle;">' +
+                '<div style="font-weight:800;font-size:13.5px;color:#0f172a;line-height:1.3;word-break:break-word;overflow-wrap:break-word;">' + escapeHtml(it.name) + '</div>' +
+                '<div style="font-size:11.5px;color:#64748b;margin-top:3px;font-weight:600;display:flex;align-items:center;gap:4px;flex-wrap:wrap;">' +
+                    '<span style="color:#0369a1;"><i class="fas fa-tag" style="font-size:10px;"></i> ' + escapeHtml(it.category || 'General') + '</span>' +
+                    '<span style="color:#cbd5e1;">•</span>' +
+                    '<span style="color:#475569;font-weight:700;">' + unit + '</span>' +
+                '</div>' +
+            '</td>' +
+            '<td style="padding:9px 8px;max-width:0;overflow:hidden;box-sizing:border-box;vertical-align:middle;text-align:center;">' +
+                '<span style="font-size:12.5px;font-weight:700;color:' + (expStatus === 'expired' ? '#dc3545' : (expDate !== 'N/A' ? '#0f172a' : '#94a3b8')) + ';white-space:nowrap;">' +
+                    '<i class="fas fa-calendar-alt" style="font-size:11px;color:' + (expStatus === 'expired' ? '#dc3545' : (expDate !== 'N/A' ? '#2563eb' : '#cbd5e1')) + ';margin-right:3px;"></i> ' + escapeHtml(expDate) +
+                '</span>' +
+                expBadgeHtml +
+            '</td>' +
+            '<td style="padding:9px 8px;max-width:0;overflow:hidden;box-sizing:border-box;vertical-align:middle;">' +
+                '<div class="fill-bar-wrap" style="height:6px;border-radius:3px;background:#e2e8f0;overflow:hidden;margin-bottom:3px;">' +
+                    '<div class="fill-bar-inner" style="width:' + fillPct + '%;background:' + displayColor + ';height:100%;"></div>' +
+                '</div>' +
+                '<div style="display:flex;align-items:baseline;justify-content:space-between;flex-wrap:wrap;gap:4px;">' +
+                    '<span style="font-size:13px;font-weight:800;color:#0f172a;white-space:nowrap;">' + Math.round(stock).toLocaleString() + ' <small style="font-size:11px;color:#64748b;font-weight:600;">' + unit + '</small></span>' +
+                    '<span style="font-size:11px;color:#64748b;white-space:nowrap;font-weight:600;">Reorder: <strong style="color:#ea580c;">' + Math.round(reorder).toLocaleString() + '</strong></span>' +
+                '</div>' +
+                '<div style="font-size:10.5px;color:#64748b;margin-top:2px;white-space:nowrap;">Init: ' + initialQty.toLocaleString() + '</div>' +
+            '</td>' +
+            '<td style="padding:9px 6px;max-width:0;overflow:visible;box-sizing:border-box;vertical-align:middle;text-align:center;">' +
+                statusBadgeHtml +
+            '</td>' +
+            '<td style="padding:9px 8px;max-width:0;overflow:hidden;box-sizing:border-box;vertical-align:middle;">' +
+                tsHtml +
+            '</td>' +
+            '<td style="padding:8px 6px;max-width:0;overflow:hidden;box-sizing:border-box;text-align:center;vertical-align:middle;">' +
+                '<div class="act-btn-wrap">' +
+                    '<button type="button" class="act-btn act-btn-view" onclick=\'viewDetails(' + jsonArg + ')\' title="View Details">' +
+                        '<i class="fas fa-eye"></i> View' +
+                    '</button>' +
+                    '<button type="button" class="act-btn act-btn-adjust" onclick=\'openAdjustmentModal(' + jsonArg + ')\' title="Adjust Stock">' +
+                        '<i class="fas fa-edit"></i> Adjust' +
+                    '</button>' +
+                '</div>' +
+            '</td>';
+    }
+
+    function applyRowDataAttributes(tr, it) {
+        var expDate = it.expiration_date || 'N/A';
+        var expStatus = it.exp_status || '';
+        var hasVariance = (it.variance !== null && it.variance !== undefined && parseFloat(it.variance) !== 0);
+        var effectiveStatus = (expStatus === 'expired') ? 'expired' : (it.status_key || 'available');
+
+        tr.dataset.id = String(it.id);
+        tr.dataset.name = String(it.name || '').toLowerCase();
+        tr.dataset.sku = String(it.sku || '').toLowerCase();
+        tr.dataset.category = String(it.category || 'General').toLowerCase();
+        tr.dataset.brand = String(it.brand || '').toLowerCase();
+        tr.dataset.unit = String(it.unit || 'pcs').toLowerCase();
+        tr.dataset.status = effectiveStatus;
+        tr.dataset.filterStatus = effectiveStatus;
+        tr.dataset.hasVariance = hasVariance ? 'true' : 'false';
+        tr.dataset.stock = String(it.stock || 0);
+        tr.dataset.updated = String(it.last_updated || '');
+        tr.dataset.idx = JSON.stringify(Object.assign({}, it, { exp_status: expStatus, exp_date: expDate }));
+    }
+
+    function updateAlertsTableLive(items) {
+        var alertsTbody = document.querySelector('#section-alerts tbody');
+        if (!alertsTbody) return;
+
+        var alertItems = (items || []).filter(function(it) {
+            return ['low', 'critical', 'out', 'expired'].indexOf(it.status_key) !== -1 || it.exp_status === 'expired';
+        });
+
+        if (alertItems.length === 0) {
+            alertsTbody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:36px; font-size:15px; color:#64748b;"><i class="fas fa-check-circle" style="color:#16a34a; font-size:2.2em; display:block; margin-bottom:10px;"></i> <strong>No stock alerts found.</strong> All items are currently at optimal stock levels.</td></tr>';
+            return;
+        }
+
+        var html = '';
+        alertItems.forEach(function(ait) {
+            var isExp = (ait.exp_status === 'expired' || ait.status_key === 'expired');
+            var aitStatus, aitColor, aitIcon, aitRec, aitRecIc, aitRecCol;
+            if (isExp) {
+                aitStatus = 'Expired'; aitColor = '#dc3545'; aitIcon = 'fa-ban';
+                aitRec = 'Do Not Sell / Dispose & Adjust Stock'; aitRecIc = 'fa-trash-alt'; aitRecCol = '#dc3545';
+            } else if (ait.status_key === 'out') {
+                aitStatus = 'Out of Stock'; aitColor = '#dc2626'; aitIcon = 'fa-times-circle';
+                aitRec = 'Immediate Restock / Stock Request'; aitRecIc = 'fa-paper-plane'; aitRecCol = '#dc2626';
+            } else if (ait.status_key === 'critical') {
+                aitStatus = 'Critical Low'; aitColor = '#dc2626'; aitIcon = 'fa-exclamation-circle';
+                aitRec = 'Urgent Restock Needed'; aitRecIc = 'fa-exclamation-triangle'; aitRecCol = '#dc2626';
+            } else {
+                aitStatus = 'Low Stock'; aitColor = '#fd7e14'; aitIcon = 'fa-exclamation-triangle';
+                aitRec = 'Create Stock Request'; aitRecIc = 'fa-file-alt'; aitRecCol = '#ea580c';
             }
-            
-            // Update top KPI cards if present
-            var newCards = doc.querySelectorAll('.kpi-card, .metric-card, [class*="summary-card"]');
-            var curCards = document.querySelectorAll('.kpi-card, .metric-card, [class*="summary-card"]');
-            if (newCards.length > 0 && curCards.length === newCards.length) {
-                for (var j = 0; j < newCards.length; j++) {
-                    curCards[j].innerHTML = newCards[j].innerHTML;
+
+            var expMeta = (ait.expiration_date && ait.expiration_date !== 'N/A')
+                ? (' &middot; <span style="color:' + (isExp ? '#dc3545' : '#475569') + '; font-weight:700;"><i class="fas fa-calendar-alt"></i> Exp: ' + escapeHtml(ait.expiration_date) + '</span>')
+                : '';
+
+            html += '<tr style="border-bottom:1px solid #e2e8f0;' + (isExp ? ' background:#fff5f5;' : '') + '">' +
+                '<td style="padding:12px 14px;">' +
+                    '<div style="font-size:15px; font-weight:800; color:#0f172a; line-height:1.35;">' + escapeHtml(ait.name) + '</div>' +
+                    '<div style="font-size:13px; font-weight:600; color:#475569; margin-top:4px;">' +
+                        '<span style="color:#002F70; font-weight:700;">SKU:</span> ' + escapeHtml(ait.sku) + ' &middot; ' +
+                        '<span style="color:#002F70; font-weight:700;">Category:</span> ' + escapeHtml(ait.category) +
+                        expMeta +
+                    '</div>' +
+                '</td>' +
+                '<td style="padding:12px 14px; text-align:center;">' +
+                    '<div style="font-size:16px; font-weight:800; color:' + (isExp ? '#dc3545' : '#0f172a') + ';">' + Number(ait.stock || 0).toLocaleString() + ' <span style="font-size:13px; font-weight:600; color:#475569;">' + escapeHtml(ait.unit) + '</span></div>' +
+                '</td>' +
+                '<td style="padding:12px 14px; text-align:center;">' +
+                    '<div style="font-size:16px; font-weight:800; color:#dc2626;">' + Number(ait.reorder || 0).toLocaleString() + ' <span style="font-size:13px; font-weight:600; color:#475569;">' + escapeHtml(ait.unit) + '</span></div>' +
+                '</td>' +
+                '<td style="padding:12px 14px; text-align:center;">' +
+                    '<span class="status-badge" style="background:' + aitColor + '25; color:' + aitColor + '; border:1.5px solid ' + aitColor + '60; font-size:13px; font-weight:800; padding:6px 14px; border-radius:8px; text-transform:uppercase; letter-spacing:0.3px; display:inline-flex; align-items:center; gap:6px;">' +
+                        '<i class="fas ' + aitIcon + '"></i> ' + escapeHtml(aitStatus) +
+                    '</span>' +
+                '</td>' +
+                '<td style="padding:12px 14px; font-size:13px; font-weight:700; color:' + aitRecCol + ';">' +
+                    '<i class="fas ' + aitRecIc + '" style="margin-right:6px;"></i>' + escapeHtml(aitRec) +
+                '</td>' +
+            '</tr>';
+        });
+
+        if (alertsTbody.innerHTML !== html) {
+            alertsTbody.innerHTML = html;
+        }
+    }
+
+    function updateStockInTableLive(stockInList) {
+        var stockInTbody = document.querySelector('#section-stockin tbody');
+        if (!stockInTbody) return;
+
+        if (!stockInList || stockInList.length === 0) {
+            stockInTbody.innerHTML = '<tr><td colspan="7" style="text-align:center; padding:36px; font-size:15px; color:#64748b;"><i class="fas fa-info-circle" style="font-size:2.2em; display:block; margin-bottom:10px;"></i> <strong>No approved stock-in records found.</strong></td></tr>';
+            return;
+        }
+
+        var html = '';
+        stockInList.forEach(function(sin) {
+            var ts = formatUpdatedDateTime(sin.date_received);
+            var sdate = (ts.date !== '—') ? (ts.date + (ts.time ? ' ' + ts.time : '')) : '—';
+            var expStr = 'N/A';
+            if (sin.expiration_date && sin.expiration_date !== '0000-00-00') {
+                var expTs = formatUpdatedDateTime(sin.expiration_date);
+                if (expTs.date !== '—') expStr = expTs.date;
+            }
+            html += '<tr style="border-bottom:1px solid #e2e8f0;">' +
+                '<td style="padding:12px 14px;"><code style="font-size:13px; font-weight:800; color:#002F70;">' + escapeHtml(sin.stock_in_no) + '</code></td>' +
+                '<td style="padding:12px 14px;"><strong style="font-size:14.5px; font-weight:800; color:#0f172a; line-height:1.35; display:block;">' + escapeHtml(sin.product_name) + '</strong></td>' +
+                '<td style="padding:12px 14px; text-align:center; font-weight:800; color:#16a34a; font-size:15px;">+' + Number(sin.qty_received || 0).toLocaleString() + '</td>' +
+                '<td style="padding:12px 14px; text-align:center;"><span style="background:#f1f5f9; color:#334155; padding:4px 10px; border-radius:6px; font-size:12.5px; font-weight:700; border:1px solid #cbd5e1;">' + escapeHtml(sin.batch_no) + '</span></td>' +
+                '<td style="padding:12px 14px; text-align:center; font-size:12.5px; font-weight:700; color:' + (expStr !== 'N/A' ? '#0f172a' : '#94a3b8') + ';">' + escapeHtml(expStr) + '</td>' +
+                '<td style="padding:12px 14px; text-align:center; font-size:12.5px; font-weight:600; color:#475569;">' + escapeHtml(sdate) + '</td>' +
+                '<td style="padding:12px 14px; text-align:center; font-size:13px; font-weight:700; color:#1e293b;">' + escapeHtml(sin.received_by) + '</td>' +
+            '</tr>';
+        });
+
+        if (stockInTbody.innerHTML !== html) {
+            stockInTbody.innerHTML = html;
+        }
+    }
+
+    function refreshMerchandiseInventoryLive(options) {
+        options = options || {};
+        var force = !!options.force;
+
+        if (_isUpdating) return Promise.resolve(false);
+        if (!force && (document.hidden || isAnyModalOpen())) {
+            return Promise.resolve(false);
+        }
+
+        _isUpdating = true;
+        var url = window.location.pathname + '?ajax_live_inventory=1&_t=' + Date.now();
+
+        return fetch(url, {
+            method: 'GET',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: {
+                'Accept': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(function(res) {
+            if (!res.ok) return null;
+            return res.json();
+        })
+        .then(function(data) {
+            if (!data || !data.ok || !Array.isArray(data.items)) return false;
+
+            // 1. Update in-memory data arrays used by modals
+            window.allMerchData = data.items;
+            allMerchData = data.items;
+            if (Array.isArray(data.stock_in_list)) {
+                window.stockInListData = data.stock_in_list;
+                stockInListData = data.stock_in_list;
+            }
+
+            // 2. Update KPI summary card numbers in place (preserving .card-active)
+            if (data.stats) {
+                var cardMap = {
+                    'card-total':     data.stats.total,
+                    'card-available': data.stats.available,
+                    'card-low':       data.stats.low,
+                    'card-out':       data.stats.out,
+                    'card-expired':   data.stats.expired
+                };
+                Object.keys(cardMap).forEach(function(cardId) {
+                    var cardEl = document.getElementById(cardId);
+                    if (!cardEl) return;
+                    var valEl = cardEl.querySelector('.inv-stat-val');
+                    if (valEl && valEl.textContent !== String(cardMap[cardId])) {
+                        valEl.textContent = String(cardMap[cardId]);
+                    }
+                });
+
+                var alertBadge = document.querySelector('#tab-alerts span');
+                if (alertBadge && data.stats.alerts_count !== undefined) {
+                    var newBadgeTxt = String(data.stats.alerts_count);
+                    if (alertBadge.textContent !== newBadgeTxt) {
+                        alertBadge.textContent = newBadgeTxt;
+                    }
                 }
             }
+
+            // 3. Update Merchandise Inventory rows in place without ever clearing #merchTableBody
+            var tbody = document.getElementById('merchTableBody');
+            if (tbody && data.items.length > 0) {
+                // Remove empty placeholder row if present
+                Array.from(tbody.querySelectorAll('tr:not(.merch-row):not(.cat-header)')).forEach(function(emptyTr) {
+                    emptyTr.remove();
+                });
+
+                var existingRowMap = {};
+                Array.from(tbody.querySelectorAll('tr.merch-row')).forEach(function(tr) {
+                    if (tr.dataset.id) existingRowMap[String(tr.dataset.id)] = tr;
+                });
+
+                var existingCatMap = {};
+                Array.from(tbody.querySelectorAll('tr.cat-header')).forEach(function(hdr) {
+                    existingCatMap[hdr.textContent.trim().toLowerCase()] = hdr;
+                });
+
+                var seenIds = {};
+                data.items.forEach(function(it) {
+                    var idKey = String(it.id);
+                    seenIds[idKey] = true;
+                    var catLabel = String(it.category || 'General');
+                    var catKey = catLabel.toLowerCase();
+
+                    if (!existingCatMap[catKey]) {
+                        var newHdr = document.createElement('tr');
+                        newHdr.className = 'cat-header no-paginate';
+                        newHdr.innerHTML = '<td colspan="7" style="background:#f1f5f9;font-weight:800;font-size:13px;padding:8px 12px;color:#002F70;text-align:left;"><i class="fas fa-folder" style="color:#2563eb;margin-right:6px;"></i>' + escapeHtml(catLabel) + '</td>';
+                        tbody.appendChild(newHdr);
+                        existingCatMap[catKey] = newHdr;
+                    }
+
+                    var row = existingRowMap[idKey];
+                    var newCellsHtml = buildMerchRowCellsHtml(it);
+                    if (row) {
+                        applyRowDataAttributes(row, it);
+                        if (row.innerHTML !== newCellsHtml) {
+                            row.innerHTML = newCellsHtml;
+                        }
+                    } else {
+                        var newRow = document.createElement('tr');
+                        newRow.className = 'merch-row';
+                        applyRowDataAttributes(newRow, it);
+                        newRow.innerHTML = newCellsHtml;
+                        tbody.appendChild(newRow);
+                        existingRowMap[idKey] = newRow;
+                    }
+                });
+
+                // Remove rows for deactivated/deleted items only when data.items is non-empty
+                Object.keys(existingRowMap).forEach(function(idKey) {
+                    if (!seenIds[idKey]) {
+                        existingRowMap[idKey].remove();
+                    }
+                });
+
+                // Re-apply active filters & sorting so nothing ever flickers or disappears
+                if (typeof applyFilters === 'function') {
+                    applyFilters();
+                }
+            }
+
+            // 4. Update Stock Alerts & Stock-In tabs in place
+            updateAlertsTableLive(data.items);
+            if (Array.isArray(data.stock_in_list)) {
+                updateStockInTableLive(data.stock_in_list);
+            }
+
+            return true;
         })
-        .catch(function(e) {
-            console.warn('Merchandise inventory auto-fetch notice:', e);
+        .catch(function() {
+            return false;
+        })
+        .then(function(result) {
+            _isUpdating = false;
+            return result;
         });
     }
-    setInterval(autoRefreshMerchandiseInventory, 10000);
+
+    window.refreshMerchandiseInventoryLive = refreshMerchandiseInventoryLive;
+    window.autoRefreshMerchandiseInventory = function(force) {
+        return refreshMerchandiseInventoryLive({ force: !!force });
+    };
+
+    // Listen to real-time SSE / polling events for instant updates
+    ['petron:inventory', 'petron:stock_requests', 'petron:pos'].forEach(function(evName) {
+        window.addEventListener(evName, function() {
+            refreshMerchandiseInventoryLive({ force: false });
+        });
+    });
+
+    // Background live sync timer (every 8 seconds)
+    function startLiveInventoryTimer(ms) {
+        if (_liveTimer) clearInterval(_liveTimer);
+        var interval = (typeof ms === 'number' && ms >= 5000) ? ms : 8000;
+        _liveTimer = setInterval(function() {
+            refreshMerchandiseInventoryLive({ force: false });
+        }, interval);
+    }
+
+    startLiveInventoryTimer();
 })();
 </script>
 <?php include __DIR__ . '/../partials/footer.php'; ?>

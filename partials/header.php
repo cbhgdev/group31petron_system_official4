@@ -133,6 +133,54 @@ $header_notif_url = function($url, $context = []) use ($app_base_path, $public_b
         }
     }
 
+    // Remap Fuel Sales Closing & Fuel Readings Pending Validation
+    $is_fuel_val = (
+        strpos($title_check, 'fuel sales closing') !== false ||
+        strpos($title_check, 'fuel reading') !== false ||
+        strpos($title_check, 'fuel meter') !== false ||
+        strpos($title_check, 'fuel transaction') !== false ||
+        $evt_check === 'fuel_sales_closing' ||
+        ($evt_check === 'fuel_transaction' && strpos($title_check, 'validation') !== false) ||
+        (strpos($title_check, 'fuel') !== false && strpos($title_check, 'validation') !== false) ||
+        strpos($url, 'manager_fuel_transaction_validation.php') !== false ||
+        strpos($url, 'admin_fuel_management.php') !== false
+    );
+    if ($is_fuel_val && !$is_fuel_adj && !$is_merch_adj) {
+        $uRole = function_exists('role_key') ? role_key($_SESSION['user']['role'] ?? '') : '';
+        if (in_array($uRole, ['admin', 'manager', 'supervisor', 'superadmin', 'developer'], true)) {
+            if (strpos($url, 'manager_fuel_transaction_validation.php') !== false && strpos($url, '?') !== false) {
+                // Keep existing query parameters (date_from, status_filter, etc.)
+            } else {
+                $is_approved = (
+                    strpos($title_check, 'approved') !== false ||
+                    strpos($title_check, 'validated') !== false ||
+                    strpos($message_check, 'approved') !== false ||
+                    strpos($message_check, 'validated') !== false
+                );
+                $url = $is_approved 
+                    ? 'manager_fuel_transaction_validation.php?status_filter=validated' 
+                    : 'manager_fuel_transaction_validation.php?status_filter=pending';
+            }
+        } else {
+            if (strpos($title_check, 'fuel sales closing') !== false || $evt_check === 'fuel_sales_closing') {
+                $url = 'staff_fuel_sales_closing.php';
+            } else {
+                $url = 'staff_transactions_hub.php?section=fuel&fuel_tab=readings';
+            }
+        }
+    }
+
+    if ($role === 'admin' && function_exists('remap_notification_url_for_admin')) {
+        $url = remap_notification_url_for_admin(
+            (string)$url,
+            (string)($notif_row['event_type'] ?? ''),
+            (string)($notif_row['title'] ?? ''),
+            (string)($notif_row['message'] ?? ''),
+            (string)($notif_row['reference_type'] ?? ''),
+            (int)($notif_row['reference_id'] ?? 0)
+        );
+    }
+
     if ($url === '' || $url === '#') return '#';
 
     // Remap deprecated staff delivery URLs to Staff Inventory modules
@@ -140,6 +188,8 @@ $header_notif_url = function($url, $context = []) use ($app_base_path, $public_b
         $url = 'staff_inventory_fuel.php';
     } elseif (strpos($url, 'manager_inventory_stock_requests.php') !== false || strpos($url, 'manager_purchase_orders.php') !== false) {
         $url = 'manager_stock_request_review.php';
+    } elseif (strpos($url, 'admin_fuel_management.php') !== false) {
+        $url = 'manager_fuel_transaction_validation.php';
     }
 
     if (preg_match('/^https?:\/\//i', $url)) return $url;
@@ -152,6 +202,10 @@ if (in_array($role, ['staff','admin','manager','superadmin','developer'])) {
     try {
         if (function_exists('ensure_notifications_table')) {
             ensure_notifications_table($pdo);
+        }
+        if ($role === 'admin' && function_exists('sync_station_notifications_to_admin')) {
+            $__hdr_stn_id = (int)($user['station_id'] ?? (function_exists('user_station_id') ? user_station_id() : 0));
+            sync_station_notifications_to_admin($pdo, (int)($user['id'] ?? 0), $__hdr_stn_id);
         }
         $hn_stmt = $pdo->prepare(
             "SELECT id, type, title, message, event_type, severity, redirect_url, status, created_at
@@ -526,7 +580,7 @@ $appearance_sidebar_collapsed = (strtolower($appearance_sidebar_mode) === 'colla
   <link rel="apple-touch-icon" sizes="180x180" href="<?php echo $app_base_path; ?>/assets/img/apple-touch-icon.png?v=2.2" />
   <link rel="icon" type="image/png" sizes="192x192" href="<?php echo $app_base_path; ?>/assets/img/android-chrome-192x192.png?v=2.2" />
   <link rel="icon" type="image/png" sizes="512x512" href="<?php echo $app_base_path; ?>/assets/img/android-chrome-512x512.png?v=2.2" />
-  <link rel="manifest" href="<?php echo $app_base_path; ?>/manifest.json?v=2.2" />
+  <link rel="manifest" href="<?php echo $public_base_url; ?>/manifest.json?v=2.2" />
   <link rel="stylesheet" href="<?php echo $app_base_path; ?>/assets/css/style.css?v=2.0.2" />
   <link rel="stylesheet" href="<?php echo $app_base_path; ?>/assets/css/manager_table_design.css?v=2.0.2" />
   <link rel="stylesheet" href="<?php echo $app_base_path; ?>/assets/css/manager_customer_management.css?v=2.0.2" />
@@ -3568,13 +3622,13 @@ table.tbl-requests td, table.pricing-table td, table.fuel-table td {
     width: 100% !important;
 }
 @media screen {
-    table:not(.report-table):not(.rpt-table):not(.adm-table):not(.mgr-table):not(.no-min-width):not(.dashboard-table):not(.dev-inner-table):not(.dev-dashboard table):not(.adm-dashboard table):not(.mgr-dashboard table):not(.print-table):not(.cust-modal table):not(.modal-backdrop table):not(.modal-body table):not(.modal table) {
+    table:not(.report-table):not(.rpt-table):not(.adm-table):not(.mgr-table):not(.no-min-width):not(.stock-table):not(.si-history-table):not(.dashboard-table):not(.dev-inner-table):not(.dev-dashboard table):not(.adm-dashboard table):not(.mgr-dashboard table):not(.print-table):not(.cust-modal table):not(.modal-backdrop table):not(.modal-body table):not(.modal table):not(.modal-overlay table):not([id*="Modal"] table):not([id*="modal"] table) {
         width: 100% !important;
         min-width: 1050px !important;
         table-layout: auto !important;
     }
-    table:not(.report-table):not(.rpt-table):not(.adm-table):not(.mgr-table):not(.no-min-width):not(.dashboard-table):not(.dev-inner-table):not(.dev-dashboard table):not(.adm-dashboard table):not(.mgr-dashboard table):not(.print-table):not(.cust-modal table):not(.modal-backdrop table):not(.modal-body table):not(.modal table) th,
-    table:not(.report-table):not(.rpt-table):not(.adm-table):not(.mgr-table):not(.no-min-width):not(.dashboard-table):not(.dev-inner-table):not(.dev-dashboard table):not(.adm-dashboard table):not(.mgr-dashboard table):not(.print-table):not(.cust-modal table):not(.modal-backdrop table):not(.modal-body table):not(.modal table) td {
+    table:not(.report-table):not(.rpt-table):not(.adm-table):not(.mgr-table):not(.no-min-width):not(.stock-table):not(.si-history-table):not(.dashboard-table):not(.dev-inner-table):not(.dev-dashboard table):not(.adm-dashboard table):not(.mgr-dashboard table):not(.print-table):not(.cust-modal table):not(.modal-backdrop table):not(.modal-body table):not(.modal table):not(.modal-overlay table):not([id*="Modal"] table):not([id*="modal"] table) th,
+    table:not(.report-table):not(.rpt-table):not(.adm-table):not(.mgr-table):not(.no-min-width):not(.stock-table):not(.si-history-table):not(.dashboard-table):not(.dev-inner-table):not(.dev-dashboard table):not(.adm-dashboard table):not(.mgr-dashboard table):not(.print-table):not(.cust-modal table):not(.modal-backdrop table):not(.modal-body table):not(.modal table):not(.modal-overlay table):not([id*="Modal"] table):not([id*="modal"] table) td {
         white-space: nowrap !important;
     }
 }
@@ -3890,11 +3944,13 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         .modal-overlay,
         .sr-modal-overlay,
         .mi-overlay,
-        .modal-backdrop-custom {
-            padding-left: 270px !important; /* Offset by 250px sidebar width + 20px padding */
-            padding-top: 96px !important;   /* 70px header + 26px equal space */
-            padding-bottom: 66px !important;/* 40px footer + 26px equal space matching top */
-            padding-right: 20px !important;
+        .modal-backdrop-custom,
+        #stockInViewModal,
+        #siConfirmOverlay {
+            padding-left: 274px !important; /* Offset by 250px sidebar width + 24px padding */
+            padding-top: 94px !important;   /* 70px header + 24px equal space */
+            padding-bottom: 64px !important;/* 40px footer + 24px equal space matching top */
+            padding-right: 24px !important;
             box-sizing: border-box !important;
             align-items: center !important;
             justify-content: center !important;
@@ -3903,8 +3959,10 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         body.sidebar-collapsed .modal-overlay,
         body.sidebar-collapsed .sr-modal-overlay,
         body.sidebar-collapsed .mi-overlay,
-        body.sidebar-collapsed .modal-backdrop-custom {
-            padding-left: 90px !important; /* Offset when sidebar collapsed (70px + 20px) */
+        body.sidebar-collapsed .modal-backdrop-custom,
+        body.sidebar-collapsed #stockInViewModal,
+        body.sidebar-collapsed #siConfirmOverlay {
+            padding-left: 94px !important; /* Offset when sidebar collapsed (70px + 24px) */
         }
 
         .modal-box,
@@ -3913,9 +3971,10 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         .modal-dialog,
         .modal-card,
         .modal-card-wide,
-        .modal-card-xl {
-            max-width: min(1100px, calc(100vw - 310px)) !important;
-            max-height: calc(100vh - 170px) !important;
+        .modal-card-xl,
+        .si-view-modal-card {
+            max-width: min(940px, calc(100vw - 310px)) !important;
+            max-height: calc(100vh - 165px) !important;
             margin: auto !important;
             display: flex !important;
             flex-direction: column !important;
@@ -3925,9 +3984,10 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         body.sidebar-collapsed .sr-modal-box,
         body.sidebar-collapsed .mi-box,
         body.sidebar-collapsed .modal-dialog,
-        body.sidebar-collapsed .modal-card {
-            max-width: min(1100px, calc(100vw - 110px)) !important;
-            max-height: calc(100vh - 170px) !important;
+        body.sidebar-collapsed .modal-card,
+        body.sidebar-collapsed .si-view-modal-card {
+            max-width: min(960px, calc(100vw - 120px)) !important;
+            max-height: calc(100vh - 165px) !important;
         }
     }
 
@@ -3935,11 +3995,13 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         .modal-overlay,
         .sr-modal-overlay,
         .mi-overlay,
-        .modal-backdrop-custom {
+        .modal-backdrop-custom,
+        #stockInViewModal,
+        #siConfirmOverlay {
             padding-left: 16px !important;
             padding-right: 16px !important;
-            padding-top: 85px !important;   /* 65px header + 20px equal space */
-            padding-bottom: 60px !important;/* 40px footer + 20px equal space matching top */
+            padding-top: 84px !important;   /* 60px header + 24px equal space */
+            padding-bottom: 64px !important;/* 40px footer + 24px equal space matching top */
             box-sizing: border-box !important;
             align-items: center !important;
             justify-content: center !important;
@@ -3949,7 +4011,8 @@ $hdr_show_footer  = !(isset($station_settings['show_report_footer']) && ($statio
         .sr-modal-box,
         .mi-box,
         .modal-dialog,
-        .modal-card {
+        .modal-card,
+        .si-view-modal-card {
             max-height: calc(100vh - 155px) !important;
             margin: auto !important;
             display: flex !important;
@@ -4765,22 +4828,41 @@ require_once __DIR__ . '/rbac_menu.php';
       $badges['customers']     = $mgr_cust_reqs;
       $badges['mgr_customers'] = $mgr_cust_reqs;
   } elseif (in_array($role, ['admin', 'superadmin', 'developer'])) {
-      // ADMIN
+      // ADMIN — Full Station Oversight across all Manager & Staff modules
       if ($myStationId > 0) {
-          // 1. Inventory: Critical Stock + Purchase Orders
+          // 1. Transactions: Pending Job Orders + Pending Merchandise Transactions + Fuel Adjustments
+          $admin_pending_jos = $__badge_count(
+              "SELECT COUNT(*) FROM job_orders WHERE station_id = ? AND LOWER(COALESCE(status,'')) IN ('pending','pending validation','reviewed')",
+              [$myStationId]
+          );
+          $admin_pending_merch = $__badge_count(
+              "SELECT COUNT(*) FROM merchandise_transactions WHERE station_id = ? AND LOWER(COALESCE(validation_status,'')) IN ('pending','pending validation')",
+              [$myStationId]
+          );
+          $admin_pending_adj = $__badge_count(
+              "SELECT COUNT(*) FROM fuel_adjustments WHERE station_id = ? AND LOWER(COALESCE(status,'')) IN ('pending','pending validation')",
+              [$myStationId]
+          );
+          $badges['transactions'] = $admin_pending_jos + $admin_pending_merch + $admin_pending_adj;
+
+          // 2. Inventory: Low/Critical Stock + Pending Stock Requests + Purchase Orders + Deliveries Waiting for Stock-In
           $admin_crit_stock = $__badge_count(
               "SELECT COUNT(*) FROM station_inventory si LEFT JOIN inventory_products ip ON ip.id = si.product_id WHERE si.station_id = ? AND (LOWER(COALESCE(ip.category,'')) NOT IN ('fuel','fuels') OR ip.category IS NULL) AND si.stock_level <= COALESCE(NULLIF(si.critical_level, 0), NULLIF(ip.critical_level, 0), NULLIF(si.reorder_level, 0), NULLIF(ip.min_stock, 0), 10)",
               [$myStationId]
           );
-          $admin_pos = $__badge_count(
-              "SELECT COUNT(*) FROM purchase_orders WHERE station_id = ? AND status IN ('Pending Admin Review', 'Submitted', 'Pending Approval')",
+          $admin_purchase_reqs = $__badge_count(
+              "SELECT COUNT(*) FROM stock_requests WHERE station_id = ? AND status IN ('Pending','Pending Manager Review','Pending Approval')",
               [$myStationId]
           );
-          $admin_inv_total = $admin_crit_stock + $admin_pos;
+          $admin_pos = $__badge_count(
+              "SELECT COUNT(*) FROM purchase_orders WHERE station_id = ? AND status IN ('Pending Admin Review', 'Submitted', 'Pending Approval', 'Approved', 'Pending Stock-In')",
+              [$myStationId]
+          );
+          $admin_inv_total = $admin_crit_stock + $admin_purchase_reqs + $admin_pos;
           $badges['inventory']       = $admin_inv_total;
           $badges['admin_inventory'] = $admin_inv_total;
 
-          // 2. Product & Pricing: New Product Requests + Price Change Approvals
+          // 3. Product & Pricing: New Product Requests + Price Change Approvals
           $admin_price_change = $__badge_count(
               "SELECT COUNT(*) FROM pending_price_approvals WHERE station_id = ? AND status = 'pending'",
               [$myStationId]
@@ -4789,24 +4871,44 @@ require_once __DIR__ . '/rbac_menu.php';
           $badges['mgr_product_pricing']   = $admin_price_change;
           $badges['admin_product_pricing'] = $admin_price_change;
 
-          // 3. Reports
+          // 4. Customers: Pending Customer Requests
+          $admin_cust_reqs = $__badge_count(
+              "SELECT COUNT(*) FROM customer_requests WHERE station_id = ? AND LOWER(status) = 'pending'",
+              [$myStationId]
+          );
+          $badges['customers']     = $admin_cust_reqs;
+          $badges['mgr_customers'] = $admin_cust_reqs;
+
+          // 5. Reports
           $badges['reports']       = 0;
           $badges['admin_reports'] = 0;
 
-          // 4. Fuel Management Oversight
+          // 6. Fuel Management Oversight: Fuel Reading Validation + Calibration Review + Low/Critical Fuel Levels
           $admin_fuel_pending = $__badge_count(
               "SELECT COUNT(*) FROM fuel_transactions WHERE station_id = ? AND LOWER(COALESCE(status,'')) IN ('pending','pending validation')",
               [$myStationId]
           );
-          $badges['fuel']                  = $admin_fuel_pending;
-          $badges['admin_fuel']            = $admin_fuel_pending;
-          $badges['admin_fuel_management'] = $admin_fuel_pending;
+          $admin_calibration_review = $__badge_count(
+              "SELECT COUNT(*) FROM fuel_adjustments WHERE station_id = ? AND LOWER(COALESCE(adjustment_type,'')) LIKE '%calibration%' AND LOWER(COALESCE(status,'')) IN ('pending','pending review')",
+              [$myStationId]
+          );
+          $admin_low_fuel = $__badge_count(
+              "SELECT COUNT(*) FROM fuel_inventory WHERE station_id = ? AND current_level >= 0 AND capacity > 0 AND current_level <= COALESCE(NULLIF(reorder_level, 0), capacity * 0.15, 500)",
+              [$myStationId]
+          );
+          $admin_fuel_total = $admin_fuel_pending + $admin_calibration_review + $admin_low_fuel;
+          $badges['fuel']                  = $admin_fuel_total;
+          $badges['admin_fuel']            = $admin_fuel_total;
+          $badges['admin_fuel_management'] = $admin_fuel_total;
       } else {
+          $badges['transactions']          = 0;
           $badges['inventory']             = 0;
           $badges['admin_inventory']       = 0;
           $badges['prod_pricing']          = 0;
           $badges['mgr_product_pricing']   = 0;
           $badges['admin_product_pricing'] = 0;
+          $badges['customers']             = 0;
+          $badges['mgr_customers']         = 0;
           $badges['reports']               = 0;
           $badges['admin_reports']         = 0;
           $badges['fuel']                  = 0;
@@ -5974,8 +6076,41 @@ require_once __DIR__ . '/rbac_menu.php';
         appBasePath: '<?php echo htmlspecialchars($app_base_path ?? ""); ?>'
     };
 
+    window.getPetronAppBasePath = function() {
+        if (window.pageData && typeof window.pageData.appBasePath === 'string' && window.pageData.appBasePath !== '') {
+            return window.pageData.appBasePath.replace(/\/+$/, '');
+        }
+        var path = window.location.pathname || '';
+        var pubIdx = path.indexOf('/public/');
+        if (pubIdx !== -1) return path.substring(0, pubIdx);
+        var backIdx = path.indexOf('/backend/');
+        if (backIdx !== -1) return path.substring(0, backIdx);
+        var lastSlash = path.lastIndexOf('/');
+        if (lastSlash > 0) {
+            var dir = path.substring(0, lastSlash);
+            return dir.replace(/\/public\/?$/, '').replace(/\/backend\/?$/, '');
+        }
+        return '';
+    };
+
+    window.getPetronPublicBaseUrl = function() {
+        var base = window.getPetronAppBasePath();
+        if (window.location.pathname.indexOf('/public/') !== -1 || base !== '') {
+            return (base ? base : '') + '/public';
+        }
+        return '';
+    };
+
     window.resolveRedirectUrl = function(url) {
-        if (!url || url === '#' || url === '' || url === 'null') return '#';
+        if (!url || url === '#' || url === '' || url === 'null' || url === 'javascript:void(0)') return '#';
+        if (typeof url !== 'string') return '#';
+        url = url.trim();
+
+        // Remap legacy non-existent admin fuel routes to Fuel Transaction Validation
+        if (url.includes('admin_fuel_management.php')) {
+            url = 'manager_fuel_transaction_validation.php';
+        }
+
         if (url.includes('manager_stock_request_review.php') || url.includes('manager_purchase_orders.php') || url.includes('purchase_order')) {
             url = 'manager_stock_request_review.php';
         } else if (url.includes('staff_fuel_deliveries.php')) {
@@ -5984,10 +6119,39 @@ require_once __DIR__ . '/rbac_menu.php';
             var isFuel = url.includes('tab=fuel') || url.includes('fpo');
             url = isFuel ? 'staff_inventory_fuel.php' : 'staff_inventory_merchandise.php';
         }
-        if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/')) return url;
-        // Relative path from search.php (e.g. "staff_inventory.php") — resolve to /public/
-        var base = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
-        return base + '/public/' + url;
+
+        // External URLs
+        if (url.startsWith('http://') || url.startsWith('https://')) return url;
+
+        var appBase = window.getPetronAppBasePath();
+        var publicBase = window.getPetronPublicBaseUrl();
+
+        // If URL already starts with full publicBase (e.g. /group31petron_system_official4/public/...)
+        if (publicBase && url.startsWith(publicBase + '/')) return url;
+        if (appBase && url.startsWith(appBase + '/public/')) return url;
+
+        // If URL starts with root-relative /public/... but lacks the subfolder appBase
+        if (url.startsWith('/public/')) {
+            var subPath = url.substring(8); // strip /public/
+            return (publicBase ? publicBase : '/public') + '/' + subPath;
+        }
+
+        // If URL starts with public/...
+        if (url.startsWith('public/')) {
+            var subPath = url.substring(7); // strip public/
+            return (publicBase ? publicBase : '/public') + '/' + subPath;
+        }
+
+        // If URL starts with '/' and we have an appBase, check if appBase is already prepended
+        if (url.startsWith('/')) {
+            if (appBase && !url.startsWith(appBase + '/')) {
+                return appBase + url;
+            }
+            return url;
+        }
+
+        // Relative PHP script (e.g. manager_fuel_transaction_validation.php)
+        return (publicBase ? publicBase : '/public') + '/' + url;
     };
 
 
@@ -6502,18 +6666,13 @@ require_once __DIR__ . '/rbac_menu.php';
 
             // ── Resolve a relative link from search.php to an absolute URL ──
             function resolveLink(link) {
+                if (typeof window.resolveRedirectUrl === 'function') {
+                    return window.resolveRedirectUrl(link);
+                }
                 if (!link || link === '#') return '#';
-                if (link.indexOf('staff_fuel_deliveries.php') !== -1) {
-                    link = 'staff_inventory_fuel.php';
-                }
-                if (link.indexOf('http://') === 0 || link.indexOf('https://') === 0 || link.indexOf('/') === 0) {
-                    return link;
-                }
-                var base = (window.pageData && window.pageData.appBasePath) ? window.pageData.appBasePath : '';
-                return base + '/public/' + link;
+                var publicBase = (window.pageData && window.pageData.appBasePath) ? (window.pageData.appBasePath + '/public') : '/public';
+                return publicBase + '/' + link.replace(/^\/+/, '');
             }
-            // Expose globally
-            window.resolveRedirectUrl = resolveLink;
 
             // ── State ──
             var debounceTimer;
@@ -6900,9 +7059,37 @@ require_once __DIR__ . '/rbac_menu.php';
             }
 
             // Expose mark-read globally so onclick works
-            window.saMarkRead = function(id, redirectUrl) {
+            window.saMarkRead = function(arg1, arg2, arg3) {
+                var e = null, id = null, redirectUrl = null;
+                if (arg1 && typeof arg1 === 'object' && (arg1.target || arg1.preventDefault || arg1.stopPropagation)) {
+                    e = arg1;
+                    id = arg2;
+                    redirectUrl = arg3;
+                } else {
+                    id = arg1;
+                    redirectUrl = arg2;
+                }
+
+                if (e && e.preventDefault) {
+                    e.preventDefault();
+                }
+
+                id = parseInt(id, 10) || 0;
+
+                // If redirectUrl was missing or numeric, try getting from event currentTarget href
+                if ((!redirectUrl || typeof redirectUrl !== 'string' || /^\d+$/.test(String(redirectUrl).trim())) && e && e.currentTarget && e.currentTarget.getAttribute) {
+                    var elHref = e.currentTarget.getAttribute('href');
+                    if (elHref && elHref !== '#' && !elHref.startsWith('javascript:')) {
+                        redirectUrl = elHref;
+                    }
+                }
+
+                if (typeof redirectUrl === 'string' && window.resolveRedirectUrl) {
+                    redirectUrl = window.resolveRedirectUrl(redirectUrl);
+                }
+
                 if (!id) {
-                    if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)') {
+                    if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)' && !/^\d+$/.test(String(redirectUrl).trim())) {
                         window.location.href = redirectUrl;
                     }
                     return;
@@ -6944,7 +7131,7 @@ require_once __DIR__ . '/rbac_menu.php';
                         .catch(() => {});
                 } catch (e) {}
 
-                if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)') {
+                if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)' && !/^\d+$/.test(String(redirectUrl).trim())) {
                     setTimeout(function() {
                         window.location.href = redirectUrl;
                     }, 80);
@@ -7272,21 +7459,73 @@ require_once __DIR__ . '/rbac_menu.php';
                                 targetUrl.indexOf('fuel_adjustments') !== -1
                             );
 
+                            const isFuelVal = !isMerchAdj && !isFuelAdj && (
+                                tLow.indexOf('fuel sales closing') !== -1 ||
+                                tLow.indexOf('fuel reading') !== -1 ||
+                                tLow.indexOf('fuel meter') !== -1 ||
+                                tLow.indexOf('fuel transaction') !== -1 ||
+                                eLow === 'fuel_sales_closing' ||
+                                (eLow === 'fuel_transaction' && tLow.indexOf('validation') !== -1) ||
+                                (tLow.indexOf('fuel') !== -1 && tLow.indexOf('validation') !== -1) ||
+                                targetUrl.indexOf('manager_fuel_transaction_validation') !== -1 ||
+                                targetUrl.indexOf('admin_fuel_management') !== -1
+                            );
+
                             if (isMerchAdj) {
                                 if (curRole === 'staff' || curRole === 'cashier' || curRole === 'pump_attendant') {
-                                    targetUrl = base + '/public/staff_inventory_merchandise.php';
+                                    targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('staff_inventory_merchandise.php') : base + '/public/staff_inventory_merchandise.php';
                                 } else if (curRole === 'admin' || curRole === 'superadmin' || curRole === 'developer') {
-                                    targetUrl = base + '/public/admin_inventory_merchandise.php?tab=adjustments';
+                                    targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('admin_inventory_merchandise.php?tab=adjustments') : base + '/public/admin_inventory_merchandise.php?tab=adjustments';
                                 } else {
-                                    targetUrl = base + '/public/manager_inventory_merchandise.php?tab=adjustments';
+                                    targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('manager_inventory_merchandise.php?tab=adjustments') : base + '/public/manager_inventory_merchandise.php?tab=adjustments';
                                 }
                             } else if (isFuelAdj) {
                                 if (curRole === 'staff' || curRole === 'cashier' || curRole === 'pump_attendant') {
-                                    targetUrl = base + '/public/staff_inventory_fuel.php';
+                                    targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('staff_inventory_fuel.php') : base + '/public/staff_inventory_fuel.php';
                                 } else if (curRole === 'admin' || curRole === 'superadmin' || curRole === 'developer') {
-                                    targetUrl = base + '/public/admin_inventory_fuel.php?tab=adjustments';
+                                    targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('admin_inventory_fuel.php?tab=adjustments') : base + '/public/admin_inventory_fuel.php?tab=adjustments';
                                 } else {
-                                    targetUrl = base + '/public/manager_fuel_adjustments.php';
+                                    targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('manager_fuel_adjustments.php') : base + '/public/manager_fuel_adjustments.php';
+                                }
+                            } else if (isFuelVal) {
+                                if (curRole === 'admin' || curRole === 'manager' || curRole === 'supervisor' || curRole === 'superadmin' || curRole === 'developer') {
+                                    if (targetUrl.indexOf('manager_fuel_transaction_validation') !== -1 && targetUrl.indexOf('?') !== -1) {
+                                        // Keep query parameters (e.g. status_filter=validated, date_from, search_query)
+                                    } else {
+                                        const isApproved = (
+                                            tLow.indexOf('approved') !== -1 ||
+                                            tLow.indexOf('validated') !== -1 ||
+                                            mLow.indexOf('approved') !== -1 ||
+                                            mLow.indexOf('validated') !== -1
+                                        );
+                                        const targetPage = isApproved 
+                                            ? 'manager_fuel_transaction_validation.php?status_filter=validated' 
+                                            : 'manager_fuel_transaction_validation.php?status_filter=pending';
+                                        targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl(targetPage) : base + '/public/' + targetPage;
+                                    }
+                                } else {
+                                    if (tLow.indexOf('fuel sales closing') !== -1 || eLow === 'fuel_sales_closing') {
+                                        targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('staff_fuel_sales_closing.php') : base + '/public/staff_fuel_sales_closing.php';
+                                    } else {
+                                        targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('staff_transactions_hub.php?section=fuel&fuel_tab=readings') : base + '/public/staff_transactions_hub.php?section=fuel&fuel_tab=readings';
+                                    }
+                                }
+                            } else if (targetUrl.indexOf('admin_fuel_management.php') !== -1) {
+                                targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('manager_fuel_transaction_validation.php') : base + '/public/manager_fuel_transaction_validation.php';
+                            }
+                            if (curRole === 'admin') {
+                                if (targetUrl.indexOf('staff_inventory_merchandise.php') !== -1 || targetUrl.indexOf('manager_inventory_merchandise.php') !== -1) {
+                                    targetUrl = targetUrl.replace(/(?:staff|manager)_inventory_merchandise\.php/i, 'admin_inventory_merchandise.php');
+                                } else if (targetUrl.indexOf('staff_inventory_fuel.php') !== -1 || targetUrl.indexOf('manager_inventory_fuel.php') !== -1) {
+                                    targetUrl = targetUrl.replace(/(?:staff|manager)_inventory_fuel\.php/i, 'admin_inventory_fuel.php');
+                                } else if (targetUrl.indexOf('staff_customer_list.php') !== -1) {
+                                    targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('manager_customers.php') : base + '/public/manager_customers.php';
+                                } else if (targetUrl.indexOf('staff_transactions_hub.php') !== -1) {
+                                    targetUrl = window.resolveRedirectUrl ? window.resolveRedirectUrl('manager_validated_transactions.php') : base + '/public/manager_validated_transactions.php';
+                                } else if (targetUrl.indexOf('manager_calendar.php') !== -1) {
+                                    targetUrl = targetUrl.replace(/manager_calendar\.php/i, 'admin_calendar.php');
+                                } else if (targetUrl.indexOf('manager_reports.php') !== -1) {
+                                    targetUrl = targetUrl.replace(/manager_reports\.php/i, 'admin_reports.php');
                                 }
                             }
                             const title  = escapeHtml(cleanMojibake(n.title || 'Notification'));
@@ -7328,9 +7567,37 @@ require_once __DIR__ . '/rbac_menu.php';
             }
 
             // ── Mark one notification as read ─────────────────────────────────
-            window.staffMarkRead = function (id, redirectUrl) {
+            window.staffMarkRead = function (arg1, arg2, arg3) {
+                var e = null, id = null, redirectUrl = null;
+                if (arg1 && typeof arg1 === 'object' && (arg1.target || arg1.preventDefault || arg1.stopPropagation)) {
+                    e = arg1;
+                    id = arg2;
+                    redirectUrl = arg3;
+                } else {
+                    id = arg1;
+                    redirectUrl = arg2;
+                }
+
+                if (e && e.preventDefault) {
+                    e.preventDefault();
+                }
+
+                id = parseInt(id, 10) || 0;
+
+                // If redirectUrl was missing or numeric, try getting from event currentTarget href
+                if ((!redirectUrl || typeof redirectUrl !== 'string' || /^\d+$/.test(String(redirectUrl).trim())) && e && e.currentTarget && e.currentTarget.getAttribute) {
+                    var elHref = e.currentTarget.getAttribute('href');
+                    if (elHref && elHref !== '#' && !elHref.startsWith('javascript:')) {
+                        redirectUrl = elHref;
+                    }
+                }
+
+                if (typeof redirectUrl === 'string' && window.resolveRedirectUrl) {
+                    redirectUrl = window.resolveRedirectUrl(redirectUrl);
+                }
+
                 if (!id) {
-                    if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)') {
+                    if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)' && !/^\d+$/.test(String(redirectUrl).trim())) {
                         window.location.href = redirectUrl;
                     }
                     return;
@@ -7372,7 +7639,7 @@ require_once __DIR__ . '/rbac_menu.php';
                         .catch(() => {});
                 } catch (e) {}
 
-                if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)') {
+                if (redirectUrl && redirectUrl !== '#' && redirectUrl !== 'javascript:void(0)' && !/^\d+$/.test(String(redirectUrl).trim())) {
                     setTimeout(function() {
                         window.location.href = redirectUrl;
                     }, 80);
